@@ -41,3 +41,6 @@ The package root exports the tested coordinator, continuation, skill, Beads, lif
 
 
 The real `poc:session-factory` fixture loads `createRalphExtension({ enabled: true })` into AgentSession with automatic goals disabled. Against Prime Agent 0.8.0 it completes two provider calls, persists the fixed bootstrap compaction, persists one goal context, and reaches `agent_end`.
+
+
+`npm run poc:mode-matrix` registers the lifecycle factory for interactive, daemon, RPC, and headless labels. It verifies hook registration only; it does not substitute for native host transport acceptance.
