@@ -30,3 +30,6 @@ The coordination runtime claims an issue, evaluates configured phase gates, and 
 
 
 The package root exports the tested coordinator, continuation, skill, Beads, lifecycle, and diagnostics seams while its default extension remains a no-op. This makes the current research components consumable without falsely enabling unvalidated host lifecycle behavior.
+
+
+`startManagedCycle()` is the narrow orchestration entry point for consumers: it runs claim, configured gates, and evidence checkpointing through an injected `bd` adapter, then returns only ownership metadata and bounded results. It does not bypass Beads transactions or claim issue completion implicitly.

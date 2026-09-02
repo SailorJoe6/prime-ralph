@@ -23,3 +23,8 @@ export async function executeClaimedCycle({ bd, issueId, metadata, phase, gates 
   const checkpoint = await bd.checkpoint(issueId, JSON.stringify({ ...metadata, phase, evidence }));
   return { status: "checkpointed", claim, gates: gateResult, checkpoint };
 }
+
+export async function startManagedCycle({ bd, issueId, metadata, phase, gates = [], evidence } = {}) {
+  const result = await executeClaimedCycle({ bd, issueId, metadata, phase, gates, evidence });
+  return { ...result, ownership: { issueId, sessionId: metadata?.sessionId ?? null, cycleId: metadata?.cycleId ?? null } };
+}
