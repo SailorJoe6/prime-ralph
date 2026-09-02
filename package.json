@@ -1,0 +1,21 @@
+{
+  "name": "prime-ralph",
+  "version": "0.1.0",
+  "description": "A Prime Agent plugin implementing best-practice Ralph loop design in Prime Agent.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": ["src", "README.md", "LICENSE"],
+  "scripts": {
+    "test": "node --test",
+    "compat": "node scripts/check-prime-agent-compat.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "peerDependencies": {
+    "prime-agent": ">=0.8.0 <0.9.0"
+  },
+  "license": "MIT"
+}
