@@ -47,3 +47,6 @@ The real `poc:session-factory` fixture loads `createRalphExtension({ enabled: tr
 
 
 The lifecycle factory validates its options and caps custom bootstrap instructions at 4,000 characters before they enter compaction instructions or persisted summaries. This bounds configuration-driven prompt growth.
+
+
+When the host supplies its detected Prime Agent version, the lifecycle factory rejects versions outside `>=0.8.0 <0.9.0` before registering hooks.

@@ -1,6 +1,8 @@
 import { isFinalNormalAssistantTurn } from "./cycle-boundary-poc.js";
+import { isCompatiblePrimeAgent } from "./diagnostics.js";
 
-export function createRalphExtension({ enabled = false, goalActive = () => true, bootstrap = "Read the durable Ralph specification and execution plan; select one task." } = {}) {
+export function createRalphExtension({ enabled = false, goalActive = () => true, bootstrap = "Read the durable Ralph specification and execution plan; select one task.", primeAgentVersion = null } = {}) {
+  if (primeAgentVersion !== null && !isCompatiblePrimeAgent(primeAgentVersion)) throw new Error("unsupported Prime Agent version");
   if (typeof enabled !== "boolean") throw new TypeError("enabled must be boolean");
   if (typeof goalActive !== "function") throw new TypeError("goalActive must be a function");
   const fixedBootstrap = String(bootstrap).slice(0, 4000);
