@@ -62,3 +62,9 @@ These unresolved assumptions are explicit inputs to Slice 3 and Slice 4.
 The executable `scripts/run-agent-loop-poc.mjs` uses the installed `@earendil-works/pi-agent-core` with a deterministic stream function. Its trace confirms `turn_end` is emitted for a normal assistant response, then the continuation hook is consulted before the next turn boundary. The trace also demonstrates that the public core loop has no goal-specific continuation event.
 
 `src/cycle-boundary-poc.js` encodes the research predicate: only a final normal assistant turn with no tool calls/results and an active goal is eligible for a cycle-compaction request. It remains research-only until requested-compaction ordering and resume behavior are tested through the full Prime Agent session wrapper.
+
+## Requested-compaction source analysis (Slice 3 checkpoint)
+
+The executable `scripts/analyze-compaction-continuation.mjs` checks the installed Prime Agent 0.8.0 and pi-agent-core source contracts. All checks pass: `turn_end` precedes `shouldStopAfterTurn`; `shouldStopAfterTurn` precedes `getContinuationMessages`; requested compaction is consumed after the loop stops; and goal continuation queuing is present in the threshold-compaction path.
+
+This resolves the source-level question: a plugin calling `ctx.compact()` at `turn_end` cannot assume the normal goal continuation will be generated afterward. The production design must explicitly preserve or recreate continuation. A full Prime Agent wrapper integration test remains required before this is treated as runtime proof.
