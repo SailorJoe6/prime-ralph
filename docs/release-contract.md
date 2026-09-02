@@ -50,3 +50,6 @@ The lifecycle factory validates its options and caps custom bootstrap instructio
 
 
 When the host supplies its detected Prime Agent version, the lifecycle factory rejects versions outside `>=0.8.0 <0.9.0` before registering hooks.
+
+
+`npm run poc:native-rpc` starts the native Prime Agent RPC transport with the packaged extension and sends the documented `abort` command, verifying deterministic JSONL command admission and clean exit. A full prompt/response RPC run needs a provider session and is not implied by this smoke.
