@@ -13,7 +13,8 @@
   "files": ["src", "README.md", "LICENSE"],
   "scripts": {
     "test": "node --test",
-    "compat": "node scripts/check-prime-agent-compat.mjs"
+    "compat": "node scripts/check-prime-agent-compat.mjs",
+    "poc:compaction-order": "node scripts/analyze-compaction-continuation.mjs"
   },
   "engines": {
     "node": ">=20"

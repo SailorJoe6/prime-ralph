@@ -68,3 +68,14 @@ The executable `scripts/run-agent-loop-poc.mjs` uses the installed `@earendil-wo
 The executable `scripts/analyze-compaction-continuation.mjs` checks the installed Prime Agent 0.8.0 and pi-agent-core source contracts. All checks pass: `turn_end` precedes `shouldStopAfterTurn`; `shouldStopAfterTurn` precedes `getContinuationMessages`; requested compaction is consumed after the loop stops; and goal continuation queuing is present in the threshold-compaction path.
 
 This resolves the source-level question: a plugin calling `ctx.compact()` at `turn_end` cannot assume the normal goal continuation will be generated afterward. The production design must explicitly preserve or recreate continuation. A full Prime Agent wrapper integration test remains required before this is treated as runtime proof.
+
+
+Reproduce the source analysis with:
+
+```sh
+PRIME_AGENT_SOURCE_ROOT=/path/to/prime-agent \
+PRIME_AGENT_CORE_ROOT=/path/to/prime-agent/node_modules/@earendil-works/pi-agent-core \
+npm run poc:compaction-order
+```
+
+The command emits PASS/FAIL checks and exits non-zero when the installed source no longer matches the analyzed ordering contract.
