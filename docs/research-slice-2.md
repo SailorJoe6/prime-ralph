@@ -112,3 +112,8 @@ The marker result is the safest useful boundary for a Ralph cycle: it is a real 
 ## Context-hook projection checkpoint
 
 `src/ralph-context.js` provides a research-only pure projection for the `context` hook. When a compaction summary exists, it keeps the latest summary and subsequent `goal_context` messages while removing retained stale assistant history. Without a compaction summary it is a no-op. This proves the message-shaping policy in fixtures; wiring it into production lifecycle state remains a later coordinator task.
+
+
+## Context-hook wiring checkpoint
+
+`src/ralph-context-extension.js` is an opt-in wiring POC. It activates only when an extension-originated compaction summary begins with `RALPH_BOOTSTRAP:` and then returns the projected message list from the public `context` hook. Provider snapshots confirm the resulting sequence is the stable compaction summary followed by the `goal_context`, with stale retained assistant history removed. It is not enabled by the default no-op entry point.
