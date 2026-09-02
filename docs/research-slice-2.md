@@ -147,3 +147,8 @@ The full AgentSession fixture confirms the requested-compaction path ends after 
 ## Recovery checkpoint
 
 The coordinator now exposes `recover()`: an interrupted nonterminal cycle transitions to an explicit `error` marker, preserving the exact recovery reason; a new `begin()` then starts a new cycle ID. Terminal failures are idempotent. Tests cover restart during compaction and provider-failure recovery.
+
+
+## AgentSession failure and cancellation checkpoint
+
+Two disposable fixtures now cover post-compaction failures. `poc:session-provider-error` injects a provider exception on the explicit continuation request and still terminates with a single continuation admission. `poc:session-cancellation` calls `agent.abort()` as the second provider request is admitted and records a bounded second turn plus `agent_end`. Both use automatic goals disabled to isolate plugin behavior; error/cancel reason fields need richer host-version-specific diagnostics before production integration.

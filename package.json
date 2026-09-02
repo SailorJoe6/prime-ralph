@@ -22,7 +22,9 @@
     "poc:session-compaction": "node scripts/run-agent-session-compaction-poc.mjs",
     "poc:first-kept": "node scripts/run-first-kept-poc.mjs",
     "poc:session-continuation": "node scripts/run-agent-session-continuation-poc.mjs",
-    "poc:session-multi-cycle": "node scripts/run-agent-session-multi-cycle-poc.mjs"
+    "poc:session-multi-cycle": "node scripts/run-agent-session-multi-cycle-poc.mjs",
+    "poc:session-provider-error": "node scripts/run-agent-session-provider-error-poc.mjs",
+    "poc:session-cancellation": "node scripts/run-agent-session-cancellation-poc.mjs"
   },
   "engines": {
     "node": ">=20"
