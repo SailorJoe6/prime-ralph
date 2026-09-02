@@ -212,3 +212,8 @@ Skill configuration now supports `.prime-ralph/config.json` loading with bounded
 ## Slice 8 repeated-cycle checkpoint
 
 `cycleSnapshots()` and its tests model repeated Ralph completions with one stable prefix and changing suffixes. Unchanged cycles preserve the exact prefix bytes; changing the Ralph prompt produces a different prefix and is reported as invalidated. This measures prompt structure only, not provider cache billing.
+
+
+## Slice 8 invalidation coverage checkpoint
+
+Stable-prefix inputs now include normalized model settings alongside system prompt, tools, Ralph prompt, and skill text. Tests prove tool and model changes invalidate the prefix while dynamic completion suffixes do not. No provider-specific billing claim is made because this standalone fixture has no provider cache telemetry.
