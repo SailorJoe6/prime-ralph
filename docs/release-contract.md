@@ -56,3 +56,6 @@ When the host supplies its detected Prime Agent version, the lifecycle factory r
 
 
 `npm run poc:native-acp` starts ACP mode with the packaged extension, performs JSON-RPC `initialize` and `session/new`, validates Prime Agent 0.8.0 protocol/session responses, and exits cleanly at EOF. Prompt streaming remains outside this bounded smoke.
+
+
+`npm run poc:native-acp-prompt` drives a real ACP session using a line-buffered JSON-RPC client (not Node `readline`), performs `initialize`, `session/new`, and `session/prompt`, then verifies a provider-backed `end_turn`. It validates the packaged extension in a native prompt lifecycle.

@@ -1,0 +1,11 @@
+import { spawn } from "node:child_process";
+import { join } from "node:path";
+const child = spawn(process.env.PRIME_AGENT_BIN ?? "prime-agent", ["--mode", "acp", "--offline", "--no-extensions", "-e", join(process.cwd(), "src/index.js"), "--cwd", process.cwd()], { stdio: ["pipe", "pipe", "ignore"] });
+let buffer = ""; const records = []; const waiters = [];
+child.stdout.on("data", (chunk) => { buffer += chunk.toString(); let i; while ((i = buffer.indexOf("\n")) >= 0) { const line = buffer.slice(0, i); buffer = buffer.slice(i + 1); if (!line) continue; const record = JSON.parse(line); records.push(record); for (let j = waiters.length - 1; j >= 0; j--) if (waiters[j].predicate(record)) { const waiter = waiters.splice(j, 1)[0]; clearTimeout(waiter.timer); waiter.resolve(record); } } });
+const waitFor = (predicate) => new Promise((resolve, reject) => { const found = records.find(predicate); if (found) return resolve(found); const waiter = { predicate, resolve, timer: setTimeout(() => reject(new Error("ACP response timeout")), 30_000) }; waiters.push(waiter); });
+const send = (value) => child.stdin.write(JSON.stringify(value) + "\n");
+send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: 1, clientInfo: { name: "prime-ralph-poc", version: "0.1.0" }, capabilities: {} } });
+send({ jsonrpc: "2.0", id: 2, method: "session/new", params: { cwd: process.cwd(), mcpServers: [] } });
+const session = await waitFor((r) => r.id === 2); send({ jsonrpc: "2.0", id: 3, method: "session/prompt", params: { sessionId: session.result.sessionId, prompt: [{ type: "text", text: "status" }] } });
+const prompt = await waitFor((r) => r.id === 3); child.kill(); if (!prompt.result?.stopReason) process.exit(1); console.log(JSON.stringify({ protocolVersion: 1, sessionCreated: true, promptStopReason: prompt.result.stopReason, records: records.length }));
