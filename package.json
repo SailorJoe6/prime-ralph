@@ -11,6 +11,7 @@
     "./ralph-context": "./src/ralph-context.js",
     "./ralph-context-extension": "./src/ralph-context-extension.js",
     "./cycle-coordinator": "./src/cycle-coordinator.js",
+    "./continuation-adapter": "./src/continuation-adapter.js",
     "./package": "./package.json"
   },
   "files": ["src", "README.md", "LICENSE"],

@@ -127,3 +127,8 @@ The marker result is the safest useful boundary for a Ralph cycle: it is a real 
 ## Continuation trigger integration finding
 
 The full AgentSession fixture confirms the requested-compaction path ends after `session_compact` and does not produce a second provider call. An attempted direct `pi.sendMessage(..., { triggerTurn: true })` from the compaction callback is not accepted as the coordinator strategy: awaiting it deadlocks against the active compaction, while deferring it can re-enter the turn loop without a bounded cycle guard. The coordinator therefore keeps continuation admission as an explicit, separately guarded lifecycle action rather than hiding it in the compaction callback. Any future AgentSession adapter must schedule it only after compaction has fully settled and enforce a one-boundary/one-continuation invariant.
+
+
+## Settled continuation adapter
+
+`src/continuation-adapter.js` implements the safe seam identified by the live POC: compaction completion calls `settle()`, which defers admission until the compaction callback has returned. It admits at most one `goal_context` follow-up, honors inactive-goal and cancellation decisions, and reports provider admission failures without retrying implicitly. The adapter is host-independent and ready for AgentSession integration.
