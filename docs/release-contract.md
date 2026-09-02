@@ -44,3 +44,6 @@ The real `poc:session-factory` fixture loads `createRalphExtension({ enabled: tr
 
 
 `npm run poc:mode-matrix` registers the lifecycle factory for interactive, daemon, RPC, and headless labels. It verifies hook registration only; it does not substitute for native host transport acceptance.
+
+
+The lifecycle factory validates its options and caps custom bootstrap instructions at 4,000 characters before they enter compaction instructions or persisted summaries. This bounds configuration-driven prompt growth.
