@@ -19,9 +19,10 @@
     "./bd-cli-adapter": "./src/bd-cli-adapter.js",
     "./goal-lifecycle": "./src/goal-lifecycle.js",
     "./cache-analysis": "./src/cache-analysis.js",
+    "./diagnostics": "./src/diagnostics.js",
     "./package": "./package.json"
   },
-  "files": ["src", "README.md", "LICENSE"],
+  "files": ["src", "scripts", "docs", "README.md", "LICENSE"],
   "scripts": {
     "test": "node --test",
     "compat": "node scripts/check-prime-agent-compat.mjs",

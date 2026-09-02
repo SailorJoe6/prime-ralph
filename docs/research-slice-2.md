@@ -217,3 +217,8 @@ Skill configuration now supports `.prime-ralph/config.json` loading with bounded
 ## Slice 8 invalidation coverage checkpoint
 
 Stable-prefix inputs now include normalized model settings alongside system prompt, tools, Ralph prompt, and skill text. Tests prove tool and model changes invalidate the prefix while dynamic completion suffixes do not. No provider-specific billing claim is made because this standalone fixture has no provider cache telemetry.
+
+
+## Slice 9 hardening checkpoint
+
+The package now exposes a version compatibility gate for Prime Agent `>=0.8.0 <0.9.0`, bounded diagnostic snapshots, updated status/limitations documentation, and an explicit package file allowlist including reproducibility scripts and evidence docs.
