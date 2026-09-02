@@ -107,3 +107,8 @@ The executable `scripts/run-first-kept-poc.mjs` constructs independent in-memory
 - an unknown ID currently produces summary-only context in `buildSessionContext`, but this is an undocumented fallback and is not selected as the production strategy.
 
 The marker result is the safest useful boundary for a Ralph cycle: it is a real entry, does not add model-visible content, and preserves the goal context that follows it. The POC does not yet prove the production context-hook filter; that remains in the next compaction slice.
+
+
+## Context-hook projection checkpoint
+
+`src/ralph-context.js` provides a research-only pure projection for the `context` hook. When a compaction summary exists, it keeps the latest summary and subsequent `goal_context` messages while removing retained stale assistant history. Without a compaction summary it is a no-op. This proves the message-shaping policy in fixtures; wiring it into production lifecycle state remains a later coordinator task.
