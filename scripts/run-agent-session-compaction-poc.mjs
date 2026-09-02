@@ -24,9 +24,11 @@ const responseFor = () => {
   return { async *[Symbol.asyncIterator]() { yield { type: "start", partial: { ...message, content: [] } }; yield { type: "done", reason: "stop", message }; }, async result() { return message; } };
 };
 const extension = (pi) => {
+  let compactRequested = false;
   pi.on("turn_end", (event, ctx) => {
     trace.push({ hook: "turn_end", role: event.message?.role, stopReason: event.message?.stopReason });
-    if (event.message?.role === "assistant" && !event.message.content?.some((part) => part.type === "toolCall")) {
+    if (!compactRequested && event.message?.role === "assistant" && !event.message.content?.some((part) => part.type === "toolCall")) {
+      compactRequested = true;
       ctx.compact({ customInstructions: "RALPH POC BOOTSTRAP" });
     }
   });
