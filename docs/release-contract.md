@@ -13,7 +13,7 @@ npm run package:check
 npm pack --dry-run
 ```
 
-A clean-install smoke test should extract the tarball and import `src/index.js` before publishing.
+A clean-install smoke test should extract the tarball and import `src/index.js` before publishing. `package:check` also invokes the behavior-neutral entry point for interactive, daemon, RPC, and headless mode labels; this is an import smoke test, not a claim of full mode-specific runtime support.
 
 ## Runtime safety
 
