@@ -79,3 +79,18 @@ npm run poc:compaction-order
 ```
 
 The command emits PASS/FAIL checks and exits non-zero when the installed source no longer matches the analyzed ordering contract.
+
+
+## Full AgentSession compaction POC
+
+The executable `scripts/run-agent-session-compaction-poc.mjs` constructs a real Prime Agent `AgentSession` with an in-memory `SessionManager`, a deterministic fake model stream, an active goal, and an extension implementing `turn_end` plus `session_before_compact`. It uses tiny compaction retention settings so the fixture is eligible without a large prompt.
+
+Run it with:
+
+```sh
+PRIME_AGENT_SOURCE_ROOT=/path/to/prime-agent \
+PRIME_AGENT_CORE_ROOT=/path/to/prime-agent/node_modules/@earendil-works/pi-agent-core \
+npm run poc:session-compaction
+```
+
+Against installed Prime Agent 0.8.0, the POC passed with `compactionApplied: true`, the custom summary `RALPH POC BOOTSTRAP`, and exactly one provider call. It also found `postCompactionGoalContext: false`: requested compaction completed, but the normal active-goal continuation was not generated afterward. This is direct runtime evidence that the production plugin must explicitly recreate or preserve the continuation after requested compaction.
