@@ -207,3 +207,8 @@ Skill configuration now supports `.prime-ralph/config.json` loading with bounded
 ## Slice 8 cache checkpoint
 
 `src/cache-analysis.js` provides deterministic stable-prefix serialization with recursively sorted object keys, byte-level longest-common-prefix measurement, and a report that separates prompt-prefix equality from provider cache-hit billing. Tests cover key-order stability and dynamic suffix changes.
+
+
+## Slice 8 repeated-cycle checkpoint
+
+`cycleSnapshots()` and its tests model repeated Ralph completions with one stable prefix and changing suffixes. Unchanged cycles preserve the exact prefix bytes; changing the Ralph prompt produces a different prefix and is reported as invalidated. This measures prompt structure only, not provider cache billing.
