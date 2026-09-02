@@ -10,6 +10,7 @@
     "./cycle-boundary-poc": "./src/cycle-boundary-poc.js",
     "./ralph-context": "./src/ralph-context.js",
     "./ralph-context-extension": "./src/ralph-context-extension.js",
+    "./cycle-coordinator": "./src/cycle-coordinator.js",
     "./package": "./package.json"
   },
   "files": ["src", "README.md", "LICENSE"],

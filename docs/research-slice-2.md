@@ -117,3 +117,8 @@ The marker result is the safest useful boundary for a Ralph cycle: it is a real 
 ## Context-hook wiring checkpoint
 
 `src/ralph-context-extension.js` is an opt-in wiring POC. It activates only when an extension-originated compaction summary begins with `RALPH_BOOTSTRAP:` and then returns the projected message list from the public `context` hook. Provider snapshots confirm the resulting sequence is the stable compaction summary followed by the `goal_context`, with stale retained assistant history removed. It is not enabled by the default no-op entry point.
+
+
+## Cycle coordinator checkpoint
+
+`src/cycle-coordinator.js` adds a tested, standalone state-machine seam for Slice 5. It persists sanitized cycle-state markers, rejects mismatched or duplicate compaction boundaries, and explicitly emits a `goal_context` continuation marker after a successful requested compaction when the goal remains active. Failure and restart behavior are covered. This is not yet wired to the live AgentSession event stream; integration and cancellation/restart fixtures remain.
