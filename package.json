@@ -16,6 +16,7 @@
     "./phase-runtime": "./src/phase-runtime.js",
     "./beads-coordination": "./src/beads-coordination.js",
     "./coordination-runtime": "./src/coordination-runtime.js",
+    "./bd-cli-adapter": "./src/bd-cli-adapter.js",
     "./package": "./package.json"
   },
   "files": ["src", "README.md", "LICENSE"],

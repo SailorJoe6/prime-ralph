@@ -187,3 +187,8 @@ Skill configuration now supports `.prime-ralph/config.json` loading with bounded
 ## Slice 7 metadata checkpoint
 
 `src/coordination-runtime.js` binds issue leases to session ID, cycle ID, and an explicit actor label without changing Beads assignee semantics. It also selects phase-specific quality gates and passes phase context to each gate. Lease expiry remains owned by the coordination layer, while real `bd` persistence/atomicity remains an integration task.
+
+
+## Slice 7 `bd` adapter checkpoint
+
+`src/bd-cli-adapter.js` defines the narrow real-CLI boundary: issue inspection, claim, checkpoint note, and close are invoked with argument arrays, bounded note lengths, and JSON parsing. Nonzero exits and invalid JSON fail closed with short errors. Tests use an injected runner, so no live issue state is mutated by the standalone suite.
