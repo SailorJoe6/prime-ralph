@@ -53,3 +53,6 @@ When the host supplies its detected Prime Agent version, the lifecycle factory r
 
 
 `npm run poc:native-rpc` starts the native Prime Agent RPC transport with the packaged extension and sends the documented `abort` command, verifying deterministic JSONL command admission and clean exit. A full prompt/response RPC run needs a provider session and is not implied by this smoke.
+
+
+`npm run poc:native-acp` starts ACP mode with the packaged extension, performs JSON-RPC `initialize` and `session/new`, validates Prime Agent 0.8.0 protocol/session responses, and exits cleanly at EOF. Prompt streaming remains outside this bounded smoke.

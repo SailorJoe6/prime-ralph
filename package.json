@@ -38,6 +38,7 @@
     "poc:session-goal-coexistence": "node scripts/run-agent-session-goal-coexistence-poc.mjs",
     "poc:session-factory": "node scripts/run-agent-session-factory-poc.mjs",
     "poc:mode-matrix": "node scripts/run-mode-matrix-poc.mjs",
+    "poc:native-acp": "node scripts/run-native-acp-smoke.mjs",
     "poc:native-rpc": "node scripts/run-native-rpc-smoke.mjs"
   },
   "engines": {
