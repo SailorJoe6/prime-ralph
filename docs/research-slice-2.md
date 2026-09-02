@@ -162,3 +162,8 @@ Two disposable fixtures now cover post-compaction failures. `poc:session-provide
 ## Stale continuation checkpoint
 
 The coordinator now requires the current cycle ID, compaction boundary ID, rehydrating state, and a pending continuation before accepting a continuation. Older-cycle, wrong-boundary, and duplicate admissions are rejected. Diagnostic snapshots expose only state, cycle ID, boundary, and queue flags; marker details remain sanitized and are not copied into snapshots.
+
+
+## Slice 6 configuration checkpoint
+
+`src/skill-config.js` adds deterministic skill discovery and phase selection. Skill precedence is explicit configured directories, `PRIME_RALPH_SKILL_DIR`, `.prime-ralph/skills`, then `.ralph/skills`; the first existing phase file wins. Oversized/unreadable files produce bounded diagnostics. `selectPhase()` uses durable spec/plan/goal state and cycle state, prioritizing blocked, handoff, design, plan, prepare, and execute.
