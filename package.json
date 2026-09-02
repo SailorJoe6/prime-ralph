@@ -20,6 +20,7 @@
     "./goal-lifecycle": "./src/goal-lifecycle.js",
     "./cache-analysis": "./src/cache-analysis.js",
     "./diagnostics": "./src/diagnostics.js",
+    "./ralph-extension": "./src/ralph-extension.js",
     "./package": "./package.json"
   },
   "files": ["src", "scripts", "docs", "README.md", "LICENSE"],

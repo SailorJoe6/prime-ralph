@@ -33,3 +33,8 @@ The package root exports the tested coordinator, continuation, skill, Beads, lif
 
 
 `startManagedCycle()` is the narrow orchestration entry point for consumers: it runs claim, configured gates, and evidence checkpointing through an injected `bd` adapter, then returns only ownership metadata and bounded results. It does not bypass Beads transactions or claim issue completion implicitly.
+
+
+## Opt-in lifecycle factory
+
+`createRalphExtension({ enabled: true })` is the first host-facing lifecycle factory. It requests one compaction at a final normal assistant turn with an active goal, returns a fixed `RALPH_BOOTSTRAP:` summary using the host-provided valid boundary, and schedules one explicit `goal_context` follow-up after compaction. It must be used with automatic Prime Agent goals disabled, as established by the coexistence POC. The default export remains disabled/no-op until broader host integration is validated.
