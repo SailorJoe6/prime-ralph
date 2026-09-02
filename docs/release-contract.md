@@ -19,11 +19,6 @@ A clean-install smoke test should extract the tarball and import `src/index.js` 
 
 The default extension entry point is behavior-neutral. Ralph-managed sessions must disable Prime Agent automatic goals unless the host provides an explicit ownership handoff. Requested compaction requires explicit continuation admission after compaction settles. Never infer provider cache billing from common prompt-prefix bytes.
 
-## Optional control-repository integration
-
-A consumer may add this repository as `deps/prime-ralph` after a standalone release is created. The consumer should pin a deliberate release commit and keep the dependency outside OpenClaw runtime configuration. Submodule initialization from a clean clone is an acceptance check.
-
-
 ## Beads cycle execution
 
 The coordination runtime claims an issue, evaluates configured phase gates, and writes a bounded checkpoint only when all gates pass and durable evidence exists. The `bd` adapter remains the transaction boundary; callers must provide a real adapter backed by the target repository's Beads database.
