@@ -197,3 +197,8 @@ Skill configuration now supports `.prime-ralph/config.json` loading with bounded
 ## Slice 7 lifecycle checkpoint
 
 `src/goal-lifecycle.js` adds goal status transitions for active, paused, complete, blocked, error, and budget-limit outcomes. Heartbeats renew only the owning issue lease; terminal transitions release it and stop heartbeat work. Status details are sanitized.
+
+
+## Scheduled heartbeat checkpoint
+
+`GoalLifecycle.startHeartbeat()` installs at most one injectable interval and records errors as a bounded lifecycle error. Terminal transitions stop the interval and release the lease; `stopHeartbeat()` is idempotent. Tests use fake timer functions and do not leave background timers running.
