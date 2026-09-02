@@ -18,6 +18,7 @@
     "./coordination-runtime": "./src/coordination-runtime.js",
     "./bd-cli-adapter": "./src/bd-cli-adapter.js",
     "./goal-lifecycle": "./src/goal-lifecycle.js",
+    "./cache-analysis": "./src/cache-analysis.js",
     "./package": "./package.json"
   },
   "files": ["src", "README.md", "LICENSE"],

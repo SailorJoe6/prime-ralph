@@ -202,3 +202,8 @@ Skill configuration now supports `.prime-ralph/config.json` loading with bounded
 ## Scheduled heartbeat checkpoint
 
 `GoalLifecycle.startHeartbeat()` installs at most one injectable interval and records errors as a bounded lifecycle error. Terminal transitions stop the interval and release the lease; `stopHeartbeat()` is idempotent. Tests use fake timer functions and do not leave background timers running.
+
+
+## Slice 8 cache checkpoint
+
+`src/cache-analysis.js` provides deterministic stable-prefix serialization with recursively sorted object keys, byte-level longest-common-prefix measurement, and a report that separates prompt-prefix equality from provider cache-hit billing. Tests cover key-order stability and dynamic suffix changes.
