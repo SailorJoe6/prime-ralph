@@ -56,3 +56,9 @@ The source also shows that `turn_end` is emitted for tool-call turns, not only f
 - Context-hook filtering preserves valid tool-call/result message structure.
 
 These unresolved assumptions are explicit inputs to Slice 3 and Slice 4.
+
+## Slice 3 initial source/runtime POC
+
+The executable `scripts/run-agent-loop-poc.mjs` uses the installed `@earendil-works/pi-agent-core` with a deterministic stream function. Its trace confirms `turn_end` is emitted for a normal assistant response, then the continuation hook is consulted before the next turn boundary. The trace also demonstrates that the public core loop has no goal-specific continuation event.
+
+`src/cycle-boundary-poc.js` encodes the research predicate: only a final normal assistant turn with no tool calls/results and an active goal is eligible for a cycle-compaction request. It remains research-only until requested-compaction ordering and resume behavior are tested through the full Prime Agent session wrapper.
