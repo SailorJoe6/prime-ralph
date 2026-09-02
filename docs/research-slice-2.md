@@ -182,3 +182,8 @@ Skill configuration now supports `.prime-ralph/config.json` loading with bounded
 ## Slice 7 ownership checkpoint
 
 `src/beads-coordination.js` adds an in-memory Beads coordination seam: priority selection, one active lease, stale lease reclamation, owner-only checkpoint/release/close, required durable evidence, and fail-closed quality-gate aggregation. Evidence and errors are sanitized. This is a coordination fixture, not a replacement for the `bd` CLI/database transaction layer; production integration must preserve that boundary.
+
+
+## Slice 7 metadata checkpoint
+
+`src/coordination-runtime.js` binds issue leases to session ID, cycle ID, and an explicit actor label without changing Beads assignee semantics. It also selects phase-specific quality gates and passes phase context to each gate. Lease expiry remains owned by the coordination layer, while real `bd` persistence/atomicity remains an integration task.

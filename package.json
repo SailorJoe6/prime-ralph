@@ -15,6 +15,7 @@
     "./skill-config": "./src/skill-config.js",
     "./phase-runtime": "./src/phase-runtime.js",
     "./beads-coordination": "./src/beads-coordination.js",
+    "./coordination-runtime": "./src/coordination-runtime.js",
     "./package": "./package.json"
   },
   "files": ["src", "README.md", "LICENSE"],
