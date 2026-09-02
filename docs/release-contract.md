@@ -13,7 +13,7 @@ npm run package:check
 npm pack --dry-run
 ```
 
-A clean-install smoke test should extract the tarball and import `src/index.js` before publishing. `package:check` also invokes the behavior-neutral entry point for interactive, daemon, RPC, and headless mode labels; this is an import smoke test, not a claim of full mode-specific runtime support.
+A clean-install smoke test should extract the tarball and import `src/index.js` before publishing. `package:check` also invokes the behavior-neutral entry point for text, JSON, RPC, ACP, and daemon mode labels; this is an import smoke test, not a claim of full mode-specific runtime support.
 
 ## Runtime safety
 
@@ -43,7 +43,7 @@ The package root exports the tested coordinator, continuation, skill, Beads, lif
 The real `poc:session-factory` fixture loads `createRalphExtension({ enabled: true })` into AgentSession with automatic goals disabled. Against Prime Agent 0.8.0 it completes two provider calls, persists the fixed bootstrap compaction, persists one goal context, and reaches `agent_end`.
 
 
-`npm run poc:mode-matrix` registers the lifecycle factory for interactive, daemon, RPC, and headless labels. It verifies hook registration only; it does not substitute for native host transport acceptance.
+`npm run poc:mode-matrix` registers the lifecycle factory for text, JSON, RPC, ACP, and daemon labels. It verifies hook registration only; it does not substitute for native host transport acceptance.
 
 
 The lifecycle factory validates its options and caps custom bootstrap instructions at 4,000 characters before they enter compaction instructions or persisted summaries. This bounds configuration-driven prompt growth.
