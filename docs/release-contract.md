@@ -27,3 +27,6 @@ A consumer may add this repository as `deps/prime-ralph` after a standalone rele
 ## Beads cycle execution
 
 The coordination runtime claims an issue, evaluates configured phase gates, and writes a bounded checkpoint only when all gates pass and durable evidence exists. The `bd` adapter remains the transaction boundary; callers must provide a real adapter backed by the target repository's Beads database.
+
+
+The package root exports the tested coordinator, continuation, skill, Beads, lifecycle, and diagnostics seams while its default extension remains a no-op. This makes the current research components consumable without falsely enabling unvalidated host lifecycle behavior.
