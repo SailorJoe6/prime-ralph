@@ -4,7 +4,10 @@
   "description": "A Prime Agent plugin implementing best-practice Ralph loop design in Prime Agent.",
   "type": "module",
   "exports": {
-    ".": "./src/index.js"
+    ".": "./src/index.js",
+    "./observability": "./src/observability.js",
+    "./observability-extension": "./src/observability-extension.js",
+    "./package": "./package.json"
   },
   "files": ["src", "README.md", "LICENSE"],
   "scripts": {
