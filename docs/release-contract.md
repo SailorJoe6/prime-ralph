@@ -38,3 +38,6 @@ The package root exports the tested coordinator, continuation, skill, Beads, lif
 ## Opt-in lifecycle factory
 
 `createRalphExtension({ enabled: true })` is the first host-facing lifecycle factory. It requests one compaction at a final normal assistant turn with an active goal, returns a fixed `RALPH_BOOTSTRAP:` summary using the host-provided valid boundary, and schedules one explicit `goal_context` follow-up after compaction. It must be used with automatic Prime Agent goals disabled, as established by the coexistence POC. The default export remains disabled/no-op until broader host integration is validated.
+
+
+The real `poc:session-factory` fixture loads `createRalphExtension({ enabled: true })` into AgentSession with automatic goals disabled. Against Prime Agent 0.8.0 it completes two provider calls, persists the fixed bootstrap compaction, persists one goal context, and reaches `agent_end`.
