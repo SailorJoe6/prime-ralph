@@ -132,3 +132,8 @@ The full AgentSession fixture confirms the requested-compaction path ends after 
 ## Settled continuation adapter
 
 `src/continuation-adapter.js` implements the safe seam identified by the live POC: compaction completion calls `settle()`, which defers admission until the compaction callback has returned. It admits at most one `goal_context` follow-up, honors inactive-goal and cancellation decisions, and reports provider admission failures without retrying implicitly. The adapter is host-independent and ready for AgentSession integration.
+
+
+## Full explicit continuation POC
+
+`scripts/run-agent-session-continuation-poc.mjs` is a real AgentSession fixture with automatic goals disabled to isolate plugin admission. Its `session_compact` handler schedules `pi.sendMessage` after the callback returns. Against Prime Agent 0.8.0 it produced exactly two provider calls, a persisted `custom_message` with `customType: goal_context` after the compaction entry, and a second `turn_end`/`agent_end`. This validates the settled-event adapter strategy when automatic goal continuation is not concurrently active.
