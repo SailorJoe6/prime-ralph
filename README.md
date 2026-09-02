@@ -4,7 +4,7 @@ A standalone, opt-in Prime Agent plugin design for Ralph-style low-context-rotat
 
 ## Status
 
-Research and implementation slices are complete through cache validation. The repository contains tested seams for lifecycle observation, controlled compaction, explicit continuation, cycle recovery, configurable repository skills, Beads ownership, quality gates, lease heartbeats, and cache-boundary analysis. The default extension entry point remains behavior-neutral until final host integration is completed.
+Research and implementation slices are complete through package validation. The repository contains tested seams for lifecycle observation, controlled compaction, explicit continuation, cycle recovery, configurable repository skills, Beads ownership, quality gates, lease heartbeats, and cache-boundary analysis. The default extension entry point remains behavior-neutral until final host integration is completed.
 
 ## Development
 
