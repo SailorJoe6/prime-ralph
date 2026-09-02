@@ -4,6 +4,24 @@ import { join, resolve } from "node:path";
 export const PHASES = ["design", "plan", "execute", "handoff", "prepare", "blocked"];
 const MAX_SKILL_BYTES = 128 * 1024;
 
+export function loadSkillConfiguration({ cwd = process.cwd(), path = ".prime-ralph/config.json" } = {}) {
+  const file = resolve(cwd, path); const diagnostics = [];
+  if (!existsSync(file)) return { config: {}, diagnostics };
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("configuration must be an object");
+    const allowed = new Set(["skillDirs"]); const unknown = Object.keys(parsed).filter((key) => !allowed.has(key));
+    if (unknown.length) diagnostics.push({ code: "config_unknown_keys", keys: unknown.slice(0, 10) });
+    if (parsed.skillDirs !== undefined && (!Array.isArray(parsed.skillDirs) || parsed.skillDirs.some((value) => typeof value !== "string" || value.length === 0))) throw new Error("skillDirs must be a list of non-empty strings");
+    return { config: { skillDirs: parsed.skillDirs ?? [] }, diagnostics };
+  } catch (error) { return { config: {}, diagnostics: [{ code: "config_invalid", path: file, message: String(error.message).slice(0, 200) }] }; }
+}
+
+export function phaseIdentity(phase, skill) {
+  if (!PHASES.includes(phase)) throw new Error(`unknown phase: ${phase}`);
+  return { phase, skillIdentity: skill?.identity ?? null };
+}
+
 export function discoverSkillConfig({ cwd = process.cwd(), config = {}, env = process.env } = {}) {
   const roots = [];
   if (Array.isArray(config.skillDirs)) roots.push(...config.skillDirs.map((p) => resolve(cwd, p)));

@@ -167,3 +167,8 @@ The coordinator now requires the current cycle ID, compaction boundary ID, rehyd
 ## Slice 6 configuration checkpoint
 
 `src/skill-config.js` adds deterministic skill discovery and phase selection. Skill precedence is explicit configured directories, `PRIME_RALPH_SKILL_DIR`, `.prime-ralph/skills`, then `.ralph/skills`; the first existing phase file wins. Oversized/unreadable files produce bounded diagnostics. `selectPhase()` uses durable spec/plan/goal state and cycle state, prioritizing blocked, handoff, design, plan, prepare, and execute.
+
+
+## Slice 6 configuration validation checkpoint
+
+Skill configuration now supports `.prime-ralph/config.json` loading with bounded invalid-configuration diagnostics and rejects non-list `skillDirs`. `phaseIdentity()` validates known phases and produces a stable phase/skill identity record suitable for cycle markers and diagnostics. Tests cover malformed configuration and unknown phases; explicit-directory precedence remains tested.
