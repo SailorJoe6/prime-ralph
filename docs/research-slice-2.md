@@ -172,3 +172,8 @@ The coordinator now requires the current cycle ID, compaction boundary ID, rehyd
 ## Slice 6 configuration validation checkpoint
 
 Skill configuration now supports `.prime-ralph/config.json` loading with bounded invalid-configuration diagnostics and rejects non-list `skillDirs`. `phaseIdentity()` validates known phases and produces a stable phase/skill identity record suitable for cycle markers and diagnostics. Tests cover malformed configuration and unknown phases; explicit-directory precedence remains tested.
+
+
+## Slice 6 fixture and persistence checkpoint
+
+`src/phase-runtime.js` combines durable-state phase selection with discovered skills and emits a compact phase-selection marker containing only cycle ID, phase, and skill identity. Fixture tests use separate temporary repositories with different `.ralph`/`.prime-ralph` layouts and verify missing skills do not prevent phase selection.

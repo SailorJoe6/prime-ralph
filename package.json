@@ -13,6 +13,7 @@
     "./cycle-coordinator": "./src/cycle-coordinator.js",
     "./continuation-adapter": "./src/continuation-adapter.js",
     "./skill-config": "./src/skill-config.js",
+    "./phase-runtime": "./src/phase-runtime.js",
     "./package": "./package.json"
   },
   "files": ["src", "README.md", "LICENSE"],
