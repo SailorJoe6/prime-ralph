@@ -192,3 +192,8 @@ Skill configuration now supports `.prime-ralph/config.json` loading with bounded
 ## Slice 7 `bd` adapter checkpoint
 
 `src/bd-cli-adapter.js` defines the narrow real-CLI boundary: issue inspection, claim, checkpoint note, and close are invoked with argument arrays, bounded note lengths, and JSON parsing. Nonzero exits and invalid JSON fail closed with short errors. Tests use an injected runner, so no live issue state is mutated by the standalone suite.
+
+
+## Slice 7 lifecycle checkpoint
+
+`src/goal-lifecycle.js` adds goal status transitions for active, paused, complete, blocked, error, and budget-limit outcomes. Heartbeats renew only the owning issue lease; terminal transitions release it and stop heartbeat work. Status details are sanitized.
