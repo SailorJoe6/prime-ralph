@@ -142,3 +142,8 @@ The full AgentSession fixture confirms the requested-compaction path ends after 
 ## Multi-cycle AgentSession checkpoint
 
 `npm run poc:session-multi-cycle` runs two requested-compaction boundaries in one long-lived AgentSession with a deterministic provider. It produced two compaction entries and two provider calls; exactly one `goal_context` was admitted between them, and the second boundary stopped without another continuation. This demonstrates bounded cycle admission and no repeated compaction after the configured stop boundary. Automatic Prime Agent goals remain disabled in this fixture; coexistence policy is still unresolved.
+
+
+## Recovery checkpoint
+
+The coordinator now exposes `recover()`: an interrupted nonterminal cycle transitions to an explicit `error` marker, preserving the exact recovery reason; a new `begin()` then starts a new cycle ID. Terminal failures are idempotent. Tests cover restart during compaction and provider-failure recovery.

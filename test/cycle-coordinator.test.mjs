@@ -33,3 +33,16 @@ test("failure marker is sanitized and restart begins a new cycle", () => {
   assert.match(JSON.stringify(markers), /redacted-email/); assert.doesNotMatch(JSON.stringify(markers), /alice@example.com|do-not-copy/);
   c.begin(); assert.deepEqual(c.snapshot(), { state: "preparing", cycleId: 2, compactedBoundary: null, continuationQueued: false });
 });
+
+test("restart recovery records an incomplete cycle instead of silently continuing", () => {
+  const markers = []; const c = new RalphCycleCoordinator({ appendMarker: (m) => markers.push(m) });
+  c.begin(); c.executing(); c.checkpoint(); c.compacting("boundary-1");
+  assert.equal(c.recover("process restarted during compaction").state, "error");
+  assert.match(JSON.stringify(markers), /process restarted during compaction/);
+  c.begin(); assert.equal(c.snapshot().cycleId, 2);
+});
+
+test("recovery is idempotent after a terminal failure", () => {
+  const c = new RalphCycleCoordinator(); c.begin(); c.executing(); c.fail("provider error");
+  assert.deepEqual(c.recover(), c.snapshot());
+});

@@ -35,6 +35,10 @@ export class RalphCycleCoordinator {
   fail(error) { if (this.state === "error") return this.snapshot(); return this.transition("error", { error: String(error?.message ?? error).slice(0, 240) }); }
   block(reason) { return this.transition("blocked", { reason }); }
   complete(details) { return this.transition("complete", details); }
+  recover(reason = "incomplete cycle after restart") {
+    if (!["preparing", "executing", "checkpointing", "compacting", "rehydrating"].includes(this.state)) return this.snapshot();
+    return this.transition("error", { recovery: reason });
+  }
   snapshot() { return { state: this.state, cycleId: this.cycleId, compactedBoundary: this.compactedBoundary, continuationQueued: this.continuationQueued }; }
 }
 
