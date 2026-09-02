@@ -9,6 +9,7 @@ Validate a release locally:
 ```sh
 npm test
 npm run compat
+npm run package:check
 npm pack --dry-run
 ```
 
