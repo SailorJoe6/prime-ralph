@@ -36,7 +36,8 @@
     "poc:session-provider-error": "node scripts/run-agent-session-provider-error-poc.mjs",
     "poc:session-cancellation": "node scripts/run-agent-session-cancellation-poc.mjs",
     "poc:session-goal-coexistence": "node scripts/run-agent-session-goal-coexistence-poc.mjs",
-    "poc:session-factory": "node scripts/run-agent-session-factory-poc.mjs"
+    "poc:session-factory": "node scripts/run-agent-session-factory-poc.mjs",
+    "poc:mode-matrix": "node scripts/run-mode-matrix-poc.mjs"
   },
   "engines": {
     "node": ">=20"
