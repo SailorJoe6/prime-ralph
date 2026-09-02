@@ -14,6 +14,7 @@
     "./continuation-adapter": "./src/continuation-adapter.js",
     "./skill-config": "./src/skill-config.js",
     "./phase-runtime": "./src/phase-runtime.js",
+    "./beads-coordination": "./src/beads-coordination.js",
     "./package": "./package.json"
   },
   "files": ["src", "README.md", "LICENSE"],

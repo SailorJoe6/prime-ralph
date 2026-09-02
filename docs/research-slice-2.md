@@ -177,3 +177,8 @@ Skill configuration now supports `.prime-ralph/config.json` loading with bounded
 ## Slice 6 fixture and persistence checkpoint
 
 `src/phase-runtime.js` combines durable-state phase selection with discovered skills and emits a compact phase-selection marker containing only cycle ID, phase, and skill identity. Fixture tests use separate temporary repositories with different `.ralph`/`.prime-ralph` layouts and verify missing skills do not prevent phase selection.
+
+
+## Slice 7 ownership checkpoint
+
+`src/beads-coordination.js` adds an in-memory Beads coordination seam: priority selection, one active lease, stale lease reclamation, owner-only checkpoint/release/close, required durable evidence, and fail-closed quality-gate aggregation. Evidence and errors are sanitized. This is a coordination fixture, not a replacement for the `bd` CLI/database transaction layer; production integration must preserve that boundary.
