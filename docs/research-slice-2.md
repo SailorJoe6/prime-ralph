@@ -152,3 +152,8 @@ The coordinator now exposes `recover()`: an interrupted nonterminal cycle transi
 ## AgentSession failure and cancellation checkpoint
 
 Two disposable fixtures now cover post-compaction failures. `poc:session-provider-error` injects a provider exception on the explicit continuation request and still terminates with a single continuation admission. `poc:session-cancellation` calls `agent.abort()` as the second provider request is admitted and records a bounded second turn plus `agent_end`. Both use automatic goals disabled to isolate plugin behavior; error/cancel reason fields need richer host-version-specific diagnostics before production integration.
+
+
+## Automatic-goal coexistence finding
+
+`poc:session-goal-coexistence` enables Prime Agent automatic goals while also injecting the explicit plugin `goal_context`. The bounded fixture observed three provider calls and multiple `thread_goal_state` updates after one requested compaction, proving automatic continuation can continue independently of the plugin and defeat a plugin-only compaction guard. A watchdog aborts at call three to keep the POC finite. Production must either disable automatic goals for Ralph-managed sessions or establish a host-supported ownership handoff; silently running both is unsafe.
