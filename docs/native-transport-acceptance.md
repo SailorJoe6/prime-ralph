@@ -8,6 +8,8 @@ This record separates native Prime Agent transport evidence from the standalone 
 - **RPC:** An interactive LF-delimited client sent `{"id":"p","type":"prompt","message":"status"}` and then `{"type":"abort"}`. The prompt was accepted, the abort was accepted, and the process exited 0.
 - **ACP initialization:** A JSON-RPC client sent `initialize` and `session/new`; protocol version 1 and a session ID were returned, and EOF exited cleanly.
 - **ACP prompt:** A strict LF parser sent `initialize`, `session/new`, and `session/prompt` with a text-content array. The provider-backed turn returned `stopReason: end_turn`.
+- **Text (PTY):** `script -qec 'prime-agent --mode text --print --offline --no-extensions -e ... --cwd ... status' /dev/null` returned formatted status output and exit 0 in a disposable pseudo-terminal.
+
 - **Daemon:** A disposable daemon was started with a unique socket, `--mode daemon`, `--daemon-socket`, and the packaged extension. Its `daemon_hello` reported protocol 7, schema revision 22, and app version 0.8.0. A versioned `shutdown` command was accepted and the socket was removed.
 
 ## Boundaries
