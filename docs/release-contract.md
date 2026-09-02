@@ -22,3 +22,8 @@ The default extension entry point is behavior-neutral. Ralph-managed sessions mu
 ## Optional control-repository integration
 
 A consumer may add this repository as `deps/prime-ralph` after a standalone release is created. The consumer should pin a deliberate release commit and keep the dependency outside OpenClaw runtime configuration. Submodule initialization from a clean clone is an acceptance check.
+
+
+## Beads cycle execution
+
+The coordination runtime claims an issue, evaluates configured phase gates, and writes a bounded checkpoint only when all gates pass and durable evidence exists. The `bd` adapter remains the transaction boundary; callers must provide a real adapter backed by the target repository's Beads database.

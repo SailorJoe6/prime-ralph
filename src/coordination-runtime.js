@@ -14,3 +14,12 @@ export function runPhaseGates(gatesByPhase, phase, context = {}) {
   const gates = gatesByPhase?.[phase] ?? [];
   return runQualityGates(gates, { ...context, phase });
 }
+
+export async function executeClaimedCycle({ bd, issueId, metadata, phase, gates = [], evidence } = {}) {
+  const claim = await bd.claim(issueId);
+  const gateResult = runQualityGates(gates, { phase, issueId, metadata });
+  if (!gateResult.passed) return { status: "gate_failed", claim, gates: gateResult };
+  if (evidence === undefined || evidence === null || evidence === "") throw new Error("durable evidence is required");
+  const checkpoint = await bd.checkpoint(issueId, JSON.stringify({ ...metadata, phase, evidence }));
+  return { status: "checkpointed", claim, gates: gateResult, checkpoint };
+}
