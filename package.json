@@ -15,7 +15,8 @@
     "test": "node --test",
     "compat": "node scripts/check-prime-agent-compat.mjs",
     "poc:compaction-order": "node scripts/analyze-compaction-continuation.mjs",
-    "poc:session-compaction": "node scripts/run-agent-session-compaction-poc.mjs"
+    "poc:session-compaction": "node scripts/run-agent-session-compaction-poc.mjs",
+    "poc:first-kept": "node scripts/run-first-kept-poc.mjs"
   },
   "engines": {
     "node": ">=20"

@@ -94,3 +94,16 @@ npm run poc:session-compaction
 ```
 
 Against installed Prime Agent 0.8.0, the POC passed with `compactionApplied: true`, the custom summary `RALPH POC BOOTSTRAP`, and exactly one provider call. It also found `postCompactionGoalContext: false`: requested compaction completed, but the normal active-goal continuation was not generated afterward. This is direct runtime evidence that the production plugin must explicitly recreate or preserve the continuation after requested compaction.
+
+
+## `firstKeptEntryId` POC
+
+The executable `scripts/run-first-kept-poc.mjs` constructs independent in-memory Prime Agent session branches, appends a custom Ralph compaction entry, rebuilds context, and converts it to provider messages. Against Prime Agent 0.8.0 it demonstrates:
+
+- pointing at the first user entry retains the old user/assistant messages;
+- pointing at the last assistant retains that assistant plus later goal context;
+- pointing at a non-model-visible custom marker retains only the compaction summary plus the later `goal_context` message;
+- pointing at the existing goal-context entry has the same effective result;
+- an unknown ID currently produces summary-only context in `buildSessionContext`, but this is an undocumented fallback and is not selected as the production strategy.
+
+The marker result is the safest useful boundary for a Ralph cycle: it is a real entry, does not add model-visible content, and preserves the goal context that follows it. The POC does not yet prove the production context-hook filter; that remains in the next compaction slice.
