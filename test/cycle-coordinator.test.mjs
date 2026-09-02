@@ -46,3 +46,18 @@ test("recovery is idempotent after a terminal failure", () => {
   const c = new RalphCycleCoordinator(); c.begin(); c.executing(); c.fail("provider error");
   assert.deepEqual(c.recover(), c.snapshot());
 });
+
+test("rejects stale continuation from an older cycle or boundary", () => {
+  const c = new RalphCycleCoordinator(); c.begin(); c.executing(); c.checkpoint(); c.compacting("b1"); c.compacted({ boundaryId: "b1" });
+  assert.throws(() => c.acceptContinuation({ cycleId: 0, boundaryId: "b1" }), /stale/);
+  assert.throws(() => c.acceptContinuation({ cycleId: 1, boundaryId: "old" }), /stale/);
+  c.acceptContinuation({ cycleId: 1, boundaryId: "b1" });
+  assert.throws(() => c.acceptContinuation({ cycleId: 1, boundaryId: "b1" }), /stale/);
+});
+
+test("snapshot exposes bounded diagnostic state without transcript content", () => {
+  const c = new RalphCycleCoordinator(); c.begin(); c.executing({ token: "secret-value", issue: "task-7" });
+  const snapshot = c.snapshot();
+  assert.deepEqual(snapshot, { state: "executing", cycleId: 1, compactedBoundary: null, continuationQueued: false });
+  assert.doesNotMatch(JSON.stringify(snapshot), /secret-value|task-7/);
+});

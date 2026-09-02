@@ -32,6 +32,12 @@ export class RalphCycleCoordinator {
     return this.snapshot();
   }
   resumed() { this.continuationQueued = false; return this.transition("executing"); }
+  acceptContinuation({ cycleId = this.cycleId, boundaryId = this.compactedBoundary } = {}) {
+    if (cycleId !== this.cycleId || boundaryId !== this.compactedBoundary || !this.continuationQueued || this.state !== "rehydrating") {
+      throw new Error("stale or duplicate Ralph continuation");
+    }
+    return this.resumed();
+  }
   fail(error) { if (this.state === "error") return this.snapshot(); return this.transition("error", { error: String(error?.message ?? error).slice(0, 240) }); }
   block(reason) { return this.transition("blocked", { reason }); }
   complete(details) { return this.transition("complete", details); }

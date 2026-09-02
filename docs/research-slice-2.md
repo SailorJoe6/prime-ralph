@@ -157,3 +157,8 @@ Two disposable fixtures now cover post-compaction failures. `poc:session-provide
 ## Automatic-goal coexistence finding
 
 `poc:session-goal-coexistence` enables Prime Agent automatic goals while also injecting the explicit plugin `goal_context`. The bounded fixture observed three provider calls and multiple `thread_goal_state` updates after one requested compaction, proving automatic continuation can continue independently of the plugin and defeat a plugin-only compaction guard. A watchdog aborts at call three to keep the POC finite. Production must either disable automatic goals for Ralph-managed sessions or establish a host-supported ownership handoff; silently running both is unsafe.
+
+
+## Stale continuation checkpoint
+
+The coordinator now requires the current cycle ID, compaction boundary ID, rehydrating state, and a pending continuation before accepting a continuation. Older-cycle, wrong-boundary, and duplicate admissions are rejected. Diagnostic snapshots expose only state, cycle ID, boundary, and queue flags; marker details remain sanitized and are not copied into snapshots.
