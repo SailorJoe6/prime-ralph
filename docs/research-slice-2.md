@@ -137,3 +137,8 @@ The full AgentSession fixture confirms the requested-compaction path ends after 
 ## Full explicit continuation POC
 
 `scripts/run-agent-session-continuation-poc.mjs` is a real AgentSession fixture with automatic goals disabled to isolate plugin admission. Its `session_compact` handler schedules `pi.sendMessage` after the callback returns. Against Prime Agent 0.8.0 it produced exactly two provider calls, a persisted `custom_message` with `customType: goal_context` after the compaction entry, and a second `turn_end`/`agent_end`. This validates the settled-event adapter strategy when automatic goal continuation is not concurrently active.
+
+
+## Multi-cycle AgentSession checkpoint
+
+`npm run poc:session-multi-cycle` runs two requested-compaction boundaries in one long-lived AgentSession with a deterministic provider. It produced two compaction entries and two provider calls; exactly one `goal_context` was admitted between them, and the second boundary stopped without another continuation. This demonstrates bounded cycle admission and no repeated compaction after the configured stop boundary. Automatic Prime Agent goals remain disabled in this fixture; coexistence policy is still unresolved.

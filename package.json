@@ -21,7 +21,8 @@
     "poc:compaction-order": "node scripts/analyze-compaction-continuation.mjs",
     "poc:session-compaction": "node scripts/run-agent-session-compaction-poc.mjs",
     "poc:first-kept": "node scripts/run-first-kept-poc.mjs",
-    "poc:session-continuation": "node scripts/run-agent-session-continuation-poc.mjs"
+    "poc:session-continuation": "node scripts/run-agent-session-continuation-poc.mjs",
+    "poc:session-multi-cycle": "node scripts/run-agent-session-multi-cycle-poc.mjs"
   },
   "engines": {
     "node": ">=20"
