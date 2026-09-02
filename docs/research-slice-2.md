@@ -122,3 +122,8 @@ The marker result is the safest useful boundary for a Ralph cycle: it is a real 
 ## Cycle coordinator checkpoint
 
 `src/cycle-coordinator.js` adds a tested, standalone state-machine seam for Slice 5. It persists sanitized cycle-state markers, rejects mismatched or duplicate compaction boundaries, and explicitly emits a `goal_context` continuation marker after a successful requested compaction when the goal remains active. Failure and restart behavior are covered. This is not yet wired to the live AgentSession event stream; integration and cancellation/restart fixtures remain.
+
+
+## Continuation trigger integration finding
+
+The full AgentSession fixture confirms the requested-compaction path ends after `session_compact` and does not produce a second provider call. An attempted direct `pi.sendMessage(..., { triggerTurn: true })` from the compaction callback is not accepted as the coordinator strategy: awaiting it deadlocks against the active compaction, while deferring it can re-enter the turn loop without a bounded cycle guard. The coordinator therefore keeps continuation admission as an explicit, separately guarded lifecycle action rather than hiding it in the compaction callback. Any future AgentSession adapter must schedule it only after compaction has fully settled and enforce a one-boundary/one-continuation invariant.
