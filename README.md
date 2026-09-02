@@ -20,4 +20,6 @@ The POC commands require environment paths documented in their help-free script 
 
 The supported Prime Agent range is `>=0.8.0 <0.9.0`. Automatic Prime Agent goals must be disabled for Ralph-managed sessions unless a host-supported ownership handoff exists. Requested compaction does not automatically preserve goal continuation; the coordinator must admit one explicit continuation after compaction settles. Provider cache billing is not inferred from stable prompt prefixes.
 
-See `docs/research-slice-2.md` for reproducible findings and known limitations.
+Load the package as an extension with Prime Agent's `-e/--extension` option. Native mode transport checks must be run in a disposable host session; daemon mode requires an unused daemon socket.
+
+See `docs/research-slice-2.md` and `docs/release-contract.md` for reproducible findings and known limitations.
