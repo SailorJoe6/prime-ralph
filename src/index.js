@@ -1,7 +1,17 @@
-/** Behavior-neutral Prime Agent extension entry point. */
-export default function primeRalph(_pi) {
-  // Deliberately no-op until host lifecycle integration is complete.
-}
+import resetExtension, { createResetExtension } from "./reset-extension.js";
+
+export default resetExtension;
+export { createResetExtension };
+export { loadPrepareSkill, formatPrepareInjection, PrepareSkillError } from "./reset-skill.js";
+export {
+  projectResetContext,
+  resetCompactionInstructions,
+  RESET_COMPACTION_INSTRUCTION_PREFIX,
+  RESET_MARKER_TYPE,
+  RESET_MESSAGE_TYPE,
+  RESET_PROTOCOL_VERSION,
+  RESET_STATE_TYPE,
+} from "./reset-context.js";
 export { RalphCycleCoordinator } from "./cycle-coordinator.js";
 export { createContinuationAdapter } from "./continuation-adapter.js";
 export { discoverSkillConfig, loadSkillConfiguration, phaseIdentity, selectPhase } from "./skill-config.js";

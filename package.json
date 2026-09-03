@@ -21,9 +21,18 @@
     "./cache-analysis": "./src/cache-analysis.js",
     "./diagnostics": "./src/diagnostics.js",
     "./ralph-extension": "./src/ralph-extension.js",
-    "./package": "./package.json"
+    "./package": "./package.json",
+    "./reset-context": "./src/reset-context.js",
+    "./reset-extension": "./src/reset-extension.js",
+    "./reset-skill": "./src/reset-skill.js"
   },
-  "files": ["src", "scripts", "docs", "README.md", "LICENSE"],
+  "files": [
+    "src",
+    "scripts",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "test": "node --test",
     "compat": "node scripts/check-prime-agent-compat.mjs",
@@ -40,13 +49,20 @@
     "poc:mode-matrix": "node scripts/run-mode-matrix-poc.mjs",
     "poc:native-acp": "node scripts/run-native-acp-smoke.mjs",
     "poc:native-acp-prompt": "node scripts/run-native-acp-prompt-smoke.mjs",
-    "poc:native-rpc": "node scripts/run-native-rpc-smoke.mjs"
+    "poc:native-rpc": "node scripts/run-native-rpc-smoke.mjs",
+    "accept:reset": "node scripts/run-reset-acceptance.mjs",
+    "accept:reset-busy": "node scripts/run-reset-busy-acceptance.mjs",
+    "poc:reset-compaction": "node scripts/run-reset-compaction-poc.mjs",
+    "accept:reset-lifecycle": "node scripts/run-reset-lifecycle-acceptance.mjs"
   },
   "engines": {
     "node": ">=20"
   },
   "peerDependencies": {
-    "prime-agent": ">=0.8.0 <0.9.0"
+    "prime-agent": "0.9.1"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "yaml": "^2.9.0"
+  }
 }

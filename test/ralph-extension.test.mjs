@@ -6,4 +6,4 @@ test("enabled factory requests one safe compaction and supplies fixed result", (
 
 test("factory bounds bootstrap configuration and validates options", () => { assert.throws(() => createRalphExtension({ enabled: "yes" }), /boolean/); assert.throws(() => createRalphExtension({ goalActive: true }), /function/); const handlers = new Map(); createRalphExtension({ enabled: true, bootstrap: "x".repeat(9000) })({ on: (n, h) => handlers.set(n, h) }); const result = handlers.get("session_before_compact")({ preparation: { firstKeptEntryId: "m", tokensBefore: 1 } }); assert.ok(result.compaction.summary.length < 4100); });
 
-test("factory rejects unsupported Prime Agent versions when supplied", () => { assert.throws(() => createRalphExtension({ primeAgentVersion: "0.9.0" }), /unsupported/); assert.doesNotThrow(() => createRalphExtension({ primeAgentVersion: "0.8.0" })); });
+test("factory rejects unsupported Prime Agent versions when supplied", () => { assert.throws(() => createRalphExtension({ primeAgentVersion: "0.9.0" }), /unsupported/); assert.doesNotThrow(() => createRalphExtension({ primeAgentVersion: "0.9.1" })); });

@@ -1,16 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
-import path from "node:path";
 import primeRalph from "../src/index.js";
 
-test("exports a loadable Prime Agent extension factory", () => {
-  assert.equal(typeof primeRalph, "function");
-  assert.doesNotThrow(() => primeRalph({}));
+test("exports the production Prime Agent reset extension", () => {
+  const commands = new Map(), handlers = new Map();
+  const pi = { registerCommand(name, command) { commands.set(name, command); }, on(name, handler) { handlers.set(name, handler); }, appendEntry() {}, sendMessage() {} };
+  assert.doesNotThrow(() => primeRalph(pi));
+  assert.deepEqual([...commands.keys()], ["reset"]);
+  assert.equal(handlers.has("context"), true);
 });
 
-test("slice 1 remains behavior-neutral", async () => {
-  const source = await readFile(path.join(path.dirname(fileURLToPath(import.meta.url)), "../src/index.js"), "utf8");
-  assert.match(source, /Deliberately no-op/);
+test("does not shadow Prime Agent's built-in /clear command", () => {
+  const commands = [];
+  primeRalph({ registerCommand(name) { commands.push(name); }, on() {}, appendEntry() {}, sendMessage() {} });
+  assert.equal(commands.includes("clear"), false);
 });

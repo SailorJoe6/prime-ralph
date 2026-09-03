@@ -5,63 +5,61 @@ This document defines the standalone package boundary and the checks required be
 ## Package contract
 
 - Node.js 20 or newer.
-- Peer dependency: Prime Agent `>=0.8.0 <0.9.0`.
+- Peer dependency: Prime Agent `0.9.1`.
 - ESM package with the exports listed in `package.json`.
 - Package contents are limited to `src/`, `scripts/`, `docs/`, `README.md`, and `LICENSE`.
-- The default extension export is behavior-neutral and remains a no-op.
+- The default extension registers production `/reset` behavior and does not register or shadow `/clear`.
 
-The package does not start an agent, select a provider, execute shell commands, invoke Beads, or choose a repository. Consumers must inject those capabilities through explicit adapters.
+The package does not start an agent, select a provider, execute shell commands, invoke Beads, choose a repository, or supply task criteria.
 
-## Lifecycle contract
+## Slice 1 reset contract
 
-The opt-in factory, `createRalphExtension({ enabled: true })`:
+The default extension:
 
-1. validates its options and the supplied Prime Agent version;
-2. requests compaction only at an eligible final normal assistant turn;
-3. emits a deterministic `RALPH_BOOTSTRAP:` summary using a valid host boundary;
-4. waits for compaction to settle; and
-5. schedules at most one continuation for the matching cycle and boundary.
+1. registers `/reset` through `pi.registerCommand`;
+2. validates the exact canonical project prepare skill before mutation;
+3. appends a bounded opaque marker and starts a matching public custom compaction;
+4. uses the marker's real entry ID and no summarization provider call;
+5. removes the fixed Ralph empty-summary wrapper and admits one hidden prepare follow-up;
+6. enforces the newest prepare boundary exactly, including for the short-session projection fallback; and
+7. records completion only for the matching reset turn.
 
-Stale, duplicate, cancelled, or mismatched continuations fail closed. Custom bootstrap instructions are capped at 4,000 characters. Hosts that let this extension own continuation must disable automatic Prime Agent goals unless they provide an explicit ownership handoff.
+The extension preserves the current host system prompt and does not invoke session replacement, tree, goal, autonomous, phase, or REPL lifecycle operations. Persistent state contains only protocol status, bounded mode metadata, and opaque request or entry IDs, not transcript or skill content.
 
-## Coordination contract
-
-`startManagedCycle()` is the narrow orchestration entry point. It claims work through an injected `bd` adapter, evaluates configured phase gates, and writes a bounded checkpoint only when durable evidence exists. It does not bypass the adapter transaction boundary or implicitly mark work complete.
-
-The package includes adapters and pure seams for:
-
-- cycle state and recovery;
-- continuation admission;
-- phase skill discovery and selection;
-- Beads ownership and quality gates;
-- goal lifecycle state; and
-- sanitized diagnostics and observability.
-
-These are libraries, not a complete runner. The host owns configuration, process lifetime, repository policy, and user-facing reporting.
+Historical lifecycle and coordination modules remain importable POC seams. Their old automatic compaction, continuation, phase, goal, and Beads assumptions are not enabled by the default extension and are not part of the Slice 1 production contract.
 
 ## Validation contract
 
-Run the following before a release:
+Run:
 
 ```sh
 npm test
-npm run compat
+PRIME_AGENT_ROOT=/path/to/prime-agent npm run compat
+PRIME_AGENT_ROOT=/path/to/prime-agent \
+PRIME_AGENT_CORE_ROOT=/path/to/prime-agent/node_modules/@earendil-works/pi-agent-core \
+npm run accept:reset
+PRIME_AGENT_ROOT=/path/to/prime-agent \
+PRIME_AGENT_CORE_ROOT=/path/to/prime-agent/node_modules/@earendil-works/pi-agent-core \
+npm run accept:reset-busy
+PRIME_AGENT_ROOT=/path/to/prime-agent \
+PRIME_AGENT_CORE_ROOT=/path/to/prime-agent/node_modules/@earendil-works/pi-agent-core \
+npm run accept:reset-lifecycle
 npm run package:check
 npm pack --dry-run
 ```
 
-Then perform a clean-install smoke test: extract the tarball, import `src/index.js`, and verify the default entry point. `package:check` checks mode labels and package shape; it does not prove full behavior for every native mode.
+The acceptance scripts are disposable and use deterministic providers. `accept:reset` also starts and closes a real Prime Agent IPython kernel.
 
-For source and session POCs, set `PRIME_AGENT_SOURCE_ROOT` and `PRIME_AGENT_CORE_ROOT` to the installation under test. For native transport evidence, follow [`native-transport-acceptance.md`](native-transport-acceptance.md).
+Then extract the produced tarball in a clean temporary directory, import `src/index.js`, and verify `/reset` registration with a Prime Agent-shaped extension API fixture.
 
 ## Evidence boundaries
 
 - Unit tests do not prove host lifecycle ordering.
-- Fixture POCs do not prove provider or transport behavior.
-- Compatibility checks prove the analyzed source/API contract only.
-- Native JSON, RPC, and ACP smoke checks prove bounded protocol behavior only.
-- Text-mode evidence requires a pseudo-terminal.
-- Daemon checks require a disposable process, a unique socket, and protocol shutdown.
+- The disk-backed acceptance proves provider context, JSONL, session identity, and REPL continuity on Prime Agent `0.9.1`.
+- The busy acceptance proves ordering behind an active parent turn and existing follow-up.
+- The lifecycle acceptance proves durable custom-compaction resume, cancellation without partial prepare, provider-failure state, and safe retry.
+- The public extension API does not expose Prime Agent's strong descendant-RLM quiescence barrier. Slice 1 therefore does not claim that an idle parent with a running tracked RLM child is gated.
+- Historical native JSON, RPC, ACP, text, and daemon smokes do not yet prove `/reset` parity in every mode.
 - Stable prompt-prefix bytes are not evidence of provider cache billing.
 
-A release must describe unresolved assumptions instead of promoting bounded evidence into a broader claim.
+A release must report the descendant-RLM gap rather than treating it as passed evidence.

@@ -9,5 +9,5 @@ const result = spawnSync(cli, ["--mode", "acp", "--offline", "--no-extensions", 
 if (result.error) throw result.error;
 const records = result.stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line));
 const init = records.find((r) => r.id === 1); const session = records.find((r) => r.id === 2);
-if (result.status !== 0 || init?.result?.agentInfo?.version !== "0.8.0" || !session?.result?.sessionId) throw new Error(`ACP smoke failed: status=${result.status}`);
+if (result.status !== 0 || init?.result?.agentInfo?.version !== "0.9.1" || !session?.result?.sessionId) throw new Error(`ACP smoke failed: status=${result.status}`);
 console.log(JSON.stringify({ status: result.status, protocolVersion: init.result.protocolVersion, sessionCreated: true, records: records.length }));

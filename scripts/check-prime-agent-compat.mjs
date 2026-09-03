@@ -14,10 +14,9 @@ try {
   process.exit(2);
 }
 
-const majorMinor = packageJson.version.split(".").slice(0, 2).join(".");
-if (majorMinor !== "0.8") {
+if (packageJson.version !== "0.9.1") {
   console.error(`unsupported Prime Agent version: ${packageJson.version}`);
   process.exit(1);
 }
 
-console.log(`Prime Agent compatibility baseline accepted: ${packageJson.version}`);
+console.log(`Prime Agent Slice 1 compatibility accepted: ${packageJson.version}`);
