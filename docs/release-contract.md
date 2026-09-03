@@ -1,10 +1,47 @@
-# prime-ralph release and integration contract
+# Release contract
 
-## Package
+This document defines the standalone package boundary and the checks required before publishing a release.
 
-The package requires Node.js 20 or newer and declares a peer dependency on Prime Agent `>=0.8.0 <0.9.0`. Install it as an opt-in extension dependency. The package includes `src/`, reproducibility scripts, and research evidence docs.
+## Package contract
 
-Validate a release locally:
+- Node.js 20 or newer.
+- Peer dependency: Prime Agent `>=0.8.0 <0.9.0`.
+- ESM package with the exports listed in `package.json`.
+- Package contents are limited to `src/`, `scripts/`, `docs/`, `README.md`, and `LICENSE`.
+- The default extension export is behavior-neutral and remains a no-op.
+
+The package does not start an agent, select a provider, execute shell commands, invoke Beads, or choose a repository. Consumers must inject those capabilities through explicit adapters.
+
+## Lifecycle contract
+
+The opt-in factory, `createRalphExtension({ enabled: true })`:
+
+1. validates its options and the supplied Prime Agent version;
+2. requests compaction only at an eligible final normal assistant turn;
+3. emits a deterministic `RALPH_BOOTSTRAP:` summary using a valid host boundary;
+4. waits for compaction to settle; and
+5. schedules at most one continuation for the matching cycle and boundary.
+
+Stale, duplicate, cancelled, or mismatched continuations fail closed. Custom bootstrap instructions are capped at 4,000 characters. Hosts that let this extension own continuation must disable automatic Prime Agent goals unless they provide an explicit ownership handoff.
+
+## Coordination contract
+
+`startManagedCycle()` is the narrow orchestration entry point. It claims work through an injected `bd` adapter, evaluates configured phase gates, and writes a bounded checkpoint only when durable evidence exists. It does not bypass the adapter transaction boundary or implicitly mark work complete.
+
+The package includes adapters and pure seams for:
+
+- cycle state and recovery;
+- continuation admission;
+- phase skill discovery and selection;
+- Beads ownership and quality gates;
+- goal lifecycle state; and
+- sanitized diagnostics and observability.
+
+These are libraries, not a complete runner. The host owns configuration, process lifetime, repository policy, and user-facing reporting.
+
+## Validation contract
+
+Run the following before a release:
 
 ```sh
 npm test
@@ -13,44 +50,18 @@ npm run package:check
 npm pack --dry-run
 ```
 
-A clean-install smoke test should extract the tarball and import `src/index.js` before publishing. `package:check` also invokes the behavior-neutral entry point for text, JSON, RPC, ACP, and daemon mode labels; this is an import smoke test, not a claim of full mode-specific runtime support.
+Then perform a clean-install smoke test: extract the tarball, import `src/index.js`, and verify the default entry point. `package:check` checks mode labels and package shape; it does not prove full behavior for every native mode.
 
-## Runtime safety
+For source and session POCs, set `PRIME_AGENT_SOURCE_ROOT` and `PRIME_AGENT_CORE_ROOT` to the installation under test. For native transport evidence, follow [`native-transport-acceptance.md`](native-transport-acceptance.md).
 
-The default extension entry point is behavior-neutral. Ralph-managed sessions must disable Prime Agent automatic goals unless the host provides an explicit ownership handoff. Requested compaction requires explicit continuation admission after compaction settles. Never infer provider cache billing from common prompt-prefix bytes.
+## Evidence boundaries
 
-## Beads cycle execution
+- Unit tests do not prove host lifecycle ordering.
+- Fixture POCs do not prove provider or transport behavior.
+- Compatibility checks prove the analyzed source/API contract only.
+- Native JSON, RPC, and ACP smoke checks prove bounded protocol behavior only.
+- Text-mode evidence requires a pseudo-terminal.
+- Daemon checks require a disposable process, a unique socket, and protocol shutdown.
+- Stable prompt-prefix bytes are not evidence of provider cache billing.
 
-The coordination runtime claims an issue, evaluates configured phase gates, and writes a bounded checkpoint only when all gates pass and durable evidence exists. The `bd` adapter remains the transaction boundary; callers must provide a real adapter backed by the target repository's Beads database.
-
-
-The package root exports the tested coordinator, continuation, skill, Beads, lifecycle, and diagnostics seams while its default extension remains a no-op. This makes the current research components consumable without falsely enabling unvalidated host lifecycle behavior.
-
-
-`startManagedCycle()` is the narrow orchestration entry point for consumers: it runs claim, configured gates, and evidence checkpointing through an injected `bd` adapter, then returns only ownership metadata and bounded results. It does not bypass Beads transactions or claim issue completion implicitly.
-
-
-## Opt-in lifecycle factory
-
-`createRalphExtension({ enabled: true })` is the first host-facing lifecycle factory. It requests one compaction at a final normal assistant turn with an active goal, returns a fixed `RALPH_BOOTSTRAP:` summary using the host-provided valid boundary, and schedules one explicit `goal_context` follow-up after compaction. It must be used with automatic Prime Agent goals disabled, as established by the coexistence POC. The default export remains disabled/no-op until broader host integration is validated.
-
-
-The real `poc:session-factory` fixture loads `createRalphExtension({ enabled: true })` into AgentSession with automatic goals disabled. Against Prime Agent 0.8.0 it completes two provider calls, persists the fixed bootstrap compaction, persists one goal context, and reaches `agent_end`.
-
-
-`npm run poc:mode-matrix` registers the lifecycle factory for text, JSON, RPC, ACP, and daemon labels. It verifies hook registration only; it does not substitute for native host transport acceptance.
-
-
-The lifecycle factory validates its options and caps custom bootstrap instructions at 4,000 characters before they enter compaction instructions or persisted summaries. This bounds configuration-driven prompt growth.
-
-
-When the host supplies its detected Prime Agent version, the lifecycle factory rejects versions outside `>=0.8.0 <0.9.0` before registering hooks.
-
-
-`npm run poc:native-rpc` starts the native Prime Agent RPC transport with the packaged extension and sends the documented `abort` command, verifying deterministic JSONL command admission and clean exit. A full prompt/response RPC run needs a provider session and is not implied by this smoke.
-
-
-`npm run poc:native-acp` starts ACP mode with the packaged extension, performs JSON-RPC `initialize` and `session/new`, validates Prime Agent 0.8.0 protocol/session responses, and exits cleanly at EOF. Prompt streaming remains outside this bounded smoke.
-
-
-`npm run poc:native-acp-prompt` drives a real ACP session using a line-buffered JSON-RPC client (not Node `readline`), performs `initialize`, `session/new`, and `session/prompt`, then verifies a provider-backed `end_turn`. It validates the packaged extension in a native prompt lifecycle.
+A release must describe unresolved assumptions instead of promoting bounded evidence into a broader claim.

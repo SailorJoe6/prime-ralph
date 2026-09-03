@@ -1,4 +1,6 @@
-# Slice 2 Research: Lifecycle Observability and Ralph Reference
+# Research record: lifecycle observability and Ralph reference
+
+> Historical engineering record. This document combines the original Slice 2 investigation with follow-up checkpoints through packaging hardening. The later checkpoints supersede earlier provisional assumptions. Use the release contract for the current package boundary.
 
 ## Scope
 
@@ -48,12 +50,16 @@ The source also shows that `turn_end` is emitted for tool-call turns, not only f
 - Goal and compaction state are represented by inspectable custom entries/messages.
 - A behavior-neutral lifecycle tracer can be implemented without changing agent control flow.
 
-### Not yet proven
+### Initially unresolved, resolved later
 
-- A `turn_end` handler can safely request compaction before a goal continuation is generated.
-- Requested compaction automatically resumes an active goal continuation.
-- A valid minimal `firstKeptEntryId` can produce the desired summary-only model context.
-- Context-hook filtering preserves valid tool-call/result message structure.
+The following questions were open at the end of the initial investigation and were resolved by the later checkpoints in this record:
+
+- whether a `turn_end` handler can safely request compaction before continuation;
+- whether requested compaction resumes an active continuation;
+- which valid `firstKeptEntryId` produces summary-only model context; and
+- whether context projection preserves valid tool-call/result structure.
+
+See the requested-compaction, `firstKeptEntryId`, context-hook, and settled-continuation checkpoints below for the evidence and remaining limits.
 
 These unresolved assumptions are explicit inputs to Slice 3 and Slice 4.
 

@@ -1,17 +1,41 @@
 # Native transport acceptance
 
-This record separates native Prime Agent transport evidence from the standalone unit and fixture tests. The tested host is Prime Agent `0.8.0`; the extension is loaded with `-e /home/sailorjoe6/prime-ralph/src/index.js`.
+Native smoke tests check that the packaged extension can be admitted by real Prime Agent transports. They are intentionally narrower than the unit and fixture suites.
 
-## Passing evidence
+## Tested environment
 
-- **JSON:** `prime-agent --mode json --offline --no-extensions -e ... --cwd ...` produced structured session, agent, turn, and message events and exited 0.
-- **RPC:** An interactive LF-delimited client sent `{"id":"p","type":"prompt","message":"status"}` and then `{"type":"abort"}`. The prompt was accepted, the abort was accepted, and the process exited 0.
-- **ACP initialization:** A JSON-RPC client sent `initialize` and `session/new`; protocol version 1 and a session ID were returned, and EOF exited cleanly.
-- **ACP prompt:** A strict LF parser sent `initialize`, `session/new`, and `session/prompt` with a text-content array. The provider-backed turn returned `stopReason: end_turn`.
-- **Text (PTY):** `script -qec 'prime-agent --mode text --print --offline --no-extensions -e ... --cwd ... status' /dev/null` returned formatted status output and exit 0 in a disposable pseudo-terminal.
+The recorded acceptance run used Prime Agent `0.8.0` and the packaged extension from this repository. Do not copy machine-specific paths from an old report. Set the extension and working-directory paths for the installation under test.
 
-- **Daemon:** A disposable daemon was started with a unique socket, `--mode daemon`, `--daemon-socket`, and the packaged extension. Its `daemon_hello` reported protocol 7, schema revision 22, and app version 0.8.0. A versioned `shutdown` command was accepted and the socket was removed.
+## Passing checks
 
-## Boundaries
+- **JSON:** structured session, agent, turn, and message events were emitted and the process exited successfully.
+- **RPC:** an interactive LF-delimited client admitted a prompt, sent `abort`, and observed clean exit.
+- **ACP initialization:** a JSON-RPC client completed `initialize` and `session/new`, received protocol/session data, and closed at EOF.
+- **ACP prompt:** a line-buffered JSON-RPC client completed `initialize`, `session/new`, and `session/prompt`; the provider-backed turn returned `end_turn`.
+- **Text:** a disposable pseudo-terminal produced formatted output and exited successfully.
+- **Daemon:** a disposable daemon reported protocol 7, schema revision 22, and version 0.8.0; versioned shutdown was accepted and the socket was removed.
 
-The JSON/RPC/ACP checks are committed as reproducible smoke scripts. The daemon check remains an operator-host probe rather than a package script: an attempted reusable harness encountered a binary private-frame race during daemon startup, so it was deliberately not committed as flaky acceptance. The default daemon socket may also already be owned by a running user service; disposable tests must always use a unique socket and must shut it down through the daemon protocol. Interactive `text` mode requires a TTY and is not represented by captured subprocess output.
+## Reproduce the committed checks
+
+From the package root:
+
+```sh
+npm run poc:native-rpc
+npm run poc:native-acp
+npm run poc:native-acp-prompt
+```
+
+The scripts use the Prime Agent installation available in the test environment. Inspect each script's command-line options and environment requirements before running against another installation.
+
+## Transport rules
+
+- Use strict LF-delimited JSONL for JSON, RPC, and ACP clients.
+- Buffer input by complete lines; do not assume one read equals one message.
+- Use a fresh daemon socket for every disposable run.
+- Shut down daemons through the protocol and verify socket cleanup.
+- Run interactive text mode through a pseudo-terminal. Captured non-TTY subprocess output is not valid text-mode evidence.
+- Keep native checks separate from package unit tests and fixture POCs.
+
+## What this does not prove
+
+These checks do not prove that every host configuration, model provider, prompt, tool, or long-running deployment is production-ready. The daemon check remains an operator procedure rather than a reusable package test because an earlier reusable harness encountered a binary private-frame startup race. That harness was intentionally not committed.
