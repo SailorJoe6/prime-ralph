@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, readlinkSync, lstatSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, readlinkSync, lstatSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -27,6 +27,11 @@ const project = join(temp, "project"); mkdirSync(project);
 const cli = join(installRoot, "node_modules/.bin/prime-ralph");
 const run = spawnSync(cli, ["init", "--project", project], { encoding: "utf8" });
 if (run.status !== 0) throw new Error(`installed CLI failed: ${run.stderr}`);
+if (existsSync(join(project, ".agents"))) throw new Error("installed clean init exposed internal Ralph prompts under .agents");
+mkdirSync(join(project, ".agents/skills"), { recursive: true });
+symlinkSync("../../.ralph/skills/spec-it-out", join(project, ".agents/skills/spec-it-out"), "dir");
+const migrate = spawnSync(cli, ["init", "--project", project], { encoding: "utf8" });
+if (migrate.status !== 0 || existsSync(join(project, ".agents/skills/spec-it-out")) || !migrate.stdout.includes("removed legacy link: .agents/skills/spec-it-out")) throw new Error(`installed legacy-link migration failed: ${migrate.stderr}`);
 const beforeUpdate = snapshot(project);
 npmInstall();
 const afterUpdate = snapshot(project);
@@ -39,7 +44,7 @@ const agentDir = join(temp, "agent"); mkdirSync(agentDir);
 const loaded = await discoverAndLoadExtensions([], project, agentDir);
 const commandNames = [...(loaded.extensions[0]?.commands?.keys() ?? [])];
 if (loaded.errors.length || loaded.extensions.length !== 1 || JSON.stringify(commandNames) !== JSON.stringify(["reset", "spec-it-out"])) throw new Error(`installed extension discovery failed: ${JSON.stringify(loaded.errors)}`);
-console.log(JSON.stringify({ packedFiles: packed.files.length, binInstalled: true, projectUnchangedByPackageUpdate: true, extensionLoaded: true, specificationPromptCompatible: true, registeredCommands: commandNames }, null, 2));
+console.log(JSON.stringify({ packedFiles: packed.files.length, binInstalled: true, projectUnchangedByPackageUpdate: true, noDirectRalphSkills: true, legacyLinkMigrated: true, extensionLoaded: true, specificationPromptCompatible: true, registeredCommands: commandNames }, null, 2));
 rmSync(temp, { recursive: true, force: true });
 
 function snapshot(root) {

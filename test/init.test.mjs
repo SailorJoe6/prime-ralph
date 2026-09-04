@@ -16,7 +16,6 @@ function snapshot(cwd) {
   for (const skill of CANONICAL_SKILLS) {
     const path = join(cwd, `.ralph/skills/${skill}/SKILL.md`);
     result[skill] = readFileSync(path, "utf8");
-    result[`link:${skill}`] = readlinkSync(join(cwd, `.agents/skills/${skill}`));
   }
   result.extension = readlinkSync(join(cwd, EXTENSION_ENTRY_RELATIVE_PATH));
   return result;
@@ -27,16 +26,16 @@ test("clean default init creates the exact project-local structure without activ
   const result = init(cwd, {}, { runCommand() { calls += 1; throw new Error("unexpected command"); } });
   assert.equal(calls, 0);
   assert.equal(result.warnings.length, 0);
+  assert.deepEqual(result.removed, []);
   assert.equal(lstatSync(join(cwd, EXTENSION_ENTRY_RELATIVE_PATH)).isSymbolicLink(), true);
   assert.equal(resolve(dirname(join(cwd, EXTENSION_ENTRY_RELATIVE_PATH)), readlinkSync(join(cwd, EXTENSION_ENTRY_RELATIVE_PATH))), dirname(packageEntry));
   for (const skill of CANONICAL_SKILLS) {
     assert.equal(readFileSync(join(cwd, `.ralph/skills/${skill}/SKILL.md`), "utf8"), readFileSync(join(templateRoot, `default/${skill}/SKILL.md`), "utf8"));
-    assert.equal(readlinkSync(join(cwd, `.agents/skills/${skill}`)), `../../.ralph/skills/${skill}`);
   }
+  assert.equal(lstatSafe(join(cwd, ".agents")), undefined);
   for (const dir of [".ralph/plans/blocked", ".ralph/plans/future", ".ralph/plans/archive", ".ralph/logs"]) assert.equal(lstatSync(join(cwd, dir)).isDirectory(), true);
   assert.equal(result.created.some((path) => /goal|phase|provider/.test(path)), false);
 });
-
 test("repeated initialization and changed flags preserve all existing project artifacts", () => {
   const cwd = project(); init(cwd); const before = snapshot(cwd);
   writeFileSync(join(cwd, ".ralph/skills/prepare/SKILL.md"), "custom prepare\n");
@@ -77,19 +76,59 @@ test("missing bd fails clearly before any Ralph mutation", () => {
   assert.equal(lstatSafe(join(cwd, ".ralph")), undefined);
 });
 
-test("custom skills, correct links, and every conflicting destination are preserved", () => {
+test("custom skills and conflicting destinations are preserved while exact legacy links are removed", () => {
   const cwd = project(); init(cwd);
   const custom = join(cwd, ".ralph/skills/plan/SKILL.md"); writeFileSync(custom, "custom\n");
-  const wrong = join(cwd, ".agents/skills/execute"); rmSync(wrong); symlinkSync("../../elsewhere", wrong, "dir");
-  const correct = join(cwd, ".agents/skills/plan"); rmSync(correct); symlinkSync(join(cwd, ".ralph/skills/plan"), correct, "dir");
+  mkdirSync(join(cwd, ".agents/skills"), { recursive: true });
+  const wrong = join(cwd, ".agents/skills/execute"); symlinkSync("../../elsewhere", wrong, "dir");
+  const legacy = join(cwd, ".agents/skills/plan"); symlinkSync(join(cwd, ".ralph/skills/plan"), legacy, "dir");
   const extension = join(cwd, EXTENSION_ENTRY_RELATIVE_PATH); rmSync(extension); mkdirSync(extension);
   const result = init(cwd);
   assert.equal(readFileSync(custom, "utf8"), "custom\n");
   assert.equal(readlinkSync(wrong), "../../elsewhere");
-  assert.equal(readlinkSync(correct), join(cwd, ".ralph/skills/plan"));
+  assert.equal(lstatSafe(legacy), undefined);
+  assert.deepEqual(result.removed, [".agents/skills/plan"]);
   assert.equal(lstatSync(extension).isDirectory(), true);
   assert.ok(result.warnings.some((warning) => warning.includes("execute")));
   assert.ok(result.warnings.some((warning) => warning.includes(EXTENSION_ENTRY_RELATIVE_PATH)));
+});
+test("repeated init removes all exact legacy links but preserves parent and unrelated entries", () => {
+  const cwd = project(); init(cwd); mkdirSync(join(cwd, ".agents/skills"), { recursive: true });
+  for (const skill of CANONICAL_SKILLS) symlinkSync(`../../.ralph/skills/${skill}`, join(cwd, `.agents/skills/${skill}`), "dir");
+  symlinkSync("../../.ralph/skills/spec-it-out", join(cwd, ".agents/skills/spec-it-out-old"), "dir");
+  writeFileSync(join(cwd, ".agents/skills/user-skill"), "user\n");
+  const result = init(cwd);
+  assert.deepEqual(result.removed, CANONICAL_SKILLS.map((skill) => `.agents/skills/${skill}`));
+  for (const skill of CANONICAL_SKILLS) assert.equal(lstatSafe(join(cwd, `.agents/skills/${skill}`)), undefined);
+  assert.equal(readlinkSync(join(cwd, ".agents/skills/spec-it-out-old")), "../../.ralph/skills/spec-it-out");
+  assert.equal(readFileSync(join(cwd, ".agents/skills/user-skill"), "utf8"), "user\n");
+  assert.equal(lstatSync(join(cwd, ".agents/skills")).isDirectory(), true);
+});
+
+test("legacy migration does not trust a conflicting canonical skill directory", () => {
+  const cwd = project(); mkdirSync(join(cwd, ".ralph/skills"), { recursive: true });
+  const outside = project("prime-ralph-external-skill-");
+  symlinkSync(outside, join(cwd, ".ralph/skills/execute"), "dir");
+  mkdirSync(join(cwd, ".agents/skills"), { recursive: true });
+  const entry = join(cwd, ".agents/skills/execute"); symlinkSync(outside, entry, "dir");
+  const result = init(cwd);
+  assert.equal(readlinkSync(entry), outside);
+  assert.deepEqual(result.removed, []);
+  assert.ok(result.warnings.some((warning) => warning.includes(".ralph/skills/execute")));
+});
+
+test("legacy migration never follows .agents parent symlinks", () => {
+  for (const parent of [".agents", ".agents/skills"]) {
+    const cwd = project(); init(cwd); const outside = project("prime-ralph-agent-parent-");
+    mkdirSync(join(outside, "skills"), { recursive: true });
+    const externalEntry = parent === ".agents" ? join(outside, "skills/execute") : join(outside, "execute");
+    symlinkSync(join(cwd, ".ralph/skills/execute"), externalEntry, "dir");
+    if (parent === ".agents") symlinkSync(outside, join(cwd, parent), "dir");
+    else { mkdirSync(join(cwd, ".agents")); symlinkSync(outside, join(cwd, parent), "dir"); }
+    const result = init(cwd);
+    assert.equal(lstatSync(externalEntry).isSymbolicLink(), true);
+    assert.deepEqual(result.removed, []);
+  }
 });
 
 test("conflicting parent symlinks are not followed outside the project", () => {
@@ -98,9 +137,8 @@ test("conflicting parent symlinks are not followed outside the project", () => {
   const result = init(cwd);
   assert.equal(lstatSafe(join(outside, "skills")), undefined);
   assert.ok(result.warnings.some((warning) => warning.includes(".ralph")));
-  for (const skill of CANONICAL_SKILLS) assert.ok(result.warnings.some((warning) => warning.includes(`.agents/skills/${skill}`)));
+  assert.equal(lstatSafe(join(cwd, ".agents")), undefined);
 });
-
 test("stealth adds only newly created leaf artifacts and supports nested project roots", () => {
   const repo = project(); spawnSync("git", ["init", "-q", repo], { encoding: "utf8" });
   const cwd = join(repo, "nested project"); mkdirSync(cwd);
@@ -187,7 +225,7 @@ test("extension conflicts of every ordinary kind are preserved", () => {
   }
 });
 
-test("canonical skill and agent entry conflicts are preserved without partial replacement", () => {
+test("canonical skill conflicts and non-legacy agent entries are preserved", () => {
   for (const kind of ["directory", "live-symlink", "dangling-symlink"]) {
     const cwd = project(); mkdirSync(join(cwd, ".ralph/skills/execute"), { recursive: true });
     const skillPath = join(cwd, ".ralph/skills/execute/SKILL.md");
@@ -198,32 +236,33 @@ test("canonical skill and agent entry conflicts are preserved without partial re
     const result = init(cwd);
     const after = kind === "directory" ? "directory" : readlinkSync(skillPath);
     assert.equal(after, before, kind);
-    assert.equal(lstatSafe(join(cwd, ".agents/skills/execute")), undefined);
+    assert.equal(lstatSafe(join(cwd, ".agents")), undefined);
     assert.ok(result.warnings.some((warning) => warning.includes("execute/SKILL.md")), kind);
   }
   for (const kind of ["file", "directory", "wrong-symlink", "dangling-symlink"]) {
-    const cwd = project(); init(cwd); const path = join(cwd, ".agents/skills/execute"); rmSync(path);
+    const cwd = project(); init(cwd); mkdirSync(join(cwd, ".agents/skills"), { recursive: true });
+    const path = join(cwd, ".agents/skills/execute");
     if (kind === "file") writeFileSync(path, "custom\n");
     else if (kind === "directory") mkdirSync(path);
     else if (kind === "wrong-symlink") { const target = join(cwd, "other"); mkdirSync(target); symlinkSync(target, path, "dir"); }
     else symlinkSync(join(cwd, "missing"), path, "dir");
     const before = kind === "file" ? readFileSync(path, "utf8") : kind === "directory" ? "directory" : readlinkSync(path);
     const result = init(cwd); const after = kind === "file" ? readFileSync(path, "utf8") : kind === "directory" ? "directory" : readlinkSync(path);
-    assert.equal(after, before, kind); assert.ok(result.warnings.some((warning) => warning.includes(".agents/skills/execute")), kind);
+    assert.equal(after, before, kind);
+    if (kind.includes("symlink")) assert.ok(result.warnings.some((warning) => warning.includes(".agents/skills/execute")), kind);
   }
 });
-
-test("conflicting prime and agent parents are preserved and block only their branches", () => {
-  for (const parent of [".prime", ".agents"]) for (const kind of ["file", "symlink"]) {
-    const cwd = project(); const path = join(cwd, parent);
+test("conflicting prime parent is preserved and blocks only its branch", () => {
+  for (const kind of ["file", "symlink"]) {
+    const cwd = project(); const path = join(cwd, ".prime");
     if (kind === "file") writeFileSync(path, "custom\n");
     else { const outside = project("prime-ralph-parent-"); symlinkSync(outside, path, "dir"); }
     const before = kind === "file" ? readFileSync(path, "utf8") : readlinkSync(path);
     const result = init(cwd); const after = kind === "file" ? readFileSync(path, "utf8") : readlinkSync(path);
-    assert.equal(after, before); assert.ok(result.warnings.some((warning) => warning.includes(parent)));
+    assert.equal(after, before); assert.ok(result.warnings.some((warning) => warning.includes(".prime")));
+    assert.equal(lstatSafe(join(cwd, ".agents")), undefined);
   }
 });
-
 test("Beads failures preserve partial state and never begin Ralph mutation", () => {
   for (const failure of [
     { status: 7, stderr: "injected failure" },

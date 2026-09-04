@@ -30,7 +30,7 @@ This check is a conflict-safety invariant, not a filesystem security sandbox. Th
 
 ## Trusted invocation facts
 
-`/spec-it-out` waits for the current agent operation, rechecks the exact path, validates the project skill, and sends one follow-up without compacting or projecting the conversation. The model-visible message contains a bounded JSON envelope immediately before the skill:
+`/spec-it-out` waits for the current agent operation, rechecks the exact path, validates the project prompt, and sends one follow-up without compacting or projecting the conversation. Canonical Ralph prompts remain under `.ralph/skills/` and are intentionally absent from `.agents/skills/`; direct skill invocation would omit the envelope and bypass this contract. The model-visible message contains a bounded JSON envelope immediately before the prompt:
 
 ```xml
 <prime-ralph-invocation>{"protocolVersion":1,"specificationState":"absent","invocationMode":"specification-new"}</prime-ralph-invocation>
@@ -63,7 +63,7 @@ The existing reset projection and recovery protocol remains authoritative. Creat
 These evidence types are intentionally separate:
 
 1. `npm test` verifies state classification, closed metadata, strict prompt compatibility, command registration, startup session identity, reload suppression, conflict handling, ordered reset injection, and legacy reset behavior.
-2. `npm run accept:specification` uses a deterministic provider and real Prime Agent `0.9.1` session lifecycle. It proves startup is the first provider turn, reload does not replay it, `/spec-it-out` preserves conversation, reset excludes stale conversation, and no later workflow state starts.
+2. `npm run accept:specification` uses a deterministic provider and real Prime Agent `0.9.1` session lifecycle. It proves startup is the first provider turn, reload does not replay it, `/spec-it-out` preserves conversation, reset excludes stale conversation, and no later workflow state starts. Initialization acceptance separately queries Prime Agent's real command catalog and rejects direct `skill:<canonical-name>` duplicates.
 3. `npm run accept:model:spec-it-out` is an explicit real-model behavioral check. It uses a one-purpose exclusive-create tool instead of general shell or IPython access. It records sanitized provider/model, fixture, prompt hash, response, tool/file outcomes, assertions, and verdict. It never runs in the normal test suite.
 
 The committed artifact at [`acceptance/spec-it-out-model-acceptance.json`](acceptance/spec-it-out-model-acceptance.json) covers default and Beads templates for new creation, initial existing-spec choices, explicitly confirmed future creation, explicitly agreed active update, cancellation, and reset-existing behavior. Static phrase assertions are structural evidence only and are not reported as proof of model behavior.

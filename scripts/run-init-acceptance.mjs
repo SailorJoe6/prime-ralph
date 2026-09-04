@@ -1,9 +1,10 @@
-import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+const CANONICAL_COMMAND_NAMES = new Set(["prepare", "spec-it-out", "plan", "execute", "blocked"]);
 const primeRoot = process.env.PRIME_AGENT_ROOT;
 if (!primeRoot) throw new Error("PRIME_AGENT_ROOT is required");
 const { discoverAndLoadExtensions } = await import(pathToFileURL(join(primeRoot, "dist/core/extensions/loader.js")).href);
@@ -19,6 +20,24 @@ const extension = loaded.extensions[0];
 const commandNames = [...extension.commands.keys()];
 if (JSON.stringify(commandNames) !== JSON.stringify(["reset", "spec-it-out"]) || extension.commands.has("clear")) throw new Error("initialized extension command contract failed");
 if (!extension.path.endsWith("/.prime/agent/extensions/prime-ralph/index.js")) throw new Error(`unexpected discovered path: ${extension.path}`);
+if (existsSync(join(cwd, ".agents"))) throw new Error("clean initialization exposed internal Ralph prompts under .agents");
+
+// Inspect the real Prime Agent command catalog, not only the loaded extension map.
+writeFileSync(join(cwd, ".ralph/plans/SPECIFICATION.md"), "# Acceptance fixture\n");
+const rpc = spawnSync(process.env.PRIME_AGENT_BIN ?? "prime-agent", ["--mode", "rpc", "--offline", "--no-session", "--cwd", cwd], {
+  input: `${JSON.stringify({ id: "commands", type: "get_commands" })}\n${JSON.stringify({ id: "abort", type: "abort" })}\n`,
+  encoding: "utf8", timeout: 30_000, maxBuffer: 2 * 1024 * 1024,
+});
+if (rpc.error) throw rpc.error;
+const rpcRecords = rpc.stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+const rpcCommands = rpcRecords.find((record) => record.id === "commands")?.data?.commands ?? [];
+const ralphCatalog = rpcCommands.filter((command) => command.sourceInfo?.path?.startsWith(`${cwd}/`) &&
+  (command.name === "reset" || CANONICAL_COMMAND_NAMES.has(command.name) || command.name.startsWith("skill:") && CANONICAL_COMMAND_NAMES.has(command.name.slice(6))));
+const catalogSummary = ralphCatalog.map(({ name, source }) => ({ name, source }));
+const expectedCatalog = [{ name: "reset", source: "extension" }, { name: "spec-it-out", source: "extension" }];
+if (rpc.status !== 0 || JSON.stringify(catalogSummary) !== JSON.stringify(expectedCatalog)) {
+  throw new Error(`native Ralph command catalog failed: status=${rpc.status} expected=${JSON.stringify(expectedCatalog)} actual=${JSON.stringify(catalogSummary)}`);
+}
 
 // Lock in the host-specific reason the initializer uses a directory symlink.
 const bad = mkdtempSync(join(tmpdir(), "prime-ralph-init-bad-link-"));
@@ -49,4 +68,4 @@ if (spawnSync("bd", ["--version"], { encoding: "utf8" }).status === 0) {
   }
   realBeadsStealth = true;
 }
-console.log(JSON.stringify({ created: createdCount, warnings: cli.stderr ? 1 : 0, extensions: loaded.extensions.length, registeredCommands: commandNames, directFileSymlinkRejected: true, realBeadsStealth }, null, 2));
+console.log(JSON.stringify({ created: createdCount, warnings: cli.stderr ? 1 : 0, extensions: loaded.extensions.length, registeredCommands: commandNames, nativeRalphCatalog: catalogSummary, directFileSymlinkRejected: true, realBeadsStealth }, null, 2));

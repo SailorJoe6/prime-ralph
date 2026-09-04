@@ -48,6 +48,7 @@ export function runCli(argv, io = {}, runtime = {}) {
     if (parsed.help) { stdout.write(USAGE); return 0; }
     const result = initializeProject(parsed.options, runtime);
     for (const path of result.created) stdout.write(`created: ${path}\n`);
+    for (const path of result.removed) stdout.write(`removed legacy link: ${path}\n`);
     for (const warning of result.warnings) stderr.write(`warning: ${warning}\n`);
     stdout.write(`prime-ralph initialized: ${result.project}\n`);
     return 0;

@@ -12,7 +12,6 @@ const PROJECT_DIRECTORIES = [
   ".prime", ".prime/agent", ".prime/agent/extensions",
   ".ralph", ".ralph/skills", ".ralph/plans", ".ralph/plans/blocked",
   ".ralph/plans/future", ".ralph/plans/archive", ".ralph/logs",
-  ".agents", ".agents/skills",
 ];
 
 export class InitError extends Error {
@@ -44,9 +43,9 @@ export function initializeProject(options = {}, runtime = {}) {
   const templateRoot = resolve(options.templateRoot ?? fileURLToPath(new URL("../templates", import.meta.url)));
   const run = runtime.runCommand ?? defaultRun;
   const created = [];
+  const removed = [];
   const preserved = [];
   const warnings = [];
-  const readySkills = new Set();
 
   if (pathKind(project) !== "directory") throw new InitError(`Project path is not a directory: ${project}`);
   if (stealth && /[\r\n]/.test(project)) throw new InitError("--stealth cannot represent a project path containing a newline");
@@ -134,38 +133,33 @@ export function initializeProject(options = {}, runtime = {}) {
         if (pathKind(template) !== "file") throw new InitError(`Missing bundled ${variant} template for ${skill}`);
         writeFileSync(targetPath, readFileSync(template), { flag: "wx" });
         created.push(target);
-        readySkills.add(skill);
       } else if (kind === "file") {
         preserved.push(target);
-        readySkills.add(skill);
       } else warnings.push(`Preserved conflicting ${kind}: ${target}`);
     }
   }
 
-  if (directoryReady.get(".agents/skills")) {
+  const agentsPath = join(project, ".agents");
+  const agentSkillsPath = join(project, ".agents/skills");
+  if (pathKind(agentsPath) === "directory" && pathKind(agentSkillsPath) === "directory") {
     for (const skill of CANONICAL_SKILLS) {
-      if (!readySkills.has(skill)) {
-        warnings.push(`Skipped skill entrypoint because canonical skill is unavailable: .agents/skills/${skill}`);
-        continue;
-      }
       const link = `.agents/skills/${skill}`;
       const linkPath = join(project, link);
+      if (pathKind(linkPath) !== "symlink") continue;
       const canonical = join(project, `.ralph/skills/${skill}`);
-      const kind = pathKind(linkPath);
-      if (kind === "missing") {
-        symlinkSync(`../../.ralph/skills/${skill}`, linkPath, "dir");
-        created.push(link);
-      } else if (kind === "symlink") {
-        let equivalent = false;
-        try { equivalent = realpathSync(linkPath) === realpathSync(canonical); } catch { equivalent = false; }
-        if (equivalent) preserved.push(link);
-        else warnings.push(`Preserved conflicting symlink: ${link}`);
-      } else warnings.push(`Preserved conflicting ${kind}: ${link}`);
+      let legacy = false;
+      if (pathKind(canonical) === "directory") {
+        try { legacy = realpathSync(linkPath) === realpathSync(canonical); } catch { legacy = false; }
+      }
+      if (legacy) {
+        rmSync(linkPath, { force: true });
+        removed.push(link);
+      } else warnings.push(`Preserved non-Ralph skill symlink: ${link}`);
     }
   }
 
   if (stealth) applyStealth(project, created, warnings, run);
-  return { project, created, preserved, warnings, beadsInitialized: beads && created.includes(".beads/") };
+  return { project, created, removed, preserved, warnings, beadsInitialized: beads && created.includes(".beads/") };
 }
 
 

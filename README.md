@@ -46,7 +46,7 @@ cd /path/to/project
 prime-ralph init
 ```
 
-The initializer creates only missing project structure. It installs a project-local extension directory symlink under `.prime/agent/extensions/`, five canonical skills under `.ralph/skills/`, and matching Prime Agent skill links under `.agents/skills/`. A normal `prime-agent` launch in that project then discovers the extension automatically; no `--extension` flag is required.
+The initializer creates only missing project structure. It installs a project-local extension directory symlink under `.prime/agent/extensions/` and five canonical internal prompts under `.ralph/skills/`. It does not expose those prompts through `.agents/skills/`, because direct skill commands would bypass plugin-authored state and duplicate the Ralph extension commands in autocomplete. Re-running initialization removes only exact legacy Ralph skill symlinks and preserves every other entry. A normal `prime-agent` launch then discovers the extension automatically; no `--extension` flag is required.
 
 Optional initialization modes are:
 
@@ -106,7 +106,7 @@ npm run package:check
 npm pack --dry-run
 ```
 
-The reset disk-backed acceptance uses a deterministic provider and a real Prime Agent IPython kernel. It proves stale provider messages are removed while the session ID, JSONL path/history, system baseline, and REPL value survive. The specification acceptance uses a deterministic provider and real Prime Agent `0.9.1` extension lifecycle to prove startup ordering, reload suppression, context preservation, invocation modes, and reset projection. The opt-in model acceptance is separate behavioral evidence and never runs as part of `npm test`. The busy acceptance proves a reset queues behind active work and an existing follow-up, and that a duplicate pending request produces only one boundary.
+The reset disk-backed acceptance uses a deterministic provider and a real Prime Agent IPython kernel. It proves stale provider messages are removed while the session ID, JSONL path/history, system baseline, and REPL value survive. The specification acceptance uses a deterministic provider and real Prime Agent `0.9.1` extension lifecycle to prove startup ordering, reload suppression, context preservation, invocation modes, reset projection, and an unambiguous native command catalog without direct Ralph skill duplicates. The opt-in model acceptance is separate behavioral evidence and never runs as part of `npm test`. The busy acceptance proves a reset queues behind active work and an existing follow-up, and that a duplicate pending request produces only one boundary.
 
 ## Current public-API boundary
 

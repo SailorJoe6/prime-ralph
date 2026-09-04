@@ -17,8 +17,8 @@ The default extension does not start an agent, select a provider, execute shell 
 `prime-ralph init [--project <path>] [--beads] [--stealth]`:
 
 1. requires an existing selected project directory;
-2. creates only missing `.ralph` structure, bundled canonical skills, the project-local extension directory symlink, and `.agents/skills` links;
-3. preserves customized skills, correct links, and every conflicting entry, warning instead of replacing conflicts;
+2. creates only missing `.ralph` structure, bundled canonical internal prompts, and the project-local extension directory symlink;
+3. creates no direct Ralph skills under `.agents/skills`, removes only exact recognized legacy canonical-skill symlinks on repeated initialization, and preserves every conflicting, renamed, dangling, or unrelated entry;
 4. selects Beads templates only through `--beads` and preflights `bd` before Ralph mutations when initialization is required;
 5. adds only leaf artifacts created by that invocation to Git's local exclude when `--stealth` is selected; and
 6. never imports the production extension, launches Prime Agent, calls a provider, delivers a skill, selects a phase, or starts a lifecycle.
@@ -90,7 +90,7 @@ Then extract the produced tarball in a clean temporary directory, import `src/in
 ## Evidence boundaries
 
 - Unit tests and static prompt checks do not prove host lifecycle ordering or model behavior.
-- The specification lifecycle acceptance proves startup ordering, reload suppression, context retention, and reset projection on Prime Agent `0.9.1`.
+- The specification lifecycle acceptance proves startup ordering, reload suppression, context retention, reset projection, and an unambiguous native extension-command catalog on Prime Agent `0.9.1`.
 - The opt-in model matrix proves only the recorded provider/model outcomes under its restricted fixture tools; it covers new creation, the initial existing-spec menu, confirmed future creation, agreed active update, cancellation, and reset-existing behavior, and is not deterministic CI evidence.
 - The disk-backed acceptance proves provider context, JSONL, session identity, and REPL continuity on Prime Agent `0.9.1`.
 - The busy acceptance proves ordering behind an active parent turn and existing follow-up.
