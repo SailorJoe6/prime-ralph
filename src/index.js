@@ -2,7 +2,7 @@ import resetExtension, { createResetExtension } from "./reset-extension.js";
 
 export default resetExtension;
 export { createResetExtension };
-export { loadPrepareSkill, formatPrepareInjection, PrepareSkillError } from "./reset-skill.js";
+export { loadPrepareSkill, formatPrepareInjection, validateCanonicalSkill, PrepareSkillError } from "./reset-skill.js";
 export {
   projectResetContext,
   resetCompactionInstructions,

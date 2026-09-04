@@ -8,7 +8,7 @@ This report records the source study and the behavior-neutral observability capa
 
 ## Ralph reference study
 
-The reference checkout at `~/.local/share/ralph` uses phase-specific skill files under `skills/default/<phase>/SKILL.md` and Beads variants under `skills/beads/<phase>/SKILL.md`. Its README and `docs/prompts-and-plans.md` establish these behaviors:
+The historical reference implementation uses phase-specific skill files under `skills/default/<phase>/SKILL.md` and Beads variants under `skills/beads/<phase>/SKILL.md`. Its README and `docs/prompts-and-plans.md` establish these behaviors:
 
 - planning state is represented by `.ralph/plans/SPECIFICATION.md` and `EXECUTION_PLAN.md`;
 - repo skill files are copied/customized per project;

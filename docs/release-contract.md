@@ -7,10 +7,23 @@ This document defines the standalone package boundary and the checks required be
 - Node.js 20 or newer.
 - Peer dependency: Prime Agent `0.9.1`.
 - ESM package with the exports listed in `package.json`.
-- Package contents are limited to `src/`, `scripts/`, `docs/`, `README.md`, and `LICENSE`.
+- Package contents are limited to `bin/`, `src/`, `templates/`, `scripts/`, `docs/`, `README.md`, and `LICENSE`.
 - The default extension registers production `/reset` behavior and does not register or shadow `/clear`.
 
-The package does not start an agent, select a provider, execute shell commands, invoke Beads, choose a repository, or supply task criteria.
+The default extension does not start an agent, select a provider, execute shell commands, invoke Beads, choose a repository, or supply task criteria. The separate initializer performs only its explicit filesystem setup and, only with `--beads` and missing Beads state, invokes `bd init --skip-agents --skip-hooks`.
+
+## Slice 2 initialization contract
+
+`prime-ralph init [--project <path>] [--beads] [--stealth]`:
+
+1. requires an existing selected project directory;
+2. creates only missing `.ralph` structure, bundled canonical skills, the project-local extension directory symlink, and `.agents/skills` links;
+3. preserves customized skills, correct links, and every conflicting entry, warning instead of replacing conflicts;
+4. selects Beads templates only through `--beads` and preflights `bd` before Ralph mutations when initialization is required;
+5. adds only leaf artifacts created by that invocation to Git's local exclude when `--stealth` is selected; and
+6. never imports the production extension, launches Prime Agent, calls a provider, delivers a skill, selects a phase, or starts a lifecycle.
+
+Package updates do not invoke initialization or refresh initialized project content. All five default and Beads-aware templates are shipped so future workflow slices do not depend on silently replacing project-customizable skills.
 
 ## Slice 1 reset contract
 
@@ -34,6 +47,8 @@ Run:
 
 ```sh
 npm test
+PRIME_AGENT_ROOT=/path/to/prime-agent PRIME_AGENT_ROOT=/path/to/prime-agent npm run accept:init
+PRIME_AGENT_ROOT=/path/to/prime-agent npm run accept:package-install
 PRIME_AGENT_ROOT=/path/to/prime-agent npm run compat
 PRIME_AGENT_ROOT=/path/to/prime-agent \
 PRIME_AGENT_CORE_ROOT=/path/to/prime-agent/node_modules/@earendil-works/pi-agent-core \

@@ -29,22 +29,34 @@ Prime Agent's built-in `/clear` remains unchanged. In Prime Agent `0.9.1`, `/cle
 
 The prepare skill must be valid UTF-8, contain valid YAML frontmatter whose mapping declares `name: prepare` and a non-empty `description`, have a non-empty body, and be no larger than 128 KiB. Duplicate YAML keys are rejected.
 
-## Install and load
+## Install and initialize a project
 
-Install the package alongside Prime Agent and load its default extension:
+Package installation and project initialization are separate. After installing `prime-ralph` alongside Prime Agent, opt one project in explicitly:
 
 ```sh
-npm install prime-ralph
-prime-agent --extension node_modules/prime-ralph/src/index.js
+cd /path/to/project
+prime-ralph init
 ```
 
-Then invoke:
+The initializer creates only missing project structure. It installs a project-local extension directory symlink under `.prime/agent/extensions/`, five canonical skills under `.ralph/skills/`, and matching Prime Agent skill links under `.agents/skills/`. A normal `prime-agent` launch in that project then discovers the extension automatically; no `--extension` flag is required.
+
+Optional initialization modes are:
+
+```sh
+prime-ralph init --project /path/to/project
+prime-ralph init --beads
+prime-ralph init --stealth
+```
+
+`--beads` is the only way to select Beads-aware templates. `--stealth` adds only artifacts created by that invocation to the Git worktree's local exclude file. Repeated initialization preserves existing skills, plans, logs, links, extension entries, and other project content. Package updates never run initialization or refresh project files.
+
+After initialization, start Prime Agent in the project and invoke:
 
 ```text
 /reset
 ```
 
-The package contains no host-specific repository, provider, deployment, or task policy. Project skill files provide model instructions; the extension supplies only reset mechanics.
+The package contains no host-specific repository, provider, deployment, or task policy. Project skill files provide model instructions; the extension supplies mechanics only. See [`docs/initialization.md`](docs/initialization.md).
 
 ## Public entry points
 

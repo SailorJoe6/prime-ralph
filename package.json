@@ -24,10 +24,14 @@
     "./package": "./package.json",
     "./reset-context": "./src/reset-context.js",
     "./reset-extension": "./src/reset-extension.js",
-    "./reset-skill": "./src/reset-skill.js"
+    "./reset-skill": "./src/reset-skill.js",
+    "./init": "./src/init.js",
+    "./cli": "./src/cli.js"
   },
   "files": [
+    "bin",
     "src",
+    "templates",
     "scripts",
     "docs",
     "README.md",
@@ -53,7 +57,9 @@
     "accept:reset": "node scripts/run-reset-acceptance.mjs",
     "accept:reset-busy": "node scripts/run-reset-busy-acceptance.mjs",
     "poc:reset-compaction": "node scripts/run-reset-compaction-poc.mjs",
-    "accept:reset-lifecycle": "node scripts/run-reset-lifecycle-acceptance.mjs"
+    "accept:reset-lifecycle": "node scripts/run-reset-lifecycle-acceptance.mjs",
+    "accept:init": "node scripts/run-init-acceptance.mjs",
+    "accept:package-install": "node scripts/run-package-install-acceptance.mjs"
   },
   "engines": {
     "node": ">=20"
@@ -64,5 +70,13 @@
   "license": "MIT",
   "dependencies": {
     "yaml": "^2.9.0"
+  },
+  "bin": {
+    "prime-ralph": "bin/prime-ralph.js"
+  },
+  "peerDependenciesMeta": {
+    "prime-agent": {
+      "optional": true
+    }
   }
 }

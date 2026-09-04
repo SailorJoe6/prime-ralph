@@ -36,28 +36,34 @@ export function loadPrepareSkill({ cwd = process.cwd(), maxBytes = MAX_PREPARE_S
   return { path, text };
 }
 
-export function validatePrepareSkill(text) {
-  if (typeof text !== "string" || !text.trim()) throw new PrepareSkillError("prepare skill is empty");
-  if (text.includes("\0")) throw new PrepareSkillError("prepare skill contains a NUL byte");
+export function validateCanonicalSkill(text, expectedName) {
+  if (typeof expectedName !== "string" || !expectedName.trim()) throw new TypeError("expectedName must be non-empty");
+  const label = `${expectedName} skill`;
+  if (typeof text !== "string" || !text.trim()) throw new PrepareSkillError(`${label} is empty`);
+  if (text.includes("\0")) throw new PrepareSkillError(`${label} contains a NUL byte`);
   const normalized = text.replace(/\r\n/g, "\n");
   const match = /^---\n([\s\S]*?)\n---(?:\n|$)/.exec(normalized);
-  if (!match) throw new PrepareSkillError("prepare skill must contain YAML frontmatter");
+  if (!match) throw new PrepareSkillError(`${label} must contain YAML frontmatter`);
   let metadata;
   try {
     const document = parseDocument(match[1], { uniqueKeys: true, prettyErrors: false });
     if (document.errors.length) throw document.errors[0];
     metadata = document.toJS();
   } catch (error) {
-    throw new PrepareSkillError("prepare skill frontmatter is invalid YAML", { cause: error });
+    throw new PrepareSkillError(`${label} frontmatter is invalid YAML`, { cause: error });
   }
-  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata) || metadata.name !== "prepare") {
-    throw new PrepareSkillError('prepare skill frontmatter must declare name: prepare');
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata) || metadata.name !== expectedName) {
+    throw new PrepareSkillError(`${label} frontmatter must declare name: ${expectedName}`);
   }
   if (typeof metadata.description !== "string" || !metadata.description.trim()) {
-    throw new PrepareSkillError("prepare skill frontmatter must contain a non-empty description");
+    throw new PrepareSkillError(`${label} frontmatter must contain a non-empty description`);
   }
-  if (!normalized.slice(match[0].length).trim()) throw new PrepareSkillError("prepare skill body is empty");
+  if (!normalized.slice(match[0].length).trim()) throw new PrepareSkillError(`${label} body is empty`);
   return true;
+}
+
+export function validatePrepareSkill(text) {
+  return validateCanonicalSkill(text, "prepare");
 }
 
 export function formatPrepareInjection({ path, text }) {
