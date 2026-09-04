@@ -5,11 +5,11 @@ const packageJson = JSON.parse(await readFile(new URL("../package.json", import.
 const entry = await import(pathToFileURL(new URL("../src/index.js", import.meta.url).pathname).href);
 if (typeof entry.default !== "function") throw new Error("default extension entry is not callable");
 for (const mode of ["text", "json", "rpc", "acp", "daemon"]) {
-  const commands = new Map();
-  entry.default({ mode, registerCommand: (name, command) => commands.set(name, command), on() {}, appendEntry() {}, sendMessage() {} });
-  if (JSON.stringify([...commands.keys()]) !== JSON.stringify(["reset", "spec-it-out", "plan"]) || commands.has("clear")) throw new Error(`Slice 4 command registration failed in ${mode} smoke`);
+  const commands = new Map(), tools = new Map();
+  entry.default({ mode, registerTool: (tool) => tools.set(tool.name, tool), registerCommand: (name, command) => commands.set(name, command), on() {}, appendEntry() {}, sendMessage() {} });
+  if (JSON.stringify([...commands.keys()]) !== JSON.stringify(["reset", "spec-it-out", "plan", "execute"]) || commands.has("clear")) throw new Error(`Slice 5 command registration failed in ${mode} smoke`);
 }
-for (const exportName of ["observability", "ralph-context", "reset-context", "reset-extension", "reset-skill", "specification", "planning", "workflow-extension", "cycle-coordinator", "continuation-adapter", "skill-config", "phase-runtime", "beads-coordination", "coordination-runtime", "bd-cli-adapter", "goal-lifecycle", "cache-analysis", "diagnostics", "init", "cli"]) await import(new URL(`../src/${exportName}.js`, import.meta.url));
+for (const exportName of ["observability", "ralph-context", "reset-context", "reset-extension", "reset-skill", "specification", "planning", "execution", "execution-log", "planning-transaction", "workflow-extension", "cycle-coordinator", "continuation-adapter", "skill-config", "phase-runtime", "beads-coordination", "coordination-runtime", "bd-cli-adapter", "goal-lifecycle", "cache-analysis", "diagnostics", "init", "cli"]) await import(new URL(`../src/${exportName}.js`, import.meta.url));
 if (packageJson.bin?.["prime-ralph"] !== "bin/prime-ralph.js") throw new Error("initializer bin is not declared");
 await access(new URL("../bin/prime-ralph.js", import.meta.url), constants.X_OK);
 const forbiddenTerms = [
@@ -53,5 +53,9 @@ for (const artifactName of ["spec-it-out-model-acceptance.json", "plan-model-acc
     if (error?.code !== "ENOENT") throw error;
   }
 }
+try {
+  const artifact = JSON.parse(await readFile(new URL("../docs/acceptance/execute-model-acceptance.json", import.meta.url), "utf8"));
+  if (!artifact.checks || Object.values(artifact.checks).some((value) => value !== true)) throw new Error("execute-model-acceptance.json contains a missing or failed check");
+} catch (error) { if (error?.code !== "ENOENT") throw error; }
 console.log("model acceptance artifacts OK");
 console.log(`package check OK: ${packageJson.name}@${packageJson.version}`);

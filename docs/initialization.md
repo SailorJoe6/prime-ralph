@@ -45,7 +45,7 @@ Because stealth tracks only the current invocation, rerunning with `--stealth` a
 
 ## Lifecycle boundary
 
-Initialization performs filesystem setup only. It does not import the production extension, launch Prime Agent, call a provider, deliver `prepare`, select a phase, create a goal, or start execution. A later normal Prime Agent session discovers the project-local extension. At the Slice 4 boundary, the production commands are `/reset`, `/spec-it-out`, and `/plan`; automatic execution and blocked handling remain unavailable.
+Initialization performs filesystem setup only. It does not import the production extension, launch Prime Agent, call a provider, deliver `prepare`, select a phase, create a goal, or start execution. A later normal Prime Agent session discovers the project-local extension. The production commands are `/reset`, `/spec-it-out`, `/plan`, and `/execute`; execution still begins only after an explicit valid `/execute`.
 
 Package installation and update remain separate operations. Updating the package changes the extension symlink target's implementation and bundled templates for future projects, but it does not rewrite initialized project skills or entrypoints. Run `prime-ralph init` again to apply bounded legacy-link cleanup. End the current Prime Agent session and start or reload a session after updating package source; `/reload` alone is not accepted evidence that previously cached transitive extension modules changed.
 

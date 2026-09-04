@@ -4,11 +4,12 @@ Slice 3 adds interactive specification startup and `/spec-it-out` without exposi
 
 ## Command surface
 
-The production Slice 4 extension registers:
+The production Slice 5 extension registers:
 
 - `/reset`
 - `/spec-it-out`
 - `/plan`
+- `/execute`
 
 It does not register `/execute` or blocked-phase commands. This document focuses on the Slice 3 specification behavior; planning is documented separately. Prime Agent's native `/clear` remains unchanged.
 

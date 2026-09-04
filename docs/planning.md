@@ -1,10 +1,10 @@
 # Interactive planning workflow
 
-Slice 4 adds the complete interactive planning path without enabling automatic execution.
+Slice 4 added the complete interactive planning path. Slice 5 adds automatic execution without changing the planning protections described here.
 
 ## Command and startup behavior
 
-The production extension registers `/reset`, `/spec-it-out`, and `/plan`. It does not register `/execute` or a blocked command. Exact blocked planning documents gate startup, `/plan`, and `/reset` with a clear unavailable message until the complete blocked workflow lands in a later slice.
+The production extension registers `/reset`, `/spec-it-out`, `/plan`, and `/execute`. Exact blocked planning documents take startup precedence and route interaction through the complete blocked workflow. `/plan` and `/execute` remain inactive there until safe restoration and forward confirmation.
 
 A normal session with an exact active `.ralph/plans/SPECIFICATION.md` starts in planning. The extension validates `prepare`, the exact active-plan state, and the project `plan` skill before admitting one hidden message. That message contains `prepare` first and the plan invocation second. An absent active specification retains the specification startup behavior.
 

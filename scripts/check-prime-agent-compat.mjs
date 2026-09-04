@@ -19,4 +19,4 @@ if (packageJson.version !== "0.9.1") {
   process.exit(1);
 }
 
-console.log(`Prime Agent Slice 1 compatibility accepted: ${packageJson.version}`);
+console.log(`Prime Agent compatibility accepted: ${packageJson.version}`);

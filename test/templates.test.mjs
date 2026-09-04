@@ -51,15 +51,15 @@ test("planning templates protect plans and never start execution", () => {
 test("execute templates define continue, wait, block, and complete semantics", () => {
   for (const variant of ["default", "beads"]) {
     const text = load(variant, "execute");
-    for (const pattern of [/single highest-value task/i, /\*\*Continue:\*\*/, /\*\*Wait:\*\*/, /same lifecycle/i, /no context reset/i, /readiness control only after/i, /\*\*Blocked:\*\*/, /exact active specification and plan together/i, /stop continuation and associated wakeups/i, /request the specific help/i, /\*\*Complete:\*\*/, /Audit every specification requirement/i, /stop the execution driver/i, /final response must identify/i]) assert.match(text, pattern);
-    assert.doesNotMatch(text, /complete the goal when.*wait|create a new goal/i);
+    for (const pattern of [/single highest-value task/i, /\*\*Continue:\*\*/, /\*\*Wait:\*\*/, /same Ralph lifecycle/i, /clean context projection/i, /evidence that establishes readiness/i, /\*\*Blocked:\*\*/, /exact active pair without overwrite/i, /Stop\/delete any agent-owned wakeup/i, /tell the user what help is required/i, /\*\*Complete:\*\*/, /Audit every specification requirement/i, /native driver cannot continue/i, /final response must identify/i]) assert.match(text, pattern);
+    assert.doesNotMatch(text, /complete the goal when.*wait|plugin continuation loop is the driver/i);
   }
 });
 
 test("blocked templates require conflict-safe paired restore and explicit user restart", () => {
   for (const variant of ["default", "beads"]) {
     const text = load(variant, "blocked");
-    for (const pattern of [/matching current-lifecycle pair/i, /restore both documents together/i, /Neither active destination may be overwritten/i, /partial restore.*not success/i, /Do not resume automatically/i, /invoke `\/execute`/i]) assert.match(text, pattern);
+    for (const pattern of [/matching current-lifecycle pair/i, /restore both documents together/i, /without overwrite/i, /partial restore.*not success/i, /Do not.*resume automatically/i, /invoke `\/execute`/i]) assert.match(text, pattern);
   }
 });
 

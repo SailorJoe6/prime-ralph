@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "evidenceKind": "real-model-public-goal-execution",
+  "generatedAt": "2026-09-04T20:48:44.262Z",
+  "provider": "openai-codex",
+  "model": "gpt-5.6-sol",
+  "durationMs": 63892,
+  "cwd": "/tmp/prime-ralph-execute-model-KqeBc3",
+  "checks": {
+    "processSucceeded": true,
+    "artifactExact": true,
+    "testCreated": true,
+    "publicGoalCreateObserved": true,
+    "publicGoalCompleteObserved": true,
+    "lifecycleCompleteObserved": true,
+    "completedPassLogged": true,
+    "noArchive": true,
+    "providerObserved": true,
+    "modelObserved": true
+  },
+  "observed": {
+    "status": 0,
+    "signal": null,
+    "toolCalls": [
+      "ipython",
+      "ipython",
+      "ipython",
+      "ipython",
+      "ipython",
+      "ipython",
+      "ipython",
+      "ipython",
+      "ipython",
+      "ipython",
+      "ipython",
+      "ipython",
+      "ralph_lifecycle"
+    ],
+    "finalAssistantText": "- **Task:** Created `artifact.txt` and exact-content `node:test` coverage in `test.mjs`.\n- **Evidence:** `node --test test.mjs` passed: 1 test, 0 failures. Byte inspection confirmed the required trailing newline.\n- **Durable state:** Updated `.ralph/plans/EXECUTION_PLAN.md` with completion status and evidence.\n- **Lifecycle:** Completion committed successfully without archival.\n- **Decision:** **Complete**\n- **Goal time used:** 14 seconds."
+  }
+}

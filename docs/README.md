@@ -7,6 +7,7 @@ This directory documents the standalone `prime-ralph` package. Start with the ro
 1. **[Project initialization](initialization.md)** — Slice 2 project-local setup, templates, conflict behavior, Beads, and stealth mode.
 2. **[Interactive specification workflow](specification.md)** — Slice 3 startup, `/spec-it-out`, trusted invocation facts, and behavioral evidence.
 3. **[Interactive planning workflow](planning.md)** — Slice 4 startup, `/plan`, phase-aware reset, and behavioral evidence.
+4. **[Safe execution lifecycle](execution.md)** — Slice 5 driver, lifecycle, waiting, blocked recovery, and logging.
 4. **[`/reset` context boundary](reset.md)** — context mechanics, evidence, and host API gap.
 5. **[Release contract](release-contract.md)** — what the package guarantees, what it leaves to the host, and how to validate a release.
 6. **[Research slice 2](research-slice-2.md)** — historical lifecycle observations and POCs.

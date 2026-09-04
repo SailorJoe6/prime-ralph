@@ -9,7 +9,8 @@ export function isFinalNormalAssistantTurn(event) {
   if (!message || message.role !== "assistant") return false;
   if (message.stopReason === "error" || message.stopReason === "aborted") return false;
   if (hasToolCall(message)) return false;
-  if (Array.isArray(event.toolResults) && event.toolResults.length > 0) return false;
+  // Prime Agent includes tool results accumulated earlier in a valid tool-using turn.
+  // Only the final assistant message shape and stop reason define normal closeout.
   return true;
 }
 

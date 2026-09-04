@@ -35,6 +35,7 @@ export function createResetExtension({
   loadSpecItOut = loadSpecItOutSkill,
   inspectSpecification = inspectActiveSpecification,
   resolveResetInjection,
+  handleReset,
   createRequestId = randomUUID,
 } = {}) {
   return function resetExtension(pi) {
@@ -75,6 +76,7 @@ export function createResetExtension({
       const injection = typeof resolved === "string" ? resolved : resolved?.content;
       if (typeof injection !== "string" || !injection.trim()) throw new TypeError("Ralph context reset requires a non-empty skill injection");
       const transitionDetails = typeof resolved === "object" && resolved?.details && typeof resolved.details === "object" ? resolved.details : {};
+      const triggerTurn = typeof resolved === "object" && resolved?.triggerTurn === false ? false : true;
       const requestId = createRequestId();
       pi.appendEntry(RESET_MARKER_TYPE, {
         source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId, command,
@@ -104,8 +106,12 @@ export function createResetExtension({
         }
         appendState("prepare_pending", requestId, { mode, command });
         try {
-          pi.sendMessage(skillMessage, { triggerTurn: true, deliverAs: "followUp" });
+          pi.sendMessage(skillMessage, { triggerTurn, deliverAs: "followUp" });
           onAdmitted?.(skillMessage);
+          if (!triggerTurn) {
+            appendState("completed", requestId, { mode: "no-turn", command });
+            clearPending();
+          }
           ctx.ui.notify(command === "plan" ? "Ralph planning started." : "Ralph reset started.", "info");
         } catch (error) {
           appendState("failed", requestId, { reason: "skill_admission_failed", command });
@@ -142,6 +148,7 @@ export function createResetExtension({
       description: "Reset model-visible context in this session and re-enter the current Ralph phase",
       handler: async (args, ctx) => {
         if (args.trim()) throw new Error("Usage: /reset");
+        if (handleReset && await handleReset({ ctx, requestBoundary })) return;
         await requestBoundary({ ctx, command: "reset" });
       },
     });

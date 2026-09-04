@@ -8,7 +8,7 @@ This document defines the standalone package boundary and the checks required be
 - Peer dependency: Prime Agent `0.9.1`.
 - ESM package with the exports listed in `package.json`.
 - Package contents are limited to `bin/`, `src/`, `templates/`, `scripts/`, `docs/`, `README.md`, and `LICENSE`.
-- The default extension registers production `/reset`, `/spec-it-out`, and `/plan` behavior, does not register `/execute` or blocked handling, and does not register or shadow `/clear`.
+- The default extension registers production `/reset`, `/spec-it-out`, `/plan`, and `/execute` behavior plus the internal `ralph_lifecycle` control, and does not register or shadow `/clear`.
 
 The default extension does not start an agent, select a provider, execute shell commands, invoke Beads, choose a repository, or supply task criteria. The separate initializer performs only its explicit filesystem setup and, only with `--beads` and missing Beads state, invokes `bd init --skip-agents --skip-hooks`.
 
@@ -43,7 +43,11 @@ A Slice 3 `spec-it-out` skill declares `prime-ralph-invocation-version: 1`. Olde
 
 With an active exact specification, startup and explicit fresh planning deliver one ordered `prepare`-then-`plan` turn. The extension supplies a closed versioned plan-state mode, preserves existing plans, and never writes a planning document. Existing-plan `/plan` keeps current context only after planning is established. Planning `/reset` uses the shared clean boundary for both active-plan states. Missing specifications and incompatible or conflicting paths fail before transition.
 
-The command catalog is exactly `/reset`, `/spec-it-out`, and `/plan`; `/execute`, blocked handling, and direct Ralph `skill:*` alternatives remain absent.
+Slice 4 ended with the `/reset`, `/spec-it-out`, and `/plan` catalog. Slice 5 adds `/execute` and complete blocked handling while direct Ralph `skill:*` alternatives remain absent.
+
+## Slice 5 execution contract
+
+A valid `/execute` starts one plugin-owned lifecycle. Prime Agent's native thread goal is the sole continuation driver; the extension adds no competing loop. The versioned `ralph_lifecycle` tool requires current lifecycle/cycle tokens and explicit execute-skill decisions for continue, wait, ready, block, and complete. Native goal pause/resume/clear reconcile with the same lifecycle. Exact pair transactions and provenance protect blocked recovery and optional named archive. Completed passes append only to `.ralph/logs/EXECUTION_LOG.md`; waiting checks do not. See [`execution.md`](execution.md).
 
 ## Slice 1 reset contract
 
@@ -79,6 +83,9 @@ npm run accept:specification
 PRIME_AGENT_ROOT=/path/to/prime-agent \
 PRIME_AGENT_CORE_ROOT=/path/to/prime-agent/node_modules/@earendil-works/pi-agent-core \
 npm run accept:planning
+PRIME_AGENT_ROOT=/path/to/prime-agent \
+PRIME_AGENT_CORE_ROOT=/path/to/prime-agent/node_modules/@earendil-works/pi-agent-core \
+npm run accept:execution
 PRIME_AGENT_ROOT=/path/to/prime-agent \
 PRIME_AGENT_CORE_ROOT=/path/to/prime-agent/node_modules/@earendil-works/pi-agent-core \
 npm run accept:reset-busy

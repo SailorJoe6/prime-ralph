@@ -42,12 +42,14 @@ if (!installedSkill.text.includes("prime-ralph-invocation-version: 1")) throw ne
 const installedPlanning = await import(pathToFileURL(join(installRoot, "node_modules/prime-ralph/src/planning.js")).href);
 const installedPlanSkill = installedPlanning.loadPlanSkill({ cwd: project });
 if (!installedPlanSkill.text.includes("prime-ralph-invocation-version: 1")) throw new Error("installed Slice 4 prompt contract is unavailable");
+const installedExecution = await import(pathToFileURL(join(installRoot, "node_modules/prime-ralph/src/execution.js")).href);
+for (const skill of [installedExecution.loadExecuteSkill({ cwd: project }), installedExecution.loadBlockedSkill({ cwd: project })]) if (!skill.text.includes("prime-ralph-invocation-version: 1")) throw new Error("installed Slice 5 prompt contract is unavailable");
 const { discoverAndLoadExtensions } = await import(pathToFileURL(join(primeRoot, "dist/core/extensions/loader.js")).href);
 const agentDir = join(temp, "agent"); mkdirSync(agentDir);
 const loaded = await discoverAndLoadExtensions([], project, agentDir);
 const commandNames = [...(loaded.extensions[0]?.commands?.keys() ?? [])];
-if (loaded.errors.length || loaded.extensions.length !== 1 || JSON.stringify(commandNames) !== JSON.stringify(["reset", "spec-it-out", "plan"])) throw new Error(`installed extension discovery failed: ${JSON.stringify(loaded.errors)}`);
-console.log(JSON.stringify({ packedFiles: packed.files.length, binInstalled: true, projectUnchangedByPackageUpdate: true, noDirectRalphSkills: true, legacyLinkMigrated: true, extensionLoaded: true, specificationPromptCompatible: true, planningPromptCompatible: true, registeredCommands: commandNames }, null, 2));
+if (loaded.errors.length || loaded.extensions.length !== 1 || JSON.stringify(commandNames) !== JSON.stringify(["reset", "spec-it-out", "plan", "execute"])) throw new Error(`installed extension discovery failed: ${JSON.stringify(loaded.errors)}`);
+console.log(JSON.stringify({ packedFiles: packed.files.length, binInstalled: true, projectUnchangedByPackageUpdate: true, noDirectRalphSkills: true, legacyLinkMigrated: true, extensionLoaded: true, specificationPromptCompatible: true, planningPromptCompatible: true, executionPromptsCompatible: true, registeredCommands: commandNames }, null, 2));
 rmSync(temp, { recursive: true, force: true });
 
 function snapshot(root) {
