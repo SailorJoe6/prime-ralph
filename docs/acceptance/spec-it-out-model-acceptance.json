@@ -1,0 +1,1827 @@
+{
+  "schemaVersion": 2,
+  "evidenceKind": "real-model-behavioral",
+  "generatedAt": "2026-09-04T02:58:40.057Z",
+  "provider": "openai-codex",
+  "model": "gpt-5.6-sol",
+  "results": [
+    {
+      "schemaVersion": 2,
+      "evidenceKind": "real-model-behavioral",
+      "variant": "default",
+      "case": "new",
+      "invocation": {
+        "specificationState": "absent",
+        "invocationMode": "specification-new"
+      },
+      "fixtureConversation": [
+        {
+          "role": "user",
+          "text": "Create a specification for Orbit Ledger, a local CLI. It reads input.csv, writes JSON to standard output, never uses the network, and exits with code 2 when any input row is invalid. These decisions are final. Write the agreed specification now."
+        }
+      ],
+      "prompt": {
+        "repositoryPath": "templates/default/spec-it-out/SKILL.md",
+        "sha256": "d1af781ce5c21c942868a85aaef8f731d372ddf96ff88862093d574c422379e2"
+      },
+      "runtime": {
+        "primeAgentVersion": "0.9.1",
+        "primeRalphVersion": "0.1.0",
+        "nodeVersion": "v22.22.2",
+        "requestedProvider": "openai-codex",
+        "requestedModel": "gpt-5.6-sol"
+      },
+      "observed": {
+        "provider": "openai-codex",
+        "model": "gpt-5.6-sol",
+        "stopReason": "stop",
+        "usage": {
+          "input": 406,
+          "output": 28,
+          "cacheRead": 1664,
+          "cacheWrite": 0,
+          "totalTokens": 2098,
+          "cost": {
+            "input": 0.00203,
+            "output": 0.00084,
+            "cacheRead": 0.000832,
+            "cacheWrite": 0,
+            "total": 0.003702
+          }
+        },
+        "toolCalls": [
+          "write_specification"
+        ],
+        "finalAssistantText": "Specification written to `.ralph/plans/SPECIFICATION.md`. It records the final decisions and identifies remaining unspecified details."
+      },
+      "files": {
+        "changed": [
+          ".ralph/plans/SPECIFICATION.md"
+        ],
+        "afterManifest": {
+          ".ralph": {
+            "kind": "directory"
+          },
+          ".ralph/plans": {
+            "kind": "directory"
+          },
+          ".ralph/plans/SPECIFICATION.md": {
+            "kind": "file",
+            "bytes": 1023,
+            "sha256": "72da7cdc1e0f17dd33fcf4508cf0b7031511e68080b2bac9e5a9db1f56a911b8"
+          },
+          ".ralph/skills": {
+            "kind": "directory"
+          },
+          ".ralph/skills/spec-it-out": {
+            "kind": "directory"
+          },
+          ".ralph/skills/spec-it-out/SKILL.md": {
+            "kind": "file",
+            "bytes": 1893,
+            "sha256": "d1af781ce5c21c942868a85aaef8f731d372ddf96ff88862093d574c422379e2"
+          },
+          "acceptance-tool.mjs": {
+            "kind": "file",
+            "bytes": 2929,
+            "sha256": "c3bc60726a2b8dc194bcc6afa7e409ea44e16842b50eef07a7e3c07025dcde89"
+          }
+        },
+        "activeSpecification": {
+          "bytes": 1023,
+          "sha256": "72da7cdc1e0f17dd33fcf4508cf0b7031511e68080b2bac9e5a9db1f56a911b8",
+          "content": "# Orbit Ledger Specification\n\n## Overview\n\nOrbit Ledger is a local command-line application that reads records from a CSV file and emits JSON.\n\n## Requirements\n\n1. The application MUST run locally as a CLI.\n2. The application MUST read its input from a file named `input.csv`.\n3. The application MUST write its JSON output to standard output.\n4. The application MUST NOT use the network.\n5. The application MUST validate every input row.\n6. If any input row is invalid, the application MUST exit with status code `2`.\n\n## Acceptance Criteria\n\n- Running Orbit Ledger with a valid `input.csv` reads that file and writes JSON to standard output.\n- Orbit Ledger performs no network communication during execution.\n- If one or more rows in `input.csv` are invalid, Orbit Ledger exits with code `2`.\n\n## Open Details\n\nThe CSV schema, row-validation rules, JSON structure, behavior for missing or unreadable input, output behavior when invalid rows are present, ordering guarantees, and successful exit code are not yet specified."
+        },
+        "futureSpecification": null
+      },
+      "timing": {
+        "startedAt": "2026-09-04T02:57:15.467Z",
+        "endedAt": "2026-09-04T02:57:26.493Z",
+        "durationMs": 11026
+      },
+      "assertions": [
+        {
+          "name": "process succeeded",
+          "pass": true
+        },
+        {
+          "name": "Prime Agent 0.9.1 recorded",
+          "pass": true
+        },
+        {
+          "name": "terminal assistant response",
+          "pass": true
+        },
+        {
+          "name": "selected provider observed",
+          "pass": true
+        },
+        {
+          "name": "selected model observed",
+          "pass": true
+        },
+        {
+          "name": "no planning or execution artifact",
+          "pass": true
+        },
+        {
+          "name": "one active creation call",
+          "pass": true
+        },
+        {
+          "name": "exact active specification created",
+          "pass": true
+        },
+        {
+          "name": "all agreed decisions captured",
+          "pass": true
+        },
+        {
+          "name": "only active specification changed",
+          "pass": true
+        }
+      ],
+      "verdict": "pass"
+    },
+    {
+      "schemaVersion": 2,
+      "evidenceKind": "real-model-behavioral",
+      "variant": "default",
+      "case": "existing",
+      "invocation": {
+        "specificationState": "existing",
+        "invocationMode": "specification-existing"
+      },
+      "fixtureConversation": [
+        {
+          "role": "user",
+          "text": "I want to discuss better export errors, but I have not decided whether this belongs in the active specification or future work. Do not choose on my behalf."
+        }
+      ],
+      "prompt": {
+        "repositoryPath": "templates/default/spec-it-out/SKILL.md",
+        "sha256": "d1af781ce5c21c942868a85aaef8f731d372ddf96ff88862093d574c422379e2"
+      },
+      "runtime": {
+        "primeAgentVersion": "0.9.1",
+        "primeRalphVersion": "0.1.0",
+        "nodeVersion": "v22.22.2",
+        "requestedProvider": "openai-codex",
+        "requestedModel": "gpt-5.6-sol"
+      },
+      "observed": {
+        "provider": "openai-codex",
+        "model": "gpt-5.6-sol",
+        "stopReason": "stop",
+        "usage": {
+          "input": 1735,
+          "output": 83,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "totalTokens": 1818,
+          "cost": {
+            "input": 0.008675,
+            "output": 0.00249,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0.011165000000000001
+          }
+        },
+        "toolCalls": [],
+        "finalAssistantText": "An active specification already exists. I won’t choose where “better export errors” belongs or modify anything without your explicit decision.\n\n1. Create a future specification at `.ralph/plans/future/export-errors/SPECIFICATION.md`.\n2. Discuss the active specification, then update it in place only after explicit agreement.\n3. Cancel without changing or creating any specification.\n\nWhich option do you choose?"
+      },
+      "files": {
+        "changed": [],
+        "afterManifest": {
+          ".ralph": {
+            "kind": "directory"
+          },
+          ".ralph/plans": {
+            "kind": "directory"
+          },
+          ".ralph/plans/SPECIFICATION.md": {
+            "kind": "file",
+            "bytes": 61,
+            "sha256": "25ef425b0004447112c760ad01a09b68789d55c1eff46ca652403c24e71c307a"
+          },
+          ".ralph/skills": {
+            "kind": "directory"
+          },
+          ".ralph/skills/spec-it-out": {
+            "kind": "directory"
+          },
+          ".ralph/skills/spec-it-out/SKILL.md": {
+            "kind": "file",
+            "bytes": 1893,
+            "sha256": "d1af781ce5c21c942868a85aaef8f731d372ddf96ff88862093d574c422379e2"
+          },
+          "acceptance-tool.mjs": {
+            "kind": "file",
+            "bytes": 2929,
+            "sha256": "c3bc60726a2b8dc194bcc6afa7e409ea44e16842b50eef07a7e3c07025dcde89"
+          }
+        },
+        "activeSpecification": {
+          "bytes": 61,
+          "sha256": "25ef425b0004447112c760ad01a09b68789d55c1eff46ca652403c24e71c307a",
+          "content": "# Existing specification\n\nCurrent export behavior is stable.\n"
+        },
+        "futureSpecification": null
+      },
+      "timing": {
+        "startedAt": "2026-09-04T02:57:26.496Z",
+        "endedAt": "2026-09-04T02:57:30.136Z",
+        "durationMs": 3640
+      },
+      "assertions": [
+        {
+          "name": "process succeeded",
+          "pass": true
+        },
+        {
+          "name": "Prime Agent 0.9.1 recorded",
+          "pass": true
+        },
+        {
+          "name": "terminal assistant response",
+          "pass": true
+        },
+        {
+          "name": "selected provider observed",
+          "pass": true
+        },
+        {
+          "name": "selected model observed",
+          "pass": true
+        },
+        {
+          "name": "no planning or execution artifact",
+          "pass": true
+        },
+        {
+          "name": "no mutation call",
+          "pass": true
+        },
+        {
+          "name": "active specification unchanged",
+          "pass": true
+        },
+        {
+          "name": "no fixture files changed",
+          "pass": true
+        },
+        {
+          "name": "warns active specification exists",
+          "pass": true
+        },
+        {
+          "name": "offers future specification",
+          "pass": true
+        },
+        {
+          "name": "offers active discussion or update",
+          "pass": true
+        },
+        {
+          "name": "offers cancellation",
+          "pass": true
+        },
+        {
+          "name": "offers three choices",
+          "pass": true
+        }
+      ],
+      "verdict": "pass"
+    },
+    {
+      "schemaVersion": 2,
+      "evidenceKind": "real-model-behavioral",
+      "variant": "default",
+      "case": "future",
+      "invocation": {
+        "specificationState": "existing",
+        "invocationMode": "specification-existing"
+      },
+      "fixtureConversation": [
+        {
+          "role": "user",
+          "text": "I want to discuss better export errors, but I have not decided whether this belongs in the active specification or future work. Do not choose on my behalf."
+        },
+        {
+          "role": "assistant",
+          "text": "An active specification already exists. Choose: 1. create a future specification after explicit confirmation; 2. discuss and update the active specification after explicit agreement; 3. cancel without changes."
+        },
+        {
+          "role": "user",
+          "text": "I choose option 1 and explicitly confirm a future specification named export-errors. It should require a machine-readable error object on standard error. Create it now."
+        }
+      ],
+      "prompt": {
+        "repositoryPath": "templates/default/spec-it-out/SKILL.md",
+        "sha256": "d1af781ce5c21c942868a85aaef8f731d372ddf96ff88862093d574c422379e2"
+      },
+      "runtime": {
+        "primeAgentVersion": "0.9.1",
+        "primeRalphVersion": "0.1.0",
+        "nodeVersion": "v22.22.2",
+        "requestedProvider": "openai-codex",
+        "requestedModel": "gpt-5.6-sol"
+      },
+      "observed": {
+        "provider": "openai-codex",
+        "model": "gpt-5.6-sol",
+        "stopReason": "stop",
+        "usage": {
+          "input": 399,
+          "output": 41,
+          "cacheRead": 1664,
+          "cacheWrite": 0,
+          "totalTokens": 2104,
+          "cost": {
+            "input": 0.0019950000000000002,
+            "output": 0.00123,
+            "cacheRead": 0.000832,
+            "cacheWrite": 0,
+            "total": 0.004057000000000001
+          }
+        },
+        "toolCalls": [
+          "write_future_specification"
+        ],
+        "finalAssistantText": "Created the future specification at:\n\n`.ralph/plans/future/export-errors/SPECIFICATION.md`\n\nThe active specification was not changed. Serialization format and required error fields remain open questions."
+      },
+      "files": {
+        "changed": [
+          ".ralph/plans/future",
+          ".ralph/plans/future/export-errors",
+          ".ralph/plans/future/export-errors/SPECIFICATION.md"
+        ],
+        "afterManifest": {
+          ".ralph": {
+            "kind": "directory"
+          },
+          ".ralph/plans": {
+            "kind": "directory"
+          },
+          ".ralph/plans/SPECIFICATION.md": {
+            "kind": "file",
+            "bytes": 61,
+            "sha256": "25ef425b0004447112c760ad01a09b68789d55c1eff46ca652403c24e71c307a"
+          },
+          ".ralph/plans/future": {
+            "kind": "directory"
+          },
+          ".ralph/plans/future/export-errors": {
+            "kind": "directory"
+          },
+          ".ralph/plans/future/export-errors/SPECIFICATION.md": {
+            "kind": "file",
+            "bytes": 669,
+            "sha256": "bea727fa40174314b4c68b474986e6c13ef49eba7f5bc7200b19395574c28bff"
+          },
+          ".ralph/skills": {
+            "kind": "directory"
+          },
+          ".ralph/skills/spec-it-out": {
+            "kind": "directory"
+          },
+          ".ralph/skills/spec-it-out/SKILL.md": {
+            "kind": "file",
+            "bytes": 1893,
+            "sha256": "d1af781ce5c21c942868a85aaef8f731d372ddf96ff88862093d574c422379e2"
+          },
+          "acceptance-tool.mjs": {
+            "kind": "file",
+            "bytes": 2929,
+            "sha256": "c3bc60726a2b8dc194bcc6afa7e409ea44e16842b50eef07a7e3c07025dcde89"
+          }
+        },
+        "activeSpecification": {
+          "bytes": 61,
+          "sha256": "25ef425b0004447112c760ad01a09b68789d55c1eff46ca652403c24e71c307a",
+          "content": "# Existing specification\n\nCurrent export behavior is stable.\n"
+        },
+        "futureSpecification": {
+          "bytes": 669,
+          "sha256": "bea727fa40174314b4c68b474986e6c13ef49eba7f5bc7200b19395574c28bff",
+          "content": "# Export Errors\n\n## Goal\n\nProvide machine-readable error output for export failures.\n\n## Requirements\n\n- When an export operation fails, write a machine-readable error object to standard error (`stderr`).\n- The error output must be an object rather than unstructured prose.\n- Successful export behavior is unchanged.\n\n## Acceptance Criteria\n\n- A failed export emits a machine-readable error object on `stderr`.\n- The emitted error object can be parsed by consumers without interpreting human-readable text.\n- A successful export does not emit an error object.\n\n## Open Questions\n\n- The serialization format and required fields of the error object remain to be defined.\n"
+        }
+      },
+      "timing": {
+        "startedAt": "2026-09-04T02:57:30.137Z",
+        "endedAt": "2026-09-04T02:57:40.885Z",
+        "durationMs": 10748
+      },
+      "assertions": [
+        {
+          "name": "process succeeded",
+          "pass": true
+        },
+        {
+          "name": "Prime Agent 0.9.1 recorded",
+          "pass": true
+        },
+        {
+          "name": "terminal assistant response",
+          "pass": true
+        },
+        {
+          "name": "selected provider observed",
+          "pass": true
+        },
+        {
+          "name": "selected model observed",
+          "pass": true
+        },
+        {
+          "name": "no planning or execution artifact",
+          "pass": true
+        },
+        {
+          "name": "one future creation call",
+          "pass": true
+        },
+        {
+          "name": "active specification unchanged",
+          "pass": true
+        },
+        {
+          "name": "future specification created",
+          "pass": true
+        },
+        {
+          "name": "only confirmed future tree changed",
+          "pass": true
+        }
+      ],
+      "verdict": "pass"
+    },
+    {
+      "schemaVersion": 2,
+      "evidenceKind": "real-model-behavioral",
+      "variant": "default",
+      "case": "update",
+      "invocation": {
+        "specificationState": "existing",
+        "invocationMode": "specification-existing"
+      },
+      "fixtureConversation": [
+        {
+          "role": "user",
+          "text": "I want to discuss better export errors, but I have not decided whether this belongs in the active specification or future work. Do not choose on my behalf."
+        },
+        {
+          "role": "assistant",
+          "text": "An active specification already exists. Choose: 1. create a future specification after explicit confirmation; 2. discuss and update the active specification after explicit agreement; 3. cancel without changes."
+        },
+        {
+          "role": "user",
+          "text": "I choose option 2. We discussed it, and I explicitly agree to update the active specification in place with a requirement for a machine-readable error object on standard error. Update it now."
+        }
+      ],
+      "prompt": {
+        "repositoryPath": "templates/default/spec-it-out/SKILL.md",
+        "sha256": "d1af781ce5c21c942868a85aaef8f731d372ddf96ff88862093d574c422379e2"
+      },
+      "runtime": {
+        "primeAgentVersion": "0.9.1",
+        "primeRalphVersion": "0.1.0",
+        "nodeVersion": "v22.22.2",
+        "requestedProvider": "openai-codex",
+        "requestedModel": "gpt-5.6-sol"
+      },
+      "observed": {
+        "provider": "openai-codex",
+        "model": "gpt-5.6-sol",
+        "stopReason": "stop",
+        "usage": {
+          "input": 1962,
+          "output": 21,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "totalTokens": 1983,
+          "cost": {
+            "input": 0.009810000000000001,
+            "output": 0.00063,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0.010440000000000001
+          }
+        },
+        "toolCalls": [
+          "update_active_specification"
+        ],
+        "finalAssistantText": "Updated the active specification in place with the machine-readable export error requirement for standard error."
+      },
+      "files": {
+        "changed": [
+          ".ralph/plans/SPECIFICATION.md"
+        ],
+        "afterManifest": {
+          ".ralph": {
+            "kind": "directory"
+          },
+          ".ralph/plans": {
+            "kind": "directory"
+          },
+          ".ralph/plans/SPECIFICATION.md": {
+            "kind": "file",
+            "bytes": 111,
+            "sha256": "0caa4eea110732be8a639dc36e21164a00b2df45d23231b8f534d04bf4230d2f"
+          },
+          ".ralph/skills": {
+            "kind": "directory"
+          },
+          ".ralph/skills/spec-it-out": {
+            "kind": "directory"
+          },
+          ".ralph/skills/spec-it-out/SKILL.md": {
+            "kind": "file",
+            "bytes": 1893,
+            "sha256": "d1af781ce5c21c942868a85aaef8f731d372ddf96ff88862093d574c422379e2"
+          },
+          "acceptance-tool.mjs": {
+            "kind": "file",
+            "bytes": 2929,
+            "sha256": "c3bc60726a2b8dc194bcc6afa7e409ea44e16842b50eef07a7e3c07025dcde89"
+          }
+        },
+        "activeSpecification": {
+          "bytes": 111,
+          "sha256": "0caa4eea110732be8a639dc36e21164a00b2df45d23231b8f534d04bf4230d2f",
+          "content": "# Specification\n\n## Export errors\n\nExport failures must emit a machine-readable error object on standard error."
+        },
+        "futureSpecification": null
+      },
+      "timing": {
+        "startedAt": "2026-09-04T02:57:40.886Z",
+        "endedAt": "2026-09-04T02:57:47.790Z",
+        "durationMs": 6904
+      },
+      "assertions": [
+        {
+          "name": "process succeeded",
+          "pass": true
+        },
+        {
+          "name": "Prime Agent 0.9.1 recorded",
+          "pass": true
+        },
+        {
+          "name": "terminal assistant response",
+          "pass": true
+        },
+        {
+          "name": "selected provider observed",
+          "pass": true
+        },
+        {
+          "name": "selected model observed",
+          "pass": true
+        },
+        {
+          "name": "no planning or execution artifact",
+          "pass": true
+        },
+        {
+          "name": "one active update call",
+          "pass": true
+        },
+        {
+          "name": "active specification changed",
+          "pass": true
+        },
+        {
+          "name": "only active specification changed",
+          "pass": true
+        }
+      ],
+      "verdict": "pass"
+    },
+    {
+      "schemaVersion": 2,
+      "evidenceKind": "real-model-behavioral",
+      "variant": "default",
+      "case": "cancel",
+      "invocation": {
+        "specificationState": "existing",
+        "invocationMode": "specification-existing"
+      },
+      "fixtureConversation": [
+        {
+          "role": "user",
+          "text": "I want to discuss better export errors, but I have not decided whether this belongs in the active specification or future work. Do not choose on my behalf."
+        },
+        {
+          "role": "assistant",
+          "text": "An active specification already exists. Choose: 1. create a future specification after explicit confirmation; 2. discuss and update the active specification after explicit agreement; 3. cancel without changes."
+        },
+        {
+          "role": "user",
+          "text": "I choose option 3. Cancel without changing or creating any specification."
+        }
+      ],
+      "prompt": {
+        "repositoryPath": "templates/default/spec-it-out/SKILL.md",
+        "sha256": "d1af781ce5c21c942868a85aaef8f731d372ddf96ff88862093d574c422379e2"
+      },
+      "runtime": {
+        "primeAgentVersion": "0.9.1",
+        "primeRalphVersion": "0.1.0",
+        "nodeVersion": "v22.22.2",
+        "requestedProvider": "openai-codex",
+        "requestedModel": "gpt-5.6-sol"
+      },
+      "observed": {
+        "provider": "openai-codex",
+        "model": "gpt-5.6-sol",
+        "stopReason": "stop",
+        "usage": {
+          "input": 1806,
+          "output": 13,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "totalTokens": 1819,
+          "cost": {
+            "input": 0.009030000000000002,
+            "output": 0.00039,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0.009420000000000001
+          }
+        },
+        "toolCalls": [],
+        "finalAssistantText": "Cancelled. No specification was changed or created."
+      },
+      "files": {
+        "changed": [],
+        "afterManifest": {
+          ".ralph": {
+            "kind": "directory"
+          },
+          ".ralph/plans": {
+            "kind": "directory"
+          },
+          ".ralph/plans/SPECIFICATION.md": {
+            "kind": "file",
+            "bytes": 61,
+            "sha256": "25ef425b0004447112c760ad01a09b68789d55c1eff46ca652403c24e71c307a"
+          },
+          ".ralph/skills": {
+            "kind": "directory"
+          },
+          ".ralph/skills/spec-it-out": {
+            "kind": "directory"
+          },
+          ".ralph/skills/spec-it-out/SKILL.md": {
+            "kind": "file",
+            "bytes": 1893,
+            "sha256": "d1af781ce5c21c942868a85aaef8f731d372ddf96ff88862093d574c422379e2"
+          },
+          "acceptance-tool.mjs": {
+            "kind": "file",
+            "bytes": 2929,
+            "sha256": "c3bc60726a2b8dc194bcc6afa7e409ea44e16842b50eef07a7e3c07025dcde89"
+          }
+        },
+        "activeSpecification": {
+          "bytes": 61,
+          "sha256": "25ef425b0004447112c760ad01a09b68789d55c1eff46ca652403c24e71c307a",
+          "content": "# Existing specification\n\nCurrent export behavior is stable.\n"
+        },
+        "futureSpecification": null
+      },
+      "timing": {
+        "startedAt": "2026-09-04T02:57:47.792Z",
+        "endedAt": "2026-09-04T02:57:50.625Z",
+        "durationMs": 2833
+      },
+      "assertions": [
+        {
+          "name": "process succeeded",
+          "pass": true
+        },
+        {
+          "name": "Prime Agent 0.9.1 recorded",
+          "pass": true
+        },
+        {
+          "name": "terminal assistant response",
+          "pass": true
+        },
+        {
+          "name": "selected provider observed",
+          "pass": true
+        },
+        {
+          "name": "selected model observed",
+          "pass": true
+        },
+        {
+          "name": "no planning or execution artifact",
+          "pass": true
+        },
+        {
+          "name": "cancel performs no tool call",
+          "pass": true
+        },
+        {
+          "name": "active specification unchanged",
+          "pass": true
+        },
+        {
+          "name": "cancel changes no files",
+          "pass": true
+        }
+      ],
+      "verdict": "pass"
+    },
+    {
+      "schemaVersion": 2,
+      "evidenceKind": "real-model-behavioral",
+      "variant": "default",
+      "case": "reset-existing",
+      "invocation": {
+        "specificationState": "existing",
+        "invocationMode": "specification-reset-existing"
+      },
+      "fixtureConversation": [
+        {
+          "role": "user",
+          "text": "The prior source conversation was cleared by the reset."
+        }
+      ],
+      "prompt": {
+        "repositoryPath": "templates/default/spec-it-out/SKILL.md",
+        "sha256": "d1af781ce5c21c942868a85aaef8f731d372ddf96ff88862093d574c422379e2"
+      },
+      "runtime": {
+        "primeAgentVersion": "0.9.1",
+        "primeRalphVersion": "0.1.0",
+        "nodeVersion": "v22.22.2",
+        "requestedProvider": "openai-codex",
+        "requestedModel": "gpt-5.6-sol"
+      },
+      "observed": {
+        "provider": "openai-codex",
+        "model": "gpt-5.6-sol",
+        "stopReason": "stop",
+        "usage": {
+          "input": 1719,
+          "output": 43,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "totalTokens": 1762,
+          "cost": {
+            "input": 0.008595,
+            "output": 0.0012900000000000001,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0.009885
+          }
+        },
+        "toolCalls": [],
+        "finalAssistantText": "An active specification already exists, but the prior context was cleared.\n\nChoose one:\n\n1. Discuss the active specification, then explicitly agree to update it in place.\n2. Cancel without changing it."
+      },
+      "files": {
+        "changed": [],
+        "afterManifest": {
+          ".ralph": {
+            "kind": "directory"
+          },
+          ".ralph/plans": {
+            "kind": "directory"
+          },
+          ".ralph/plans/SPECIFICATION.md": {
+            "kind": "file",
+            "bytes": 61,
+            "sha256": "25ef425b0004447112c760ad01a09b68789d55c1eff46ca652403c24e71c307a"
+          },
+          ".ralph/skills": {
+            "kind": "directory"
+          },
+          ".ralph/skills/spec-it-out": {
+            "kind": "directory"
+          },
+          ".ralph/skills/spec-it-out/SKILL.md": {
+            "kind": "file",
+            "bytes": 1893,
+            "sha256": "d1af781ce5c21c942868a85aaef8f731d372ddf96ff88862093d574c422379e2"
+          },
+          "acceptance-tool.mjs": {
+            "kind": "file",
+            "bytes": 2929,
+            "sha256": "c3bc60726a2b8dc194bcc6afa7e409ea44e16842b50eef07a7e3c07025dcde89"
+          }
+        },
+        "activeSpecification": {
+          "bytes": 61,
+          "sha256": "25ef425b0004447112c760ad01a09b68789d55c1eff46ca652403c24e71c307a",
+          "content": "# Existing specification\n\nCurrent export behavior is stable.\n"
+        },
+        "futureSpecification": null
+      },
+      "timing": {
+        "startedAt": "2026-09-04T02:57:50.626Z",
+        "endedAt": "2026-09-04T02:57:54.230Z",
+        "durationMs": 3604
+      },
+      "assertions": [
+        {
+          "name": "process succeeded",
+          "pass": true
+        },
+        {
+          "name": "Prime Agent 0.9.1 recorded",
+          "pass": true
+        },
+        {
+          "name": "terminal assistant response",
+          "pass": true
+        },
+        {
+          "name": "selected provider observed",
+          "pass": true
+        },
+        {
+          "name": "selected model observed",
+          "pass": true
+        },
+        {
+          "name": "no planning or execution artifact",
+          "pass": true
+        },
+        {
+          "name": "reset-existing performs no tool call",
+          "pass": true
+        },
+        {
+          "name": "active specification unchanged",
+          "pass": true
+        },
+        {
+          "name": "reset-existing changes no files",
+          "pass": true
+        },
+        {
+          "name": "offers active discussion or update",
+          "pass": true
+        },
+        {
+          "name": "offers cancellation",
+          "pass": true
+        },
+        {
+          "name": "does not offer future specification",
+          "pass": true
+        }
+      ],
+      "verdict": "pass"
+    },
+    {
+      "schemaVersion": 2,
+      "evidenceKind": "real-model-behavioral",
+      "variant": "beads",
+      "case": "new",
+      "invocation": {
+        "specificationState": "absent",
+        "invocationMode": "specification-new"
+      },
+      "fixtureConversation": [
+        {
+          "role": "user",
+          "text": "Create a specification for Orbit Ledger, a local CLI. It reads input.csv, writes JSON to standard output, never uses the network, and exits with code 2 when any input row is invalid. These decisions are final. Write the agreed specification now."
+        }
+      ],
+      "prompt": {
+        "repositoryPath": "templates/beads/spec-it-out/SKILL.md",
+        "sha256": "88cb4820f3680b18b0d5637654f51edae77d7e65aae302e183b8d8aef41bcf9e"
+      },
+      "runtime": {
+        "primeAgentVersion": "0.9.1",
+        "primeRalphVersion": "0.1.0",
+        "nodeVersion": "v22.22.2",
+        "requestedProvider": "openai-codex",
+        "requestedModel": "gpt-5.6-sol"
+      },
+      "observed": {
+        "provider": "openai-codex",
+        "model": "gpt-5.6-sol",
+        "stopReason": "stop",
+        "usage": {
+          "input": 568,
+          "output": 46,
+          "cacheRead": 1664,
+          "cacheWrite": 0,
+          "totalTokens": 2278,
+          "cost": {
+            "input": 0.00284,
+            "output": 0.00138,
+            "cacheRead": 0.000832,
+            "cacheWrite": 0,
+            "total": 0.005052
+          }
+        },
+        "toolCalls": [
+          "write_specification"
+        ],
+        "finalAssistantText": "Created the active specification at `.ralph/plans/SPECIFICATION.md`.\n\nIt records the final decisions and identifies unresolved data-contract and error-handling details for further specification discussion. No planning or implementation was started."
+      },
+      "files": {
+        "changed": [
+          ".ralph/plans/SPECIFICATION.md"
+        ],
+        "afterManifest": {
+          ".beads": {
+            "kind": "directory"
+          },
+          ".beads/sentinel": {
+            "kind": "file",
+            "bytes": 10,
+            "sha256": "1cd263f1102656dd6b6cf1d626d1a96f9eba0406af3cb2a52560d473d4801052"
+          },
+          ".ralph": {
+            "kind": "directory"
+          },
+          ".ralph/plans": {
+            "kind": "directory"
+          },
+          ".ralph/plans/SPECIFICATION.md": {
+            "kind": "file",
+            "bytes": 1473,
+            "sha256": "2ac4c23b44a384b401e3ed7e52e290c74e53ef391aaaec1e0707254ba29834f2"
+          },
+          ".ralph/skills": {
+            "kind": "directory"
+          },
+          ".ralph/skills/spec-it-out": {
+            "kind": "directory"
+          },
+          ".ralph/skills/spec-it-out/SKILL.md": {
+            "kind": "file",
+            "bytes": 2097,
+            "sha256": "88cb4820f3680b18b0d5637654f51edae77d7e65aae302e183b8d8aef41bcf9e"
+          },
+          "acceptance-tool.mjs": {
+            "kind": "file",
+            "bytes": 2929,
+            "sha256": "c3bc60726a2b8dc194bcc6afa7e409ea44e16842b50eef07a7e3c07025dcde89"
+          }
+        },
+        "activeSpecification": {
+          "bytes": 1473,
+          "sha256": "2ac4c23b44a384b401e3ed7e52e290c74e53ef391aaaec1e0707254ba29834f2",
+          "content": "# Orbit Ledger Specification\n\n## Overview\n\nOrbit Ledger is a local command-line application that converts data from a CSV file into JSON.\n\n## Requirements\n\n1. The CLI MUST read its input from a file named `input.csv`.\n2. The CLI MUST write its JSON result to standard output.\n3. The CLI MUST NOT use the network.\n4. The CLI MUST validate every input row.\n5. If any input row is invalid, the CLI MUST exit with status code `2`.\n\n## Error behavior\n\n- The required status code for any invalid input row is `2`.\n- No other error codes or diagnostic-output behavior are specified yet.\n- Whether JSON may be written when one or more rows are invalid is not specified yet.\n\n## Data contract\n\nThe following details remain unspecified and require agreement before implementation planning:\n\n- the location from which `input.csv` is resolved;\n- the CSV columns, header requirements, field types, and row-validity rules;\n- the structure and formatting of the JSON output;\n- ordering requirements;\n- behavior for an empty file, missing file, malformed CSV, or file I/O failure;\n- successful exit status;\n- whether diagnostics are written to standard error.\n\n## Acceptance criteria\n\n- Given an input containing only valid rows, Orbit Ledger reads `input.csv` and emits JSON on standard output without making any network request.\n- Given an input containing at least one invalid row, Orbit Ledger exits with status code `2`.\n- During any invocation, Orbit Ledger makes no network request."
+        },
+        "futureSpecification": null
+      },
+      "timing": {
+        "startedAt": "2026-09-04T02:57:54.231Z",
+        "endedAt": "2026-09-04T02:58:09.225Z",
+        "durationMs": 14994
+      },
+      "assertions": [
+        {
+          "name": "process succeeded",
+          "pass": true
+        },
+        {
+          "name": "Prime Agent 0.9.1 recorded",
+          "pass": true
+        },
+        {
+          "name": "terminal assistant response",
+          "pass": true
+        },
+        {
+          "name": "selected provider observed",
+          "pass": true
+        },
+        {
+          "name": "selected model observed",
+          "pass": true
+        },
+        {
+          "name": "no planning or execution artifact",
+          "pass": true
+        },
+        {
+          "name": "one active creation call",
+          "pass": true
+        },
+        {
+          "name": "exact active specification created",
+          "pass": true
+        },
+        {
+          "name": "all agreed decisions captured",
+          "pass": true
+        },
+        {
+          "name": "only active specification changed",
+          "pass": true
+        },
+        {
+          "name": "Beads state unchanged",
+          "pass": true
+        }
+      ],
+      "verdict": "pass"
+    },
+    {
+      "schemaVersion": 2,
+      "evidenceKind": "real-model-behavioral",
+      "variant": "beads",
+      "case": "existing",
+      "invocation": {
+        "specificationState": "existing",
+        "invocationMode": "specification-existing"
+      },
+      "fixtureConversation": [
+        {
+          "role": "user",
+          "text": "I want to discuss better export errors, but I have not decided whether this belongs in the active specification or future work. Do not choose on my behalf."
+        }
+      ],
+      "prompt": {
+        "repositoryPath": "templates/beads/spec-it-out/SKILL.md",
+        "sha256": "88cb4820f3680b18b0d5637654f51edae77d7e65aae302e183b8d8aef41bcf9e"
+      },
+      "runtime": {
+        "primeAgentVersion": "0.9.1",
+        "primeRalphVersion": "0.1.0",
+        "nodeVersion": "v22.22.2",
+        "requestedProvider": "openai-codex",
+        "requestedModel": "gpt-5.6-sol"
+      },
+      "observed": {
+        "provider": "openai-codex",
+        "model": "gpt-5.6-sol",
+        "stopReason": "stop",
+        "usage": {
+          "input": 1774,
+          "output": 109,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "totalTokens": 1883,
+          "cost": {
+            "input": 0.008870000000000001,
+            "output": 0.00327,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0.012140000000000001
+          }
+        },
+        "toolCalls": [],
+        "finalAssistantText": "An active specification already exists. I won’t modify it or decide where “better export errors” belongs without your explicit choice:\n\n1. Create a future specification at `.ralph/plans/future/export-errors/SPECIFICATION.md` after we agree on its contents.\n2. Discuss the active specification and update it in place only after explicit agreement.\n3. Cancel without changing or creating any specification.\n\nWhich option do you choose?"
+      },
+      "files": {
+        "changed": [],
+        "afterManifest": {
+          ".beads": {
+            "kind": "directory"
+          },
+          ".beads/sentinel": {
+            "kind": "file",
+            "bytes": 10,
+            "sha256": "1cd263f1102656dd6b6cf1d626d1a96f9eba0406af3cb2a52560d473d4801052"
+          },
+          ".ralph": {
+            "kind": "directory"
+          },
+          ".ralph/plans": {
+            "kind": "directory"
+          },
+          ".ralph/plans/SPECIFICATION.md": {
+            "kind": "file",
+            "bytes": 61,
+            "sha256": "25ef425b0004447112c760ad01a09b68789d55c1eff46ca652403c24e71c307a"
+          },
+          ".ralph/skills": {
+            "kind": "directory"
+          },
+          ".ralph/skills/spec-it-out": {
+            "kind": "directory"
+          },
+          ".ralph/skills/spec-it-out/SKILL.md": {
+            "kind": "file",
+            "bytes": 2097,
+            "sha256": "88cb4820f3680b18b0d5637654f51edae77d7e65aae302e183b8d8aef41bcf9e"
+          },
+          "acceptance-tool.mjs": {
+            "kind": "file",
+            "bytes": 2929,
+            "sha256": "c3bc60726a2b8dc194bcc6afa7e409ea44e16842b50eef07a7e3c07025dcde89"
+          }
+        },
+        "activeSpecification": {
+          "bytes": 61,
+          "sha256": "25ef425b0004447112c760ad01a09b68789d55c1eff46ca652403c24e71c307a",
+          "content": "# Existing specification\n\nCurrent export behavior is stable.\n"
+        },
+        "futureSpecification": null
+      },
+      "timing": {
+        "startedAt": "2026-09-04T02:58:09.227Z",
+        "endedAt": "2026-09-04T02:58:13.209Z",
+        "durationMs": 3982
+      },
+      "assertions": [
+        {
+          "name": "process succeeded",
+          "pass": true
+        },
+        {
+          "name": "Prime Agent 0.9.1 recorded",
+          "pass": true
+        },
+        {
+          "name": "terminal assistant response",
+          "pass": true
+        },
+        {
+          "name": "selected provider observed",
+          "pass": true
+        },
+        {
+          "name": "selected model observed",
+          "pass": true
+        },
+        {
+          "name": "no planning or execution artifact",
+          "pass": true
+        },
+        {
+          "name": "no mutation call",
+          "pass": true
+        },
+        {
+          "name": "active specification unchanged",
+          "pass": true
+        },
+        {
+          "name": "no fixture files changed",
+          "pass": true
+        },
+        {
+          "name": "warns active specification exists",
+          "pass": true
+        },
+        {
+          "name": "offers future specification",
+          "pass": true
+        },
+        {
+          "name": "offers active discussion or update",
+          "pass": true
+        },
+        {
+          "name": "offers cancellation",
+          "pass": true
+        },
+        {
+          "name": "offers three choices",
+          "pass": true
+        },
+        {
+          "name": "Beads state unchanged",
+          "pass": true
+        }
+      ],
+      "verdict": "pass"
+    },
+    {
+      "schemaVersion": 2,
+      "evidenceKind": "real-model-behavioral",
+      "variant": "beads",
+      "case": "future",
+      "invocation": {
+        "specificationState": "existing",
+        "invocationMode": "specification-existing"
+      },
+      "fixtureConversation": [
+        {
+          "role": "user",
+          "text": "I want to discuss better export errors, but I have not decided whether this belongs in the active specification or future work. Do not choose on my behalf."
+        },
+        {
+          "role": "assistant",
+          "text": "An active specification already exists. Choose: 1. create a future specification after explicit confirmation; 2. discuss and update the active specification after explicit agreement; 3. cancel without changes."
+        },
+        {
+          "role": "user",
+          "text": "I choose option 1 and explicitly confirm a future specification named export-errors. It should require a machine-readable error object on standard error. Create it now."
+        }
+      ],
+      "prompt": {
+        "repositoryPath": "templates/beads/spec-it-out/SKILL.md",
+        "sha256": "88cb4820f3680b18b0d5637654f51edae77d7e65aae302e183b8d8aef41bcf9e"
+      },
+      "runtime": {
+        "primeAgentVersion": "0.9.1",
+        "primeRalphVersion": "0.1.0",
+        "nodeVersion": "v22.22.2",
+        "requestedProvider": "openai-codex",
+        "requestedModel": "gpt-5.6-sol"
+      },
+      "observed": {
+        "provider": "openai-codex",
+        "model": "gpt-5.6-sol",
+        "stopReason": "stop",
+        "usage": {
+          "input": 393,
+          "output": 29,
+          "cacheRead": 1664,
+          "cacheWrite": 0,
+          "totalTokens": 2086,
+          "cost": {
+            "input": 0.001965,
+            "output": 0.00087,
+            "cacheRead": 0.000832,
+            "cacheWrite": 0,
+            "total": 0.003667
+          }
+        },
+        "toolCalls": [
+          "write_future_specification"
+        ],
+        "finalAssistantText": "Created the future specification at `.ralph/plans/future/export-errors/SPECIFICATION.md`. The active specification was unchanged."
+      },
+      "files": {
+        "changed": [
+          ".ralph/plans/future",
+          ".ralph/plans/future/export-errors",
+          ".ralph/plans/future/export-errors/SPECIFICATION.md"
+        ],
+        "afterManifest": {
+          ".beads": {
+            "kind": "directory"
+          },
+          ".beads/sentinel": {
+            "kind": "file",
+            "bytes": 10,
+            "sha256": "1cd263f1102656dd6b6cf1d626d1a96f9eba0406af3cb2a52560d473d4801052"
+          },
+          ".ralph": {
+            "kind": "directory"
+          },
+          ".ralph/plans": {
+            "kind": "directory"
+          },
+          ".ralph/plans/SPECIFICATION.md": {
+            "kind": "file",
+            "bytes": 61,
+            "sha256": "25ef425b0004447112c760ad01a09b68789d55c1eff46ca652403c24e71c307a"
+          },
+          ".ralph/plans/future": {
+            "kind": "directory"
+          },
+          ".ralph/plans/future/export-errors": {
+            "kind": "directory"
+          },
+          ".ralph/plans/future/export-errors/SPECIFICATION.md": {
+            "kind": "file",
+            "bytes": 618,
+            "sha256": "44111baef66d5260b832ccd2461cf4413107508f80c6f8bbdaea427bffcfbfd7"
+          },
+          ".ralph/skills": {
+            "kind": "directory"
+          },
+          ".ralph/skills/spec-it-out": {
+            "kind": "directory"
+          },
+          ".ralph/skills/spec-it-out/SKILL.md": {
+            "kind": "file",
+            "bytes": 2097,
+            "sha256": "88cb4820f3680b18b0d5637654f51edae77d7e65aae302e183b8d8aef41bcf9e"
+          },
+          "acceptance-tool.mjs": {
+            "kind": "file",
+            "bytes": 2929,
+            "sha256": "c3bc60726a2b8dc194bcc6afa7e409ea44e16842b50eef07a7e3c07025dcde89"
+          }
+        },
+        "activeSpecification": {
+          "bytes": 61,
+          "sha256": "25ef425b0004447112c760ad01a09b68789d55c1eff46ca652403c24e71c307a",
+          "content": "# Existing specification\n\nCurrent export behavior is stable.\n"
+        },
+        "futureSpecification": {
+          "bytes": 618,
+          "sha256": "44111baef66d5260b832ccd2461cf4413107508f80c6f8bbdaea427bffcfbfd7",
+          "content": "# Export Errors\n\n## Requirement\n\nExport failures must emit a machine-readable error object to standard error (`stderr`).\n\n## Acceptance Criteria\n\n- When an export operation fails, `stderr` contains a structured, machine-readable error object.\n- The error output is written to `stderr`, not standard output (`stdout`).\n- The object provides enough information for callers to identify the error programmatically.\n- Successful export output is not contaminated by the machine-readable error object.\n\n## Status\n\nThis is a future specification and is not active until deliberately moved to `.ralph/plans/SPECIFICATION.md`.\n"
+        }
+      },
+      "timing": {
+        "startedAt": "2026-09-04T02:58:13.211Z",
+        "endedAt": "2026-09-04T02:58:22.881Z",
+        "durationMs": 9670
+      },
+      "assertions": [
+        {
+          "name": "process succeeded",
+          "pass": true
+        },
+        {
+          "name": "Prime Agent 0.9.1 recorded",
+          "pass": true
+        },
+        {
+          "name": "terminal assistant response",
+          "pass": true
+        },
+        {
+          "name": "selected provider observed",
+          "pass": true
+        },
+        {
+          "name": "selected model observed",
+          "pass": true
+        },
+        {
+          "name": "no planning or execution artifact",
+          "pass": true
+        },
+        {
+          "name": "one future creation call",
+          "pass": true
+        },
+        {
+          "name": "active specification unchanged",
+          "pass": true
+        },
+        {
+          "name": "future specification created",
+          "pass": true
+        },
+        {
+          "name": "only confirmed future tree changed",
+          "pass": true
+        },
+        {
+          "name": "Beads state unchanged",
+          "pass": true
+        }
+      ],
+      "verdict": "pass"
+    },
+    {
+      "schemaVersion": 2,
+      "evidenceKind": "real-model-behavioral",
+      "variant": "beads",
+      "case": "update",
+      "invocation": {
+        "specificationState": "existing",
+        "invocationMode": "specification-existing"
+      },
+      "fixtureConversation": [
+        {
+          "role": "user",
+          "text": "I want to discuss better export errors, but I have not decided whether this belongs in the active specification or future work. Do not choose on my behalf."
+        },
+        {
+          "role": "assistant",
+          "text": "An active specification already exists. Choose: 1. create a future specification after explicit confirmation; 2. discuss and update the active specification after explicit agreement; 3. cancel without changes."
+        },
+        {
+          "role": "user",
+          "text": "I choose option 2. We discussed it, and I explicitly agree to update the active specification in place with a requirement for a machine-readable error object on standard error. Update it now."
+        }
+      ],
+      "prompt": {
+        "repositoryPath": "templates/beads/spec-it-out/SKILL.md",
+        "sha256": "88cb4820f3680b18b0d5637654f51edae77d7e65aae302e183b8d8aef41bcf9e"
+      },
+      "runtime": {
+        "primeAgentVersion": "0.9.1",
+        "primeRalphVersion": "0.1.0",
+        "nodeVersion": "v22.22.2",
+        "requestedProvider": "openai-codex",
+        "requestedModel": "gpt-5.6-sol"
+      },
+      "observed": {
+        "provider": "openai-codex",
+        "model": "gpt-5.6-sol",
+        "stopReason": "stop",
+        "usage": {
+          "input": 394,
+          "output": 18,
+          "cacheRead": 1664,
+          "cacheWrite": 0,
+          "totalTokens": 2076,
+          "cost": {
+            "input": 0.00197,
+            "output": 0.00054,
+            "cacheRead": 0.000832,
+            "cacheWrite": 0,
+            "total": 0.003342
+          }
+        },
+        "toolCalls": [
+          "update_active_specification"
+        ],
+        "finalAssistantText": "Updated the active specification in place with the machine-readable standard-error requirement."
+      },
+      "files": {
+        "changed": [
+          ".ralph/plans/SPECIFICATION.md"
+        ],
+        "afterManifest": {
+          ".beads": {
+            "kind": "directory"
+          },
+          ".beads/sentinel": {
+            "kind": "file",
+            "bytes": 10,
+            "sha256": "1cd263f1102656dd6b6cf1d626d1a96f9eba0406af3cb2a52560d473d4801052"
+          },
+          ".ralph": {
+            "kind": "directory"
+          },
+          ".ralph/plans": {
+            "kind": "directory"
+          },
+          ".ralph/plans/SPECIFICATION.md": {
+            "kind": "file",
+            "bytes": 118,
+            "sha256": "beed2a881f567c6b41b43f51197f16c1563c019ba73398fe3ab1fe15903ab4da"
+          },
+          ".ralph/skills": {
+            "kind": "directory"
+          },
+          ".ralph/skills/spec-it-out": {
+            "kind": "directory"
+          },
+          ".ralph/skills/spec-it-out/SKILL.md": {
+            "kind": "file",
+            "bytes": 2097,
+            "sha256": "88cb4820f3680b18b0d5637654f51edae77d7e65aae302e183b8d8aef41bcf9e"
+          },
+          "acceptance-tool.mjs": {
+            "kind": "file",
+            "bytes": 2929,
+            "sha256": "c3bc60726a2b8dc194bcc6afa7e409ea44e16842b50eef07a7e3c07025dcde89"
+          }
+        },
+        "activeSpecification": {
+          "bytes": 118,
+          "sha256": "beed2a881f567c6b41b43f51197f16c1563c019ba73398fe3ab1fe15903ab4da",
+          "content": "# Specification\n\n## Better export errors\n\nExport failures must emit a machine-readable error object on standard error."
+        },
+        "futureSpecification": null
+      },
+      "timing": {
+        "startedAt": "2026-09-04T02:58:22.883Z",
+        "endedAt": "2026-09-04T02:58:33.038Z",
+        "durationMs": 10155
+      },
+      "assertions": [
+        {
+          "name": "process succeeded",
+          "pass": true
+        },
+        {
+          "name": "Prime Agent 0.9.1 recorded",
+          "pass": true
+        },
+        {
+          "name": "terminal assistant response",
+          "pass": true
+        },
+        {
+          "name": "selected provider observed",
+          "pass": true
+        },
+        {
+          "name": "selected model observed",
+          "pass": true
+        },
+        {
+          "name": "no planning or execution artifact",
+          "pass": true
+        },
+        {
+          "name": "one active update call",
+          "pass": true
+        },
+        {
+          "name": "active specification changed",
+          "pass": true
+        },
+        {
+          "name": "only active specification changed",
+          "pass": true
+        },
+        {
+          "name": "Beads state unchanged",
+          "pass": true
+        }
+      ],
+      "verdict": "pass"
+    },
+    {
+      "schemaVersion": 2,
+      "evidenceKind": "real-model-behavioral",
+      "variant": "beads",
+      "case": "cancel",
+      "invocation": {
+        "specificationState": "existing",
+        "invocationMode": "specification-existing"
+      },
+      "fixtureConversation": [
+        {
+          "role": "user",
+          "text": "I want to discuss better export errors, but I have not decided whether this belongs in the active specification or future work. Do not choose on my behalf."
+        },
+        {
+          "role": "assistant",
+          "text": "An active specification already exists. Choose: 1. create a future specification after explicit confirmation; 2. discuss and update the active specification after explicit agreement; 3. cancel without changes."
+        },
+        {
+          "role": "user",
+          "text": "I choose option 3. Cancel without changing or creating any specification."
+        }
+      ],
+      "prompt": {
+        "repositoryPath": "templates/beads/spec-it-out/SKILL.md",
+        "sha256": "88cb4820f3680b18b0d5637654f51edae77d7e65aae302e183b8d8aef41bcf9e"
+      },
+      "runtime": {
+        "primeAgentVersion": "0.9.1",
+        "primeRalphVersion": "0.1.0",
+        "nodeVersion": "v22.22.2",
+        "requestedProvider": "openai-codex",
+        "requestedModel": "gpt-5.6-sol"
+      },
+      "observed": {
+        "provider": "openai-codex",
+        "model": "gpt-5.6-sol",
+        "stopReason": "stop",
+        "usage": {
+          "input": 1843,
+          "output": 13,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "totalTokens": 1856,
+          "cost": {
+            "input": 0.009215000000000001,
+            "output": 0.00039,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0.009605
+          }
+        },
+        "toolCalls": [],
+        "finalAssistantText": "Cancelled. No specification was changed or created."
+      },
+      "files": {
+        "changed": [],
+        "afterManifest": {
+          ".beads": {
+            "kind": "directory"
+          },
+          ".beads/sentinel": {
+            "kind": "file",
+            "bytes": 10,
+            "sha256": "1cd263f1102656dd6b6cf1d626d1a96f9eba0406af3cb2a52560d473d4801052"
+          },
+          ".ralph": {
+            "kind": "directory"
+          },
+          ".ralph/plans": {
+            "kind": "directory"
+          },
+          ".ralph/plans/SPECIFICATION.md": {
+            "kind": "file",
+            "bytes": 61,
+            "sha256": "25ef425b0004447112c760ad01a09b68789d55c1eff46ca652403c24e71c307a"
+          },
+          ".ralph/skills": {
+            "kind": "directory"
+          },
+          ".ralph/skills/spec-it-out": {
+            "kind": "directory"
+          },
+          ".ralph/skills/spec-it-out/SKILL.md": {
+            "kind": "file",
+            "bytes": 2097,
+            "sha256": "88cb4820f3680b18b0d5637654f51edae77d7e65aae302e183b8d8aef41bcf9e"
+          },
+          "acceptance-tool.mjs": {
+            "kind": "file",
+            "bytes": 2929,
+            "sha256": "c3bc60726a2b8dc194bcc6afa7e409ea44e16842b50eef07a7e3c07025dcde89"
+          }
+        },
+        "activeSpecification": {
+          "bytes": 61,
+          "sha256": "25ef425b0004447112c760ad01a09b68789d55c1eff46ca652403c24e71c307a",
+          "content": "# Existing specification\n\nCurrent export behavior is stable.\n"
+        },
+        "futureSpecification": null
+      },
+      "timing": {
+        "startedAt": "2026-09-04T02:58:33.039Z",
+        "endedAt": "2026-09-04T02:58:36.947Z",
+        "durationMs": 3908
+      },
+      "assertions": [
+        {
+          "name": "process succeeded",
+          "pass": true
+        },
+        {
+          "name": "Prime Agent 0.9.1 recorded",
+          "pass": true
+        },
+        {
+          "name": "terminal assistant response",
+          "pass": true
+        },
+        {
+          "name": "selected provider observed",
+          "pass": true
+        },
+        {
+          "name": "selected model observed",
+          "pass": true
+        },
+        {
+          "name": "no planning or execution artifact",
+          "pass": true
+        },
+        {
+          "name": "cancel performs no tool call",
+          "pass": true
+        },
+        {
+          "name": "active specification unchanged",
+          "pass": true
+        },
+        {
+          "name": "cancel changes no files",
+          "pass": true
+        },
+        {
+          "name": "Beads state unchanged",
+          "pass": true
+        }
+      ],
+      "verdict": "pass"
+    },
+    {
+      "schemaVersion": 2,
+      "evidenceKind": "real-model-behavioral",
+      "variant": "beads",
+      "case": "reset-existing",
+      "invocation": {
+        "specificationState": "existing",
+        "invocationMode": "specification-reset-existing"
+      },
+      "fixtureConversation": [
+        {
+          "role": "user",
+          "text": "The prior source conversation was cleared by the reset."
+        }
+      ],
+      "prompt": {
+        "repositoryPath": "templates/beads/spec-it-out/SKILL.md",
+        "sha256": "88cb4820f3680b18b0d5637654f51edae77d7e65aae302e183b8d8aef41bcf9e"
+      },
+      "runtime": {
+        "primeAgentVersion": "0.9.1",
+        "primeRalphVersion": "0.1.0",
+        "nodeVersion": "v22.22.2",
+        "requestedProvider": "openai-codex",
+        "requestedModel": "gpt-5.6-sol"
+      },
+      "observed": {
+        "provider": "openai-codex",
+        "model": "gpt-5.6-sol",
+        "stopReason": "stop",
+        "usage": {
+          "input": 1758,
+          "output": 56,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "totalTokens": 1814,
+          "cost": {
+            "input": 0.008790000000000001,
+            "output": 0.00168,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0.01047
+          }
+        },
+        "toolCalls": [],
+        "finalAssistantText": "An active specification already exists, but the reset cleared the prior conversation context. I will not modify it without explicit agreement.\n\nChoose one:\n\n1. Discuss the active specification, then explicitly approve an in-place update.\n2. Cancel without changing or creating a specification."
+      },
+      "files": {
+        "changed": [],
+        "afterManifest": {
+          ".beads": {
+            "kind": "directory"
+          },
+          ".beads/sentinel": {
+            "kind": "file",
+            "bytes": 10,
+            "sha256": "1cd263f1102656dd6b6cf1d626d1a96f9eba0406af3cb2a52560d473d4801052"
+          },
+          ".ralph": {
+            "kind": "directory"
+          },
+          ".ralph/plans": {
+            "kind": "directory"
+          },
+          ".ralph/plans/SPECIFICATION.md": {
+            "kind": "file",
+            "bytes": 61,
+            "sha256": "25ef425b0004447112c760ad01a09b68789d55c1eff46ca652403c24e71c307a"
+          },
+          ".ralph/skills": {
+            "kind": "directory"
+          },
+          ".ralph/skills/spec-it-out": {
+            "kind": "directory"
+          },
+          ".ralph/skills/spec-it-out/SKILL.md": {
+            "kind": "file",
+            "bytes": 2097,
+            "sha256": "88cb4820f3680b18b0d5637654f51edae77d7e65aae302e183b8d8aef41bcf9e"
+          },
+          "acceptance-tool.mjs": {
+            "kind": "file",
+            "bytes": 2929,
+            "sha256": "c3bc60726a2b8dc194bcc6afa7e409ea44e16842b50eef07a7e3c07025dcde89"
+          }
+        },
+        "activeSpecification": {
+          "bytes": 61,
+          "sha256": "25ef425b0004447112c760ad01a09b68789d55c1eff46ca652403c24e71c307a",
+          "content": "# Existing specification\n\nCurrent export behavior is stable.\n"
+        },
+        "futureSpecification": null
+      },
+      "timing": {
+        "startedAt": "2026-09-04T02:58:36.949Z",
+        "endedAt": "2026-09-04T02:58:40.057Z",
+        "durationMs": 3108
+      },
+      "assertions": [
+        {
+          "name": "process succeeded",
+          "pass": true
+        },
+        {
+          "name": "Prime Agent 0.9.1 recorded",
+          "pass": true
+        },
+        {
+          "name": "terminal assistant response",
+          "pass": true
+        },
+        {
+          "name": "selected provider observed",
+          "pass": true
+        },
+        {
+          "name": "selected model observed",
+          "pass": true
+        },
+        {
+          "name": "no planning or execution artifact",
+          "pass": true
+        },
+        {
+          "name": "reset-existing performs no tool call",
+          "pass": true
+        },
+        {
+          "name": "active specification unchanged",
+          "pass": true
+        },
+        {
+          "name": "reset-existing changes no files",
+          "pass": true
+        },
+        {
+          "name": "offers active discussion or update",
+          "pass": true
+        },
+        {
+          "name": "offers cancellation",
+          "pass": true
+        },
+        {
+          "name": "does not offer future specification",
+          "pass": true
+        },
+        {
+          "name": "Beads state unchanged",
+          "pass": true
+        }
+      ],
+      "verdict": "pass"
+    }
+  ]
+}

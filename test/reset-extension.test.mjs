@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createResetExtension } from "../src/reset-extension.js";
 import {
   RESET_MARKER_TYPE,
@@ -9,7 +12,7 @@ import {
   resetCompactionInstructions,
 } from "../src/reset-context.js";
 
-function harness({ branch = [], persistSent = true, sendError, appendError } = {}) {
+function harness({ branch = [], persistSent = true, sendError, appendError, specificationState = "absent" } = {}) {
   const handlers = new Map(), commands = new Map(), sent = [], entries = [], notices = [], compactions = [];
   let nextEntry = branch.length;
   const pi = {
@@ -28,6 +31,8 @@ function harness({ branch = [], persistSent = true, sendError, appendError } = {
   };
   createResetExtension({
     loadPrepare: ({ cwd }) => ({ path: `${cwd}/.ralph/skills/prepare/SKILL.md`, text: "---\nname: prepare\ndescription: test\n---\nbody" }),
+    loadSpecItOut: ({ cwd }) => ({ path: `${cwd}/.ralph/skills/spec-it-out/SKILL.md`, text: "---\nname: spec-it-out\ndescription: test\n---\nspec body" }),
+    inspectSpecification: () => ({ state: specificationState, relativePath: ".ralph/plans/SPECIFICATION.md" }),
     createRequestId: (() => { let id = 0; return () => `r${++id}`; })(),
   })(pi);
   const ctx = {
@@ -75,6 +80,45 @@ test("registers /reset and supplies a real marker to custom compaction before pr
   h.handlers.get("message_start")({ message: { role: "custom", ...h.sent[0].message } }, h.ctx);
   h.handlers.get("agent_end")({ messages: [{ role: "assistant", stopReason: "stop" }] }, h.ctx);
   assert.equal(h.entries.filter((entry) => entry.customType === RESET_STATE_TYPE && entry.data.status === "completed").length, 1);
+});
+
+test("default reset factory detects an active specification", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "prime-ralph-default-reset-"));
+  mkdirSync(join(cwd, ".ralph/plans"), { recursive: true });
+  mkdirSync(join(cwd, ".ralph/skills/prepare"), { recursive: true });
+  mkdirSync(join(cwd, ".ralph/skills/spec-it-out"), { recursive: true });
+  writeFileSync(join(cwd, ".ralph/plans/SPECIFICATION.md"), "# Existing\n");
+  writeFileSync(join(cwd, ".ralph/skills/prepare/SKILL.md"), "---\nname: prepare\ndescription: test\n---\nprepare");
+  writeFileSync(join(cwd, ".ralph/skills/spec-it-out/SKILL.md"), "---\nname: spec-it-out\ndescription: test\nprime-ralph-invocation-version: 1\n---\nspec");
+  const h = harness(); h.ctx.cwd = cwd;
+  const pi = { registerCommand: (name, value) => h.commands.set(name, value), on: (name, value) => h.handlers.set(name, value), appendEntry: (type, data) => { const entry = { type: "custom", id: `d${h.branch.length}`, customType: type, data }; h.entries.push(entry); h.branch.push(entry); }, sendMessage: (message, options) => { h.sent.push({ message, options }); h.branch.push({ type: "custom_message", ...message }); } };
+  createResetExtension({ createRequestId: () => "default-request" })(pi);
+  await h.commands.get("reset").handler("", h.ctx); h.compactions.at(-1).onError(new Error("Session is too short to compact"));
+  assert.match(h.sent[0].message.content, /"invocationMode":"specification-reset-existing"/);
+});
+
+test("existing-spec reset delivers prepare first and bounded reset-existing guidance second", async () => {
+  const h = harness({ specificationState: "existing" }); await request(h); completeCompaction(h);
+  const content = h.sent[0].message.content;
+  assert.ok(content.indexOf('<skill name="prepare"') < content.indexOf("<prime-ralph-invocation>"));
+  assert.match(content, /"invocationMode":"specification-reset-existing"/);
+  assert.match(content, /<skill name="spec-it-out"/);
+});
+
+test("specification conflicts fail before reset markers or compaction", async () => {
+  const h = harness();
+  const pi = { registerCommand: (name, value) => h.commands.set(name, value), on: () => {}, appendEntry: (...args) => h.entries.push(args), sendMessage: (...args) => h.sent.push(args) };
+  createResetExtension({ inspectSpecification: () => { throw new Error("path conflict"); } })(pi);
+  await assert.rejects(h.commands.get("reset").handler("", h.ctx), /path conflict/);
+  assert.equal(h.entries.length, 0); assert.equal(h.compactions.length, 0);
+});
+
+test("validates existing-spec skill before recording a marker or reset state", async () => {
+  const h = harness();
+  const pi = { registerCommand: (name, value) => h.commands.set(name, value), on: () => {}, appendEntry: (...args) => h.entries.push(args), sendMessage: (...args) => h.sent.push(args) };
+  createResetExtension({ inspectSpecification: () => ({ state: "existing" }), loadPrepare: () => ({ path: "prepare", text: "prepare" }), loadSpecItOut: () => { throw new Error("incompatible spec skill"); } })(pi);
+  await assert.rejects(h.commands.get("reset").handler("", h.ctx), /incompatible spec skill/);
+  assert.equal(h.entries.length, 0); assert.equal(h.compactions.length, 0);
 });
 
 test("validates prepare before recording a marker or reset state", async () => {

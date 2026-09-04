@@ -7,9 +7,9 @@ if (typeof entry.default !== "function") throw new Error("default extension entr
 for (const mode of ["text", "json", "rpc", "acp", "daemon"]) {
   const commands = new Map();
   entry.default({ mode, registerCommand: (name, command) => commands.set(name, command), on() {}, appendEntry() {}, sendMessage() {} });
-  if (!commands.has("reset") || commands.has("clear")) throw new Error(`reset command registration failed in ${mode} smoke`);
+  if (JSON.stringify([...commands.keys()]) !== JSON.stringify(["reset", "spec-it-out"]) || commands.has("clear")) throw new Error(`Slice 3 command registration failed in ${mode} smoke`);
 }
-for (const exportName of ["observability", "ralph-context", "reset-context", "reset-extension", "reset-skill", "cycle-coordinator", "continuation-adapter", "skill-config", "phase-runtime", "beads-coordination", "coordination-runtime", "bd-cli-adapter", "goal-lifecycle", "cache-analysis", "diagnostics", "init", "cli"]) await import(new URL(`../src/${exportName}.js`, import.meta.url));
+for (const exportName of ["observability", "ralph-context", "reset-context", "reset-extension", "reset-skill", "specification", "workflow-extension", "cycle-coordinator", "continuation-adapter", "skill-config", "phase-runtime", "beads-coordination", "coordination-runtime", "bd-cli-adapter", "goal-lifecycle", "cache-analysis", "diagnostics", "init", "cli"]) await import(new URL(`../src/${exportName}.js`, import.meta.url));
 if (packageJson.bin?.["prime-ralph"] !== "bin/prime-ralph.js") throw new Error("initializer bin is not declared");
 await access(new URL("../bin/prime-ralph.js", import.meta.url), constants.X_OK);
 const forbiddenTerms = [

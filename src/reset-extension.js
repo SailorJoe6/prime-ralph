@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { formatPrepareInjection, loadPrepareSkill } from "./reset-skill.js";
+import { formatSpecificationInjection, inspectActiveSpecification, loadSpecItOutSkill } from "./specification.js";
 import {
   hasResetBoundary,
   hasResetCompaction,
@@ -15,7 +16,12 @@ import {
 const TERMINAL_STATES = new Set(["completed", "interrupted", "failed", "recovered"]);
 const SHORT_COMPACTION_REASONS = ["Session is too short to compact", "Already compacted"];
 
-export function createResetExtension({ loadPrepare = loadPrepareSkill, createRequestId = randomUUID } = {}) {
+export function createResetExtension({
+  loadPrepare = loadPrepareSkill,
+  loadSpecItOut = loadSpecItOutSkill,
+  inspectSpecification = inspectActiveSpecification,
+  createRequestId = randomUUID,
+} = {}) {
   return function resetExtension(pi) {
     let pending;
     let activeRequestId;
@@ -54,14 +60,21 @@ export function createResetExtension({ loadPrepare = loadPrepareSkill, createReq
           return;
         }
 
-        // Validate before creating a marker or changing provider-visible context.
-        const skill = loadPrepare({ cwd: ctx.cwd });
         await ctx.waitForIdle();
         if (pending) {
           ctx.ui.notify("A Ralph reset is already pending.", "warning");
           return;
         }
 
+        // Validate phase facts and every required skill before creating a marker or changing provider-visible context.
+        const specification = inspectSpecification({ cwd: ctx.cwd });
+        if (!new Set(["absent", "existing"]).has(specification.state)) throw new TypeError(`unsupported specification state: ${specification.state}`);
+        const skill = loadPrepare({ cwd: ctx.cwd });
+        const specificationSkill = specification.state === "existing" ? loadSpecItOut({ cwd: ctx.cwd }) : undefined;
+        const injection = specificationSkill
+          ? `${formatPrepareInjection(skill)}
+${formatSpecificationInjection(specificationSkill, "specification-reset-existing")}`
+          : formatPrepareInjection(skill);
         const requestId = createRequestId();
         pi.appendEntry(RESET_MARKER_TYPE, {
           source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId,
@@ -73,14 +86,14 @@ export function createResetExtension({ loadPrepare = loadPrepareSkill, createReq
         }
 
         const customInstructions = resetCompactionInstructions(requestId);
-        pending = { requestId, markerId: marker.id, customInstructions, injection: formatPrepareInjection(skill) };
+        pending = { requestId, markerId: marker.id, customInstructions, injection };
         appendState("compacting", requestId, { markerId: marker.id });
 
         const injectPrepare = (mode) => {
           const prepareMessage = {
             role: "custom",
             customType: RESET_MESSAGE_TYPE,
-            content: pending?.injection ?? formatPrepareInjection(skill),
+            content: pending?.injection ?? injection,
             display: false,
             details: { source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId, mode },
             timestamp: Date.now(),

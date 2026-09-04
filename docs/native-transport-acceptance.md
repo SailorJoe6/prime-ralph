@@ -4,7 +4,7 @@ Native smoke tests check that the packaged extension can be admitted by real Pri
 
 ## Tested environment
 
-The recorded acceptance run used Prime Agent `0.8.0` and the packaged extension from this repository. Do not copy machine-specific paths from an old report. Set the extension and working-directory paths for the installation under test.
+The current Slice 3 rerun uses Prime Agent `0.9.1`. Earlier research also exercised `0.8.0`; those results are historical and do not replace the current peer-version gates. Do not copy machine-specific paths from an old report. Set the extension, working directory, and provider/model selection for the installation under test.
 
 ## Passing checks
 
@@ -22,10 +22,12 @@ From the package root:
 ```sh
 npm run poc:native-rpc
 npm run poc:native-acp
+PRIME_RALPH_ACCEPT_PROVIDER=<provider> \
+PRIME_RALPH_ACCEPT_MODEL=<model> \
 npm run poc:native-acp-prompt
 ```
 
-The scripts use the Prime Agent installation available in the test environment. Inspect each script's command-line options and environment requirements before running against another installation.
+The scripts use the Prime Agent installation available in the test environment. The provider-backed ACP prompt smoke accepts an explicit provider/model pair and emits only bounded protocol diagnostics on timeout. Inspect each script's command-line options and environment requirements before running against another installation.
 
 ## Transport rules
 

@@ -1,7 +1,8 @@
-import resetExtension, { createResetExtension } from "./reset-extension.js";
+import workflowExtension, { createWorkflowExtension } from "./workflow-extension.js";
 
-export default resetExtension;
-export { createResetExtension };
+export default workflowExtension;
+export { createWorkflowExtension };
+export { createResetExtension } from "./reset-extension.js";
 export { loadPrepareSkill, formatPrepareInjection, validateCanonicalSkill, PrepareSkillError } from "./reset-skill.js";
 export {
   projectResetContext,
@@ -18,3 +19,17 @@ export { discoverSkillConfig, loadSkillConfiguration, phaseIdentity, selectPhase
 export { BeadsCoordinator, runQualityGates } from "./beads-coordination.js";
 export { GoalLifecycle } from "./goal-lifecycle.js";
 export { diagnosticSnapshot, isCompatiblePrimeAgent } from "./diagnostics.js";
+
+export {
+  ACTIVE_SPECIFICATION_RELATIVE_PATH,
+  SPEC_IT_OUT_SKILL_RELATIVE_PATH,
+  SPECIFICATION_INVOCATION_MODES,
+  SPECIFICATION_MESSAGE_TYPE,
+  SPECIFICATION_PROTOCOL_VERSION,
+  STARTUP_PREPARE_MESSAGE_TYPE,
+  SpecificationStateError,
+  formatSpecificationInjection,
+  hasStartupPrepareBoundary,
+  inspectActiveSpecification,
+  loadSpecItOutSkill,
+} from "./specification.js";

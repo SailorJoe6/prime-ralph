@@ -26,7 +26,9 @@
     "./reset-extension": "./src/reset-extension.js",
     "./reset-skill": "./src/reset-skill.js",
     "./init": "./src/init.js",
-    "./cli": "./src/cli.js"
+    "./cli": "./src/cli.js",
+    "./workflow-extension": "./src/workflow-extension.js",
+    "./specification": "./src/specification.js"
   },
   "files": [
     "bin",
@@ -59,7 +61,9 @@
     "poc:reset-compaction": "node scripts/run-reset-compaction-poc.mjs",
     "accept:reset-lifecycle": "node scripts/run-reset-lifecycle-acceptance.mjs",
     "accept:init": "node scripts/run-init-acceptance.mjs",
-    "accept:package-install": "node scripts/run-package-install-acceptance.mjs"
+    "accept:package-install": "node scripts/run-package-install-acceptance.mjs",
+    "accept:specification": "node scripts/run-specification-acceptance.mjs",
+    "accept:model:spec-it-out": "node scripts/run-spec-it-out-model-acceptance.mjs"
   },
   "engines": {
     "node": ">=20"

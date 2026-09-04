@@ -33,8 +33,9 @@ test("mode templates do not duplicate prepare or activate later phases implicitl
 test("specification templates protect the active specification and cleared-source case", () => {
   for (const variant of ["default", "beads"]) {
     const text = load(variant, "spec-it-out");
-    for (const pattern of [/\.ralph\/plans\/SPECIFICATION\.md/, /future specification/i, /explicit confirmation/i, /update it in place only after explicit agreement/i, /Cancel without changing/i, /reset cleared the conversation/i, /do not offer future-specification creation/i]) assert.match(text, pattern);
-    assert.match(text, /must first pause/i);
+    for (const pattern of [/\.ralph\/plans\/SPECIFICATION\.md/, /prime-ralph-invocation/, /specification-new/, /specification-existing/, /specification-reset-existing/, /future specification/i, /explicit confirmation/i, /update it in place only after explicit agreement/i, /Cancel without changing/i, /reset cleared the conversation/i, /do not offer future-specification creation/i]) assert.match(text, pattern);
+    assert.match(text, /prime-ralph-invocation-version:\s*1/);
+    assert.doesNotMatch(text, /execution lifecycle is running|must first pause|native control/i);
   }
 });
 

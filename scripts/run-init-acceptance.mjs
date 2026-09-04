@@ -16,7 +16,8 @@ const loaded = await discoverAndLoadExtensions([], cwd, agentDir);
 if (loaded.errors.length !== 0) throw new Error(`initialized extension load failed: ${JSON.stringify(loaded.errors)}`);
 if (loaded.extensions.length !== 1) throw new Error(`expected one initialized extension, got ${loaded.extensions.length}`);
 const extension = loaded.extensions[0];
-if (!extension.commands.has("reset") || extension.commands.has("clear")) throw new Error("initialized extension command contract failed");
+const commandNames = [...extension.commands.keys()];
+if (JSON.stringify(commandNames) !== JSON.stringify(["reset", "spec-it-out"]) || extension.commands.has("clear")) throw new Error("initialized extension command contract failed");
 if (!extension.path.endsWith("/.prime/agent/extensions/prime-ralph/index.js")) throw new Error(`unexpected discovered path: ${extension.path}`);
 
 // Lock in the host-specific reason the initializer uses a directory symlink.
@@ -48,4 +49,4 @@ if (spawnSync("bd", ["--version"], { encoding: "utf8" }).status === 0) {
   }
   realBeadsStealth = true;
 }
-console.log(JSON.stringify({ created: createdCount, warnings: cli.stderr ? 1 : 0, extensions: loaded.extensions.length, resetRegistered: true, directFileSymlinkRejected: true, realBeadsStealth }, null, 2));
+console.log(JSON.stringify({ created: createdCount, warnings: cli.stderr ? 1 : 0, extensions: loaded.extensions.length, registeredCommands: commandNames, directFileSymlinkRejected: true, realBeadsStealth }, null, 2));
