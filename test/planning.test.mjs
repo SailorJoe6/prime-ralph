@@ -38,7 +38,10 @@ test("rejects conflicting plan parents and target without following symlinks", (
     if (conflict.startsWith("target-")) mkdirSync(join(cwd, ".ralph/plans"));
     if (conflict === "target-directory") mkdirSync(join(cwd, ACTIVE_PLAN_RELATIVE_PATH));
     if (conflict === "target-symlink") { writeFileSync(join(outside, "plan"), "outside"); symlinkSync(join(outside, "plan"), join(cwd, ACTIVE_PLAN_RELATIVE_PATH)); }
-    assert.throws(() => inspectActivePlan({ cwd }), PlanningStateError, conflict);
+    const expected = conflict.endsWith("symlink")
+      ? /must not be a symlink: .*; replace it with a (?:real directory|regular file) or remove it, then retry/
+      : /is not a (?:directory|regular file): .*; replace it with a (?:real directory|regular file) or remove it, then retry/;
+    assert.throws(() => inspectActivePlan({ cwd }), expected, conflict);
   }
 });
 
@@ -71,7 +74,17 @@ test("classifies only exact blocked planning documents and rejects conflicts", (
   writeFileSync(join(cwd, ".ralph/plans/blocked/EXECUTION_PLAN.md"), "plan");
   assert.equal(inspectBlockedPlanningDocuments({ cwd }).state, "complete");
   const conflict = initialized(), outside = project(); symlinkSync(outside, join(conflict, ".ralph/plans/blocked"), "dir");
-  assert.throws(() => inspectBlockedPlanningDocuments({ cwd: conflict }), PlanningStateError);
+  assert.throws(
+    () => inspectBlockedPlanningDocuments({ cwd: conflict }),
+    /blocked planning parent must not be a symlink: \.ralph\/plans\/blocked; replace it with a real directory or remove it, then retry/,
+  );
+  const linkedDocument = initialized(); mkdirSync(join(linkedDocument, ".ralph/plans/blocked"));
+  writeFileSync(join(outside, "blocked-spec"), "outside");
+  symlinkSync(join(outside, "blocked-spec"), join(linkedDocument, ".ralph/plans/blocked/SPECIFICATION.md"));
+  assert.throws(
+    () => inspectBlockedPlanningDocuments({ cwd: linkedDocument }),
+    /blocked planning document must not be a symlink: \.ralph\/plans\/blocked\/SPECIFICATION\.md; replace it with a regular file or remove it, then retry/,
+  );
 });
 
 

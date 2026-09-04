@@ -41,11 +41,13 @@ export function inspectActivePlan({ cwd = process.cwd() } = {}) {
   for (const [candidate, label] of [[resolve(root, ".ralph"), ".ralph"], [resolve(root, ".ralph/plans"), ".ralph/plans"]]) {
     const stat = inspect(candidate);
     if (!stat) return { state: "absent", path, relativePath: ACTIVE_PLAN_RELATIVE_PATH };
-    if (stat.isSymbolicLink() || !stat.isDirectory()) throw new PlanningStateError(`active execution plan parent is not a real directory: ${label}`);
+    if (stat.isSymbolicLink()) throw new PlanningStateError(`active execution plan parent must not be a symlink: ${label}; replace it with a real directory or remove it, then retry`);
+    if (!stat.isDirectory()) throw new PlanningStateError(`active execution plan parent is not a directory: ${label}; replace it with a real directory or remove it, then retry`);
   }
   const stat = inspect(path);
   if (!stat) return { state: "absent", path, relativePath: ACTIVE_PLAN_RELATIVE_PATH };
-  if (stat.isSymbolicLink() || !stat.isFile()) throw new PlanningStateError(`active execution plan is not a regular file: ${ACTIVE_PLAN_RELATIVE_PATH}`);
+  if (stat.isSymbolicLink()) throw new PlanningStateError(`active execution plan must not be a symlink: ${ACTIVE_PLAN_RELATIVE_PATH}; replace it with a regular file or remove it, then retry`);
+  if (!stat.isFile()) throw new PlanningStateError(`active execution plan is not a regular file: ${ACTIVE_PLAN_RELATIVE_PATH}; replace it with a regular file or remove it, then retry`);
   return { state: "existing", path, relativePath: ACTIVE_PLAN_RELATIVE_PATH };
 }
 
@@ -55,13 +57,15 @@ export function inspectBlockedPlanningDocuments({ cwd = process.cwd() } = {}) {
   for (const [candidate, label] of [[resolve(root, ".ralph"), ".ralph"], [resolve(root, ".ralph/plans"), ".ralph/plans"], [blocked, ".ralph/plans/blocked"]]) {
     const parent = inspect(candidate);
     if (!parent) return { state: "absent", paths: [] };
-    if (parent.isSymbolicLink() || !parent.isDirectory()) throw new PlanningStateError(`blocked planning parent is not a real directory: ${label}`);
+    if (parent.isSymbolicLink()) throw new PlanningStateError(`blocked planning parent must not be a symlink: ${label}; replace it with a real directory or remove it, then retry`);
+    if (!parent.isDirectory()) throw new PlanningStateError(`blocked planning parent is not a directory: ${label}; replace it with a real directory or remove it, then retry`);
   }
   const paths = [];
   for (const relativePath of [BLOCKED_SPECIFICATION_RELATIVE_PATH, BLOCKED_PLAN_RELATIVE_PATH]) {
     const path = resolve(root, relativePath), stat = inspect(path);
     if (!stat) continue;
-    if (stat.isSymbolicLink() || !stat.isFile()) throw new PlanningStateError(`blocked planning document is not a regular file: ${relativePath}`);
+    if (stat.isSymbolicLink()) throw new PlanningStateError(`blocked planning document must not be a symlink: ${relativePath}; replace it with a regular file or remove it, then retry`);
+    if (!stat.isFile()) throw new PlanningStateError(`blocked planning document is not a regular file: ${relativePath}; replace it with a regular file or remove it, then retry`);
     paths.push(relativePath);
   }
   return { state: paths.length === 0 ? "absent" : paths.length === 2 ? "complete" : "partial", paths };

@@ -31,7 +31,7 @@ In a real session with no active specification, the extension delivers `prepare`
 
 A session that starts with an active specification enters interactive planning. It delivers one ordered `prepare`-then-`plan` message and supplies authoritative metadata for whether the exact active execution plan exists. An explicit `/plan` transition from specification phase uses the same clean context boundary. Once planning is established, `/plan` with an existing plan keeps the current conversation for discussion.
 
-The command handler never creates or edits an execution plan. The project `plan` skill owns creation, warnings, discussion, explicit update consent, and cancellation. Only the exact `.ralph/plans/EXECUTION_PLAN.md` regular file is active; nested and conflicting paths do not activate it.
+The command handler never creates or edits an execution plan. The project `plan` skill owns creation, warnings, discussion, explicit update consent, and cancellation. Only the exact `.ralph/plans/EXECUTION_PLAN.md` regular file is active; nested and conflicting paths do not activate it. Control-path symlinks are detected without being followed and produce a path-specific error with replacement-or-removal guidance.
 
 `/reset`, `/spec-it-out`, and `/plan` are registered. `/execute` and blocked handling remain unavailable.
 

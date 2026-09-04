@@ -40,14 +40,20 @@ export function inspectActiveSpecification({ cwd = process.cwd() } = {}) {
   for (const [candidate, label] of [[ralph, ".ralph"], [plans, ".ralph/plans"]]) {
     const stat = inspect(candidate);
     if (!stat) return { state: "absent", path, relativePath: ACTIVE_SPECIFICATION_RELATIVE_PATH };
-    if (stat.isSymbolicLink() || !stat.isDirectory()) {
-      throw new SpecificationStateError(`active specification parent is not a real directory: ${label}`);
+    if (stat.isSymbolicLink()) {
+      throw new SpecificationStateError(`active specification parent must not be a symlink: ${label}; replace it with a real directory or remove it, then retry`);
+    }
+    if (!stat.isDirectory()) {
+      throw new SpecificationStateError(`active specification parent is not a directory: ${label}; replace it with a real directory or remove it, then retry`);
     }
   }
   const stat = inspect(path);
   if (!stat) return { state: "absent", path, relativePath: ACTIVE_SPECIFICATION_RELATIVE_PATH };
-  if (stat.isSymbolicLink() || !stat.isFile()) {
-    throw new SpecificationStateError(`active specification is not a regular file: ${ACTIVE_SPECIFICATION_RELATIVE_PATH}`);
+  if (stat.isSymbolicLink()) {
+    throw new SpecificationStateError(`active specification must not be a symlink: ${ACTIVE_SPECIFICATION_RELATIVE_PATH}; replace it with a regular file or remove it, then retry`);
+  }
+  if (!stat.isFile()) {
+    throw new SpecificationStateError(`active specification is not a regular file: ${ACTIVE_SPECIFICATION_RELATIVE_PATH}; replace it with a regular file or remove it, then retry`);
   }
   return { state: "existing", path, relativePath: ACTIVE_SPECIFICATION_RELATIVE_PATH };
 }

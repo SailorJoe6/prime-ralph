@@ -40,7 +40,10 @@ test("rejects conflicting parent and destination path types without following sy
     if (conflict.startsWith("target-")) mkdirSync(join(cwd, ".ralph/plans"));
     if (conflict === "target-directory") mkdirSync(join(cwd, ACTIVE_SPECIFICATION_RELATIVE_PATH));
     if (conflict === "target-symlink") { writeFileSync(join(outside, "spec"), "outside"); symlinkSync(join(outside, "spec"), join(cwd, ACTIVE_SPECIFICATION_RELATIVE_PATH)); }
-    assert.throws(() => inspectActiveSpecification({ cwd }), SpecificationStateError, conflict);
+    const expected = conflict.endsWith("symlink")
+      ? /must not be a symlink: .*; replace it with a (?:real directory|regular file) or remove it, then retry/
+      : /is not a (?:directory|regular file): .*; replace it with a (?:real directory|regular file) or remove it, then retry/;
+    assert.throws(() => inspectActiveSpecification({ cwd }), expected, conflict);
   }
 });
 

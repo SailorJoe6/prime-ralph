@@ -12,7 +12,7 @@ Prime Agent `0.9.1` does not expose a reliable conditional command-registration 
 
 ## Active plan and trusted invocation facts
 
-Only `.ralph/plans/EXECUTION_PLAN.md` directly under the active plans directory counts as the execution plan. Code checks `.ralph`, `.ralph/plans`, and the exact destination with `lstat`. Parents must be real directories and the destination, when present, must be a regular non-symlink file. Plans under `future/`, `archive/`, `blocked/`, or other names do not activate the path.
+Only `.ralph/plans/EXECUTION_PLAN.md` directly under the active plans directory counts as the execution plan. Code checks `.ralph`, `.ralph/plans`, and the exact destination with `lstat`, so a symlink is detected without following its target. Parents must be real directories and the destination, when present, must be a regular non-symlink file. A symlink or another conflicting path type produces a distinct error that names the path and tells the operator to replace it with the required real directory or regular file, or remove it, then retry. Plans under `future/`, `archive/`, `blocked/`, or other names do not activate the path.
 
 The plan prompt must declare `prime-ralph-invocation-version: 1`. The extension supplies one of four closed modes:
 

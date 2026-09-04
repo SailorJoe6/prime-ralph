@@ -25,7 +25,7 @@ Creating an active specification during the current specification phase does not
 
 ## Exact active-specification state
 
-The only active path is `.ralph/plans/SPECIFICATION.md`. Code uses `lstat` on `.ralph`, `.ralph/plans`, and the destination. Missing components mean the specification is absent. Both parents must be real directories, and only a real regular destination file is classified as existing. Symlinks and other conflicting path types are rejected without traversal.
+The only active path is `.ralph/plans/SPECIFICATION.md`. Code uses `lstat` on `.ralph`, `.ralph/plans`, and the destination, which detects a symlink without following its target. Missing components mean the specification is absent. Both parents must be real directories, and only a real regular destination file is classified as existing. Symlinks and other conflicting path types are rejected without traversal using distinct path-specific errors that tell the operator to replace the entry with the required real directory or regular file, or remove it, then retry.
 
 This check is a conflict-safety invariant, not a filesystem security sandbox. The ordinary tool-using agent remains responsible for following the delivered skill when it later writes a user-approved document.
 
