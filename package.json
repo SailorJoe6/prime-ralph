@@ -28,7 +28,8 @@
     "./init": "./src/init.js",
     "./cli": "./src/cli.js",
     "./workflow-extension": "./src/workflow-extension.js",
-    "./specification": "./src/specification.js"
+    "./specification": "./src/specification.js",
+    "./planning": "./src/planning.js"
   },
   "files": [
     "bin",
@@ -63,7 +64,9 @@
     "accept:init": "node scripts/run-init-acceptance.mjs",
     "accept:package-install": "node scripts/run-package-install-acceptance.mjs",
     "accept:specification": "node scripts/run-specification-acceptance.mjs",
-    "accept:model:spec-it-out": "node scripts/run-spec-it-out-model-acceptance.mjs"
+    "accept:model:spec-it-out": "node scripts/run-spec-it-out-model-acceptance.mjs",
+    "accept:planning": "node scripts/run-planning-acceptance.mjs",
+    "accept:model:plan": "node scripts/run-plan-model-acceptance.mjs"
   },
   "engines": {
     "node": ">=20"

@@ -7,9 +7,9 @@ if (typeof entry.default !== "function") throw new Error("default extension entr
 for (const mode of ["text", "json", "rpc", "acp", "daemon"]) {
   const commands = new Map();
   entry.default({ mode, registerCommand: (name, command) => commands.set(name, command), on() {}, appendEntry() {}, sendMessage() {} });
-  if (JSON.stringify([...commands.keys()]) !== JSON.stringify(["reset", "spec-it-out"]) || commands.has("clear")) throw new Error(`Slice 3 command registration failed in ${mode} smoke`);
+  if (JSON.stringify([...commands.keys()]) !== JSON.stringify(["reset", "spec-it-out", "plan"]) || commands.has("clear")) throw new Error(`Slice 4 command registration failed in ${mode} smoke`);
 }
-for (const exportName of ["observability", "ralph-context", "reset-context", "reset-extension", "reset-skill", "specification", "workflow-extension", "cycle-coordinator", "continuation-adapter", "skill-config", "phase-runtime", "beads-coordination", "coordination-runtime", "bd-cli-adapter", "goal-lifecycle", "cache-analysis", "diagnostics", "init", "cli"]) await import(new URL(`../src/${exportName}.js`, import.meta.url));
+for (const exportName of ["observability", "ralph-context", "reset-context", "reset-extension", "reset-skill", "specification", "planning", "workflow-extension", "cycle-coordinator", "continuation-adapter", "skill-config", "phase-runtime", "beads-coordination", "coordination-runtime", "bd-cli-adapter", "goal-lifecycle", "cache-analysis", "diagnostics", "init", "cli"]) await import(new URL(`../src/${exportName}.js`, import.meta.url));
 if (packageJson.bin?.["prime-ralph"] !== "bin/prime-ralph.js") throw new Error("initializer bin is not declared");
 await access(new URL("../bin/prime-ralph.js", import.meta.url), constants.X_OK);
 const forbiddenTerms = [
@@ -44,4 +44,14 @@ for (const file of ["README.md", "package.json"]) {
   if (found) throw new Error(`non-independent packaged text in ${file}`);
 }
 console.log("package independence scan OK");
+for (const artifactName of ["spec-it-out-model-acceptance.json", "plan-model-acceptance.json"]) {
+  const artifactUrl = new URL(`../docs/acceptance/${artifactName}`, import.meta.url);
+  try {
+    const artifact = JSON.parse(await readFile(artifactUrl, "utf8"));
+    if (!Array.isArray(artifact.results) || artifact.results.length === 0 || artifact.results.some((result) => result.verdict !== "pass")) throw new Error(`${artifactName} contains a missing or failed verdict`);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+}
+console.log("model acceptance artifacts OK");
 console.log(`package check OK: ${packageJson.name}@${packageJson.version}`);

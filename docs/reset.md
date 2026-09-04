@@ -2,7 +2,7 @@
 
 ## Contract
 
-`/reset` is a project-local Prime Agent command. It resets only model-visible messages in the existing session. It does not call `newSession`, session switching, forking, tree navigation, goal, autonomous, or REPL lifecycle APIs. It uses Prime Agent's public custom-compaction API when the host considers the current branch eligible.
+`/reset` is a project-local Prime Agent command. It resets only model-visible messages in the existing session and re-enters the plugin-owned specification or planning phase. It does not call `newSession`, session switching, forking, tree navigation, goal, autonomous, or REPL lifecycle APIs. It uses Prime Agent's public custom-compaction API when the host considers the current branch eligible.
 
 With no active specification, the sole injected instruction is the exact content of `.ralph/skills/prepare/SKILL.md`, wrapped in a standard skill block carrying its resolved location. With an active regular specification, the same atomic boundary contains `prepare` first and the validated `spec-it-out` skill in `specification-reset-existing` mode second. Code rechecks the exact path after becoming idle, and every required skill is loaded and validated before the extension appends a marker or changes model-visible context.
 
@@ -35,7 +35,7 @@ On reload or restart, a persisted matching prepare boundary is recovered without
 
 ## Evidence
 
-`npm test` covers strict YAML/UTF-8/size and Slice 3 prompt-version validation, exact specification path conflicts, ordered existing-spec reset injection, real marker matching, custom compaction results, wrapper filtering, exact prepare projection, short fallback, duplicate handling, ordinary-compaction isolation, synchronous admission failure, provider error state, reload recovery, and shutdown interruption.
+`npm test` covers strict YAML/UTF-8/size and specification/planning prompt-version validation, exact active-path conflicts, ordered phase-specific reset injection, real marker matching, custom compaction results, wrapper filtering, exact prepare projection, short fallback, duplicate handling, ordinary-compaction isolation, synchronous admission failure, provider error state, reload recovery, and shutdown interruption.
 
 `npm run accept:reset` uses Prime Agent `0.9.1`, deterministic provider capture, a disk-backed session, and a real IPython kernel. It proves custom compaction plus short fallback, prepare-only initial contexts, two boundaries, stale user/assistant/tool exclusion, and stable system prompt/session/JSONL/REPL state.
 
@@ -46,3 +46,7 @@ On reload or restart, a persisted matching prepare boundary is recovered without
 ## Public-API boundary
 
 Prime Agent `0.9.1` does not expose its stronger descendant-RLM quiescence barrier through `ExtensionCommandContext`. Slice 1 claims parent-session, active-tool, compaction, and normal input-queue ordering only to the extent covered by supported APIs. Arbitrary detached work is outside automatic detection. Later execution slices use the explicit Ralph waiting lifecycle rather than modifying Prime Agent.
+
+## Phase-specific injection
+
+Specification reset behavior is documented in [`specification.md`](specification.md). Planning reset behavior is documented in [`planning.md`](planning.md). Both use this same boundary transaction, single-flight guard, failure handling, and exact context projection. The combined message always places `prepare` before the selected phase skill and never starts execution.

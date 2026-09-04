@@ -2,11 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import primeRalph from "../src/index.js";
 
-test("exports the production Slice 3 workflow extension", () => {
+test("exports the production Slice 4 workflow extension", () => {
   const commands = new Map(), handlers = new Map();
   const pi = { registerCommand(name, command) { commands.set(name, command); }, on(name, handler) { handlers.set(name, handler); }, appendEntry() {}, sendMessage() {} };
   assert.doesNotThrow(() => primeRalph(pi));
-  assert.deepEqual([...commands.keys()], ["reset", "spec-it-out"]);
+  assert.deepEqual([...commands.keys()], ["reset", "spec-it-out", "plan"]);
   assert.equal(handlers.has("context"), true);
 });
 

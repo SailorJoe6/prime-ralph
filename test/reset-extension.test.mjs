@@ -180,7 +180,7 @@ test("converts synchronous prepare admission failure into terminal failed state"
   try { completeCompaction(h); } catch (error) { h.compactions[0].onError(error); }
   assert.equal(h.sent.length, 0);
   assert.equal(h.entries.at(-1).data.status, "failed");
-  assert.equal(h.entries.at(-1).data.reason, "compaction_failed");
+  assert.equal(h.entries.at(-1).data.reason, "skill_admission_failed");
 });
 
 test("reload recovers a persisted prepare boundary without replay", () => {

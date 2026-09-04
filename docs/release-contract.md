@@ -8,7 +8,7 @@ This document defines the standalone package boundary and the checks required be
 - Peer dependency: Prime Agent `0.9.1`.
 - ESM package with the exports listed in `package.json`.
 - Package contents are limited to `bin/`, `src/`, `templates/`, `scripts/`, `docs/`, `README.md`, and `LICENSE`.
-- The default extension registers production `/reset` and `/spec-it-out` behavior, does not register `/plan` or `/execute`, and does not register or shadow `/clear`.
+- The default extension registers production `/reset`, `/spec-it-out`, and `/plan` behavior, does not register `/execute` or blocked handling, and does not register or shadow `/clear`.
 
 The default extension does not start an agent, select a provider, execute shell commands, invoke Beads, choose a repository, or supply task criteria. The separate initializer performs only its explicit filesystem setup and, only with `--beads` and missing Beads state, invokes `bd init --skip-agents --skip-hooks`.
 
@@ -34,9 +34,16 @@ The default extension:
 3. sends `/spec-it-out` as one follow-up in the current conversation with closed, versioned state metadata;
 4. performs no command-handler planning-document mutation;
 5. expands `/reset` to deliver ordered reset-existing guidance when an active spec appears; and
-6. keeps planning, blocked, execution, goal, and autonomous paths unavailable.
+6. starts no planning automatically when a specification appears during the current specification phase.
 
 A Slice 3 `spec-it-out` skill declares `prime-ralph-invocation-version: 1`. Older project-local skills are preserved but rejected with an actionable compatibility error instead of being interpreted as current prompts.
+
+
+## Slice 4 planning contract
+
+With an active exact specification, startup and explicit fresh planning deliver one ordered `prepare`-then-`plan` turn. The extension supplies a closed versioned plan-state mode, preserves existing plans, and never writes a planning document. Existing-plan `/plan` keeps current context only after planning is established. Planning `/reset` uses the shared clean boundary for both active-plan states. Missing specifications and incompatible or conflicting paths fail before transition.
+
+The command catalog is exactly `/reset`, `/spec-it-out`, and `/plan`; `/execute`, blocked handling, and direct Ralph `skill:*` alternatives remain absent.
 
 ## Slice 1 reset contract
 
@@ -71,6 +78,9 @@ PRIME_AGENT_CORE_ROOT=/path/to/prime-agent/node_modules/@earendil-works/pi-agent
 npm run accept:specification
 PRIME_AGENT_ROOT=/path/to/prime-agent \
 PRIME_AGENT_CORE_ROOT=/path/to/prime-agent/node_modules/@earendil-works/pi-agent-core \
+npm run accept:planning
+PRIME_AGENT_ROOT=/path/to/prime-agent \
+PRIME_AGENT_CORE_ROOT=/path/to/prime-agent/node_modules/@earendil-works/pi-agent-core \
 npm run accept:reset-busy
 PRIME_AGENT_ROOT=/path/to/prime-agent \
 PRIME_AGENT_CORE_ROOT=/path/to/prime-agent/node_modules/@earendil-works/pi-agent-core \
@@ -79,11 +89,15 @@ PRIME_RALPH_REAL_MODEL_ACCEPTANCE=1 \
 PRIME_RALPH_ACCEPT_PROVIDER=<provider> \
 PRIME_RALPH_ACCEPT_MODEL=<model> \
 npm run accept:model:spec-it-out -- --variant all --case all
+PRIME_RALPH_REAL_MODEL_ACCEPTANCE=1 \
+PRIME_RALPH_ACCEPT_PROVIDER=<provider> \
+PRIME_RALPH_ACCEPT_MODEL=<model> \
+npm run accept:model:plan -- --variant all --case all
 npm run package:check
 npm pack --dry-run
 ```
 
-The reset and specification lifecycle acceptance scripts are disposable and use deterministic providers. `accept:reset` also starts and closes a real Prime Agent IPython kernel. The opt-in model matrix is nondeterministic behavioral evidence and writes only a curated, secret-scanned artifact.
+The reset, specification, and planning lifecycle acceptance scripts are disposable and use deterministic providers. `accept:reset` also starts and closes a real Prime Agent IPython kernel. The opt-in model matrix is nondeterministic behavioral evidence and writes only a curated, secret-scanned artifact.
 
 Then extract the produced tarball in a clean temporary directory, import `src/index.js`, and verify `/reset` registration with a Prime Agent-shaped extension API fixture.
 
@@ -91,7 +105,8 @@ Then extract the produced tarball in a clean temporary directory, import `src/in
 
 - Unit tests and static prompt checks do not prove host lifecycle ordering or model behavior.
 - The specification lifecycle acceptance proves startup ordering, reload suppression, context retention, reset projection, and an unambiguous native extension-command catalog on Prime Agent `0.9.1`.
-- The opt-in model matrix proves only the recorded provider/model outcomes under its restricted fixture tools; it covers new creation, the initial existing-spec menu, confirmed future creation, agreed active update, cancellation, and reset-existing behavior, and is not deterministic CI evidence.
+- The planning lifecycle acceptance proves phase selection, ordered skill delivery, clean and current-context `/plan` paths, both planning reset branches, document protection, and no execution start.
+- The opt-in model matrices prove only the recorded provider/model outcomes under its restricted fixture tools; it covers new creation, the initial existing-spec menu, confirmed future creation, agreed active update, cancellation, and reset-existing behavior, and is not deterministic CI evidence.
 - The disk-backed acceptance proves provider context, JSONL, session identity, and REPL continuity on Prime Agent `0.9.1`.
 - The busy acceptance proves ordering behind an active parent turn and existing follow-up.
 - The lifecycle acceptance proves durable custom-compaction resume, cancellation without partial prepare, provider-failure state, and safe retry.

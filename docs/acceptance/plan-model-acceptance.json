@@ -1,0 +1,1881 @@
+{
+  "schemaVersion": 1,
+  "evidenceKind": "real-model-behavioral",
+  "generatedAt": "2026-09-04T13:53:19.843Z",
+  "provider": "openai-codex",
+  "model": "gpt-5.6-sol",
+  "results": [
+    {
+      "schemaVersion": 1,
+      "evidenceKind": "real-model-behavioral",
+      "variant": "default",
+      "case": "new",
+      "invocation": {
+        "specificationState": "existing",
+        "planState": "absent",
+        "invocationMode": "planning-new"
+      },
+      "fixtureConversation": [],
+      "prompt": {
+        "repositoryPath": "templates/default/plan/SKILL.md",
+        "sha256": "c6b65659a5613e96d232a931c696e38341363bcf4ed190872a5b3a977e63763d"
+      },
+      "runtime": {
+        "primeAgentVersion": "0.9.1",
+        "primeRalphVersion": "0.1.0",
+        "nodeVersion": "v22.22.2",
+        "requestedProvider": "openai-codex",
+        "requestedModel": "gpt-5.6-sol"
+      },
+      "observed": {
+        "provider": "openai-codex",
+        "model": "gpt-5.6-sol",
+        "stopReason": "stop",
+        "usage": {
+          "input": 1962,
+          "output": 43,
+          "cacheRead": 1536,
+          "cacheWrite": 0,
+          "totalTokens": 3541,
+          "cost": {
+            "input": 0.009810000000000001,
+            "output": 0.0012900000000000001,
+            "cacheRead": 0.000768,
+            "cacheWrite": 0,
+            "total": 0.011868
+          }
+        },
+        "toolCalls": [
+          "read_planning_inputs",
+          "write_execution_plan"
+        ],
+        "finalAssistantText": "Created `.ralph/plans/EXECUTION_PLAN.md` with exactly two vertical slices, explicit acceptance gates, validation semantics, offline testing, documentation, and recovery constraints. No implementation was performed."
+      },
+      "files": {
+        "changed": [
+          ".ralph/plans/EXECUTION_PLAN.md"
+        ],
+        "afterManifest": {
+          ".ralph": {
+            "kind": "directory"
+          },
+          ".ralph/plans": {
+            "kind": "directory"
+          },
+          ".ralph/plans/EXECUTION_PLAN.md": {
+            "kind": "file",
+            "bytes": 5985,
+            "sha256": "16d59a7c7d07b4ce2d41ec12d61e2c1802ed3532893dfb893ad50de3608b3328"
+          },
+          ".ralph/plans/SPECIFICATION.md": {
+            "kind": "file",
+            "bytes": 431,
+            "sha256": "c9d232619c3460936beed47b1e8c8a3051111bd50acf83ff277f3a794ef33040"
+          },
+          ".ralph/skills": {
+            "kind": "directory"
+          },
+          ".ralph/skills/plan": {
+            "kind": "directory"
+          },
+          ".ralph/skills/plan/SKILL.md": {
+            "kind": "file",
+            "bytes": 1817,
+            "sha256": "c6b65659a5613e96d232a931c696e38341363bcf4ed190872a5b3a977e63763d"
+          },
+          "acceptance-tool.mjs": {
+            "kind": "file",
+            "bytes": 2756,
+            "sha256": "9573cc9738362abbb712f8318ff778595070ae4cd632588eb1bc5341371aec5c"
+          }
+        },
+        "executionPlan": {
+          "bytes": 5985,
+          "sha256": "16d59a7c7d07b4ce2d41ec12d61e2c1802ed3532893dfb893ad50de3608b3328",
+          "content": "# Orbit Ledger execution plan\n\n## Scope and fixed decisions\n\n- Implement only the behavior in `SPECIFICATION.md`; do not use the network or introduce any network-dependent build/runtime step.\n- Use `input.csv` in the current working directory as the sole input and standard output as the sole data output.\n- Preserve CSV row order. Emit one JSON object per data row with keys `id` and `name` in header order.\n- Treat CSV fields as strings in JSON, including `id`; this preserves the source data and follows header-keyed CSV conversion semantics.\n- Define a valid `id` lexically as `[1-9][0-9]*` (ASCII decimal digits, no sign, decimal point, whitespace, or zero), avoiding numeric overflow by not converting it to a bounded machine integer. Define a valid `name` as a field whose length is greater than zero; whitespace-only names remain non-empty.\n- Parse CSV with the project language's standards-compliant CSV facility so quoting, embedded commas, escaped quotes, and line endings are handled correctly.\n- Keep the delivery to exactly the two vertical slices below. Follow the repository's existing language, command/entry-point, dependency, test, and formatting conventions rather than creating a parallel toolchain.\n\n## Slice 1 — Valid CSV to local JSON\n\n**Usable outcome:** Running the project command locally reads `input.csv` with the exact header row `id,name` and writes a JSON array of header-keyed objects to standard output.\n\n1. Identify the existing application entry point and test conventions, then add the smallest implementation that opens `input.csv`, parses it as CSV, maps each data row to `{ \"id\": <string>, \"name\": <string> }`, preserves source order, and serializes the complete array as valid JSON to stdout.\n2. Keep stdout machine-readable: no status, logging, or explanatory text may accompany the JSON. Ensure an empty data section produces `[]`.\n3. Add automated tests using isolated temporary working directories/files, without network access, covering:\n   - one valid row and multiple valid rows in source order;\n   - the exact JSON structure and string-valued fields;\n   - an input containing quoted commas and escaped quotes in `name`;\n   - an exact header with no data rows;\n   - stdout containing parseable JSON and no extra non-JSON output.\n4. Run the repository's focused tests for the new behavior, then its existing relevant test suite and formatting/static checks, all offline.\n\n**Acceptance gate:** With a valid `input.csv` headed exactly `id,name`, the supported local command exits successfully and stdout parses as the expected JSON array for all valid-data fixtures, including CSV quoting and empty input. Existing relevant checks remain green. Do not begin Slice 2 until this gate passes.\n\n## Slice 2 — Invalid-row failure contract and documentation\n\n**Usable outcome:** Any invalid data row causes a deterministic exit status of 2, with tests and user-facing documentation of both success and failure behavior.\n\n1. Add row validation after standards-compliant CSV parsing and before emitting data:\n   - reject any row whose field count does not match the two headers;\n   - reject `id` values that do not match `[1-9][0-9]*`;\n   - reject an empty `name` value;\n   - treat parser-reported malformed CSV in a data row as an invalid row.\n2. Buffer/construct and validate the entire result before writing stdout so a later invalid row cannot leave partial JSON. On an invalid row, emit no JSON to stdout and exit exactly 2. If a diagnostic is provided, send it only to stderr and include a stable one-based CSV record/line reference where the parser makes that reliable; do not expose a stack trace.\n3. Preserve the Slice 1 success path unchanged. Keep non-row operational failures (for example, a missing or unreadable `input.csv`) distinct from the specified invalid-row status rather than incorrectly labeling them as row validation failures; test the repository's chosen conventional non-2 failure behavior if such handling is added.\n4. Add parameterized automated tests covering invalid IDs (`0`, negative, signed, decimal, whitespace-padded, non-digit, and empty), an empty name, extra and missing columns, malformed quoted CSV, an invalid row after at least one valid row, exact exit code 2, empty stdout on failure, and diagnostics confined to stderr. Retain and rerun all Slice 1 tests.\n5. Document the supported invocation, fixed `input.csv` location and exact `id,name` headers, JSON stdout schema with string field values, validity rules, order preservation, CSV quoting support, exit code 2, no-output-on-invalid-row guarantee, and a concise valid/invalid example. Ensure examples require no network.\n6. Run the complete offline test suite plus repository-standard formatting, linting, and packaging/build checks where present. Capture the commands and successful results in the normal project evidence location (for example, commit/PR notes); do not add a new evidence mechanism solely for this change.\n\n**Acceptance gate:** Every invalid-row fixture exits exactly 2 and produces no stdout, every valid fixture still emits the specified JSON and exits successfully, documentation matches the tested interface, and all relevant offline tests and repository checks pass. The resulting artifact/entry point runs locally without downloading anything.\n\n## Ordering and recovery constraints\n\n- Implement and verify Slice 1 before adding Slice 2 validation, while committing each slice independently if the repository workflow uses commits.\n- Never stream the JSON array before full parsing and validation; atomic stdout behavior is required for recovery from a late invalid row.\n- Use temporary fixtures and restore/avoid modifying any developer-owned `input.csv` during tests.\n- If a check fails, keep the last accepted slice usable, correct the failure within the current slice, and rerun its focused gate before the broader suite. Do not weaken assertions or change the final specification decisions to obtain a passing result.\n"
+        }
+      },
+      "timing": {
+        "startedAt": "2026-09-04T13:48:59.005Z",
+        "endedAt": "2026-09-04T13:49:40.634Z",
+        "durationMs": 41629
+      },
+      "assertions": [
+        {
+          "name": "process succeeded",
+          "pass": true
+        },
+        {
+          "name": "Prime Agent 0.9.1 recorded",
+          "pass": true
+        },
+        {
+          "name": "terminal assistant response",
+          "pass": true
+        },
+        {
+          "name": "selected provider observed",
+          "pass": true
+        },
+        {
+          "name": "selected model observed",
+          "pass": true
+        },
+        {
+          "name": "active specification unchanged",
+          "pass": true
+        },
+        {
+          "name": "active specification read after clean injection",
+          "pass": true
+        },
+        {
+          "name": "one plan creation call",
+          "pass": true
+        },
+        {
+          "name": "exact execution plan created",
+          "pass": true
+        },
+        {
+          "name": "vertical slice decisions captured",
+          "pass": true
+        },
+        {
+          "name": "only execution plan changed",
+          "pass": true
+        },
+        {
+          "name": "no execution started",
+          "pass": true
+        }
+      ],
+      "verdict": "pass"
+    },
+    {
+      "schemaVersion": 1,
+      "evidenceKind": "real-model-behavioral",
+      "variant": "default",
+      "case": "existing",
+      "invocation": {
+        "specificationState": "existing",
+        "planState": "existing",
+        "invocationMode": "planning-existing"
+      },
+      "fixtureConversation": [
+        {
+          "role": "user",
+          "text": "I want to review the active execution plan, but I have not approved any plan edit."
+        }
+      ],
+      "prompt": {
+        "repositoryPath": "templates/default/plan/SKILL.md",
+        "sha256": "c6b65659a5613e96d232a931c696e38341363bcf4ed190872a5b3a977e63763d"
+      },
+      "runtime": {
+        "primeAgentVersion": "0.9.1",
+        "primeRalphVersion": "0.1.0",
+        "nodeVersion": "v22.22.2",
+        "requestedProvider": "openai-codex",
+        "requestedModel": "gpt-5.6-sol"
+      },
+      "observed": {
+        "provider": "openai-codex",
+        "model": "gpt-5.6-sol",
+        "stopReason": "stop",
+        "usage": {
+          "input": 334,
+          "output": 293,
+          "cacheRead": 1536,
+          "cacheWrite": 0,
+          "totalTokens": 2163,
+          "cost": {
+            "input": 0.00167,
+            "output": 0.008790000000000001,
+            "cacheRead": 0.000768,
+            "cacheWrite": 0,
+            "total": 0.011228
+          }
+        },
+        "toolCalls": [
+          "read_planning_inputs"
+        ],
+        "finalAssistantText": "An active execution plan already exists. I reviewed it without changing it.\n\n**Current plan**\n> One deployment slice.\n\n**Review**\nThe plan does not satisfy the specification because it:\n\n- Has one slice instead of exactly two.\n- Omits Slice 1: read `input.csv`, emit a JSON array to stdout, and add tests.\n- Omits Slice 2: validate positive-integer `id` and non-empty `name`, exit with code 2 on any invalid row, and add tests and documentation.\n- Does not record the exact `id,name` headers or no-network constraint.\n- Lacks acceptance gates and safe ordering.\n\nNo plan edit was made.\n\n1. Discuss the active execution plan without changing it.\n2. Make an in-place update only after the user explicitly agrees to that update.\n3. Cancel without changing the active execution plan."
+      },
+      "files": {
+        "changed": [],
+        "afterManifest": {
+          ".ralph": {
+            "kind": "directory"
+          },
+          ".ralph/plans": {
+            "kind": "directory"
+          },
+          ".ralph/plans/EXECUTION_PLAN.md": {
+            "kind": "file",
+            "bytes": 49,
+            "sha256": "0bef34514770568572deef456d52eed807f82c6cf059a29c082183cd6f76f583"
+          },
+          ".ralph/plans/SPECIFICATION.md": {
+            "kind": "file",
+            "bytes": 431,
+            "sha256": "c9d232619c3460936beed47b1e8c8a3051111bd50acf83ff277f3a794ef33040"
+          },
+          ".ralph/skills": {
+            "kind": "directory"
+          },
+          ".ralph/skills/plan": {
+            "kind": "directory"
+          },
+          ".ralph/skills/plan/SKILL.md": {
+            "kind": "file",
+            "bytes": 1817,
+            "sha256": "c6b65659a5613e96d232a931c696e38341363bcf4ed190872a5b3a977e63763d"
+          },
+          "acceptance-tool.mjs": {
+            "kind": "file",
+            "bytes": 2756,
+            "sha256": "9573cc9738362abbb712f8318ff778595070ae4cd632588eb1bc5341371aec5c"
+          }
+        },
+        "executionPlan": {
+          "bytes": 49,
+          "sha256": "0bef34514770568572deef456d52eed807f82c6cf059a29c082183cd6f76f583",
+          "content": "# Existing execution plan\n\nOne deployment slice.\n"
+        }
+      },
+      "timing": {
+        "startedAt": "2026-09-04T13:49:40.636Z",
+        "endedAt": "2026-09-04T13:49:51.952Z",
+        "durationMs": 11316
+      },
+      "assertions": [
+        {
+          "name": "process succeeded",
+          "pass": true
+        },
+        {
+          "name": "Prime Agent 0.9.1 recorded",
+          "pass": true
+        },
+        {
+          "name": "terminal assistant response",
+          "pass": true
+        },
+        {
+          "name": "selected provider observed",
+          "pass": true
+        },
+        {
+          "name": "selected model observed",
+          "pass": true
+        },
+        {
+          "name": "active specification unchanged",
+          "pass": true
+        },
+        {
+          "name": "no mutation before agreement",
+          "pass": true
+        },
+        {
+          "name": "execution plan unchanged",
+          "pass": true
+        },
+        {
+          "name": "no fixture files changed",
+          "pass": true
+        },
+        {
+          "name": "warns active plan exists",
+          "pass": true
+        },
+        {
+          "name": "offers discussion",
+          "pass": true
+        },
+        {
+          "name": "offers explicit update",
+          "pass": true
+        },
+        {
+          "name": "offers cancellation",
+          "pass": true
+        },
+        {
+          "name": "no execution started",
+          "pass": true
+        }
+      ],
+      "verdict": "pass"
+    },
+    {
+      "schemaVersion": 1,
+      "evidenceKind": "real-model-behavioral",
+      "variant": "default",
+      "case": "update",
+      "invocation": {
+        "specificationState": "existing",
+        "planState": "existing",
+        "invocationMode": "planning-existing"
+      },
+      "fixtureConversation": [
+        {
+          "role": "user",
+          "text": "I want to review the active execution plan, but I have not approved any plan edit."
+        },
+        {
+          "role": "assistant",
+          "text": "An active execution plan already exists. Choose whether to discuss it, explicitly agree to an in-place update, or cancel without changes."
+        },
+        {
+          "role": "user",
+          "text": "We discussed it. I explicitly agree to update the active plan in place so it has exactly the two vertical slices required by the specification. Update it now."
+        }
+      ],
+      "prompt": {
+        "repositoryPath": "templates/default/plan/SKILL.md",
+        "sha256": "c6b65659a5613e96d232a931c696e38341363bcf4ed190872a5b3a977e63763d"
+      },
+      "runtime": {
+        "primeAgentVersion": "0.9.1",
+        "primeRalphVersion": "0.1.0",
+        "nodeVersion": "v22.22.2",
+        "requestedProvider": "openai-codex",
+        "requestedModel": "gpt-5.6-sol"
+      },
+      "observed": {
+        "provider": "openai-codex",
+        "model": "gpt-5.6-sol",
+        "stopReason": "stop",
+        "usage": {
+          "input": 925,
+          "output": 48,
+          "cacheRead": 1792,
+          "cacheWrite": 0,
+          "totalTokens": 2765,
+          "cost": {
+            "input": 0.004625000000000001,
+            "output": 0.00144,
+            "cacheRead": 0.000896,
+            "cacheWrite": 0,
+            "total": 0.006961000000000001
+          }
+        },
+        "toolCalls": [
+          "read_planning_inputs",
+          "update_execution_plan"
+        ],
+        "finalAssistantText": "Updated the active execution plan in place with exactly two vertical slices:\n\n1. Local CSV-to-JSON conversion with tests.\n2. Invalid-row exit code `2`, tests, and documentation.\n\nNo project implementation was performed."
+      },
+      "files": {
+        "changed": [
+          ".ralph/plans/EXECUTION_PLAN.md"
+        ],
+        "afterManifest": {
+          ".ralph": {
+            "kind": "directory"
+          },
+          ".ralph/plans": {
+            "kind": "directory"
+          },
+          ".ralph/plans/EXECUTION_PLAN.md": {
+            "kind": "file",
+            "bytes": 3247,
+            "sha256": "bef515af4e5abc3ccdda6f1a602fead0542dbbb6bbf2e597c0b3a5fd8357a951"
+          },
+          ".ralph/plans/SPECIFICATION.md": {
+            "kind": "file",
+            "bytes": 431,
+            "sha256": "c9d232619c3460936beed47b1e8c8a3051111bd50acf83ff277f3a794ef33040"
+          },
+          ".ralph/skills": {
+            "kind": "directory"
+          },
+          ".ralph/skills/plan": {
+            "kind": "directory"
+          },
+          ".ralph/skills/plan/SKILL.md": {
+            "kind": "file",
+            "bytes": 1817,
+            "sha256": "c6b65659a5613e96d232a931c696e38341363bcf4ed190872a5b3a977e63763d"
+          },
+          "acceptance-tool.mjs": {
+            "kind": "file",
+            "bytes": 2756,
+            "sha256": "9573cc9738362abbb712f8318ff778595070ae4cd632588eb1bc5341371aec5c"
+          }
+        },
+        "executionPlan": {
+          "bytes": 3247,
+          "sha256": "bef515af4e5abc3ccdda6f1a602fead0542dbbb6bbf2e597c0b3a5fd8357a951",
+          "content": "# Orbit Ledger execution plan\n\n## Constraints and delivery order\n\n- Never use the network during implementation, testing, or use.\n- Treat `input.csv` in the local working directory as the only input; require the exact headers `id,name`.\n- Write only the resulting JSON array to standard output on success.\n- Implement and accept Slice 1 before Slice 2; keep Slice 1 success behavior intact while adding validation in Slice 2.\n\n## Slice 1 — Local CSV-to-JSON conversion\n\nDeliver a locally runnable program that reads `input.csv` with the exact headers `id,name` and writes a JSON array to standard output. Each CSV row becomes an object keyed by those headers, preserving row order.\n\nImplementation work:\n\n- Add the smallest project-appropriate command or entry point needed to read the local file without network access.\n- Parse the CSV using CSV-aware handling rather than manually splitting lines, so quoted fields are handled correctly.\n- Reject a header row that is not exactly `id,name`; do not silently rename, reorder, add, or omit columns.\n- Serialize the converted rows as valid JSON on standard output, with no logs or explanatory text mixed into successful output.\n- Add automated tests covering a representative valid file, multiple rows in preserved order, exact object keys, quoted CSV content, and the exact-header requirement.\n\nAcceptance gate:\n\n- With a valid `input.csv`, the command exits successfully and standard output parses as the expected JSON array of header-keyed objects.\n- Tests demonstrate local file input, correct CSV parsing, exact headers, preserved row order, and clean JSON-only standard output.\n- The implementation and tests perform no network access.\n\n## Slice 2 — Invalid-row failure contract and documentation\n\nExtend the working converter so every row is validated before successful output: `id` must be a positive integer and `name` must be non-empty. If any row is invalid, exit with status code `2` and do not emit a successful JSON array.\n\nImplementation work:\n\n- Validate every data row against both final rules, including zero, negative, non-integer, and missing `id` values, plus empty or missing `name` values.\n- Ensure a file containing any invalid row terminates with exit code `2`, including when valid rows occur before or after the invalid row.\n- Prevent partial or misleading success output by completing validation before writing the JSON array to standard output.\n- Retain the Slice 1 output behavior for wholly valid input.\n- Add automated tests for each invalid-row category, mixed valid/invalid files, exit code `2`, absence of a success array on failure, and regression coverage for valid conversion.\n- Document the required `input.csv` location and exact headers, the validity rules, how to run the command and tests locally, the JSON standard-output contract, invalid-row exit code `2`, and the no-network constraint.\n\nAcceptance gate:\n\n- Every tested invalid row causes exit code `2` and no JSON success payload.\n- A wholly valid file still exits successfully and emits the expected JSON array.\n- The full automated test suite passes locally without network access.\n- Documentation accurately describes input, output, validation, failure behavior, and local verification steps.\n"
+        }
+      },
+      "timing": {
+        "startedAt": "2026-09-04T13:49:51.954Z",
+        "endedAt": "2026-09-04T13:50:16.756Z",
+        "durationMs": 24802
+      },
+      "assertions": [
+        {
+          "name": "process succeeded",
+          "pass": true
+        },
+        {
+          "name": "Prime Agent 0.9.1 recorded",
+          "pass": true
+        },
+        {
+          "name": "terminal assistant response",
+          "pass": true
+        },
+        {
+          "name": "selected provider observed",
+          "pass": true
+        },
+        {
+          "name": "selected model observed",
+          "pass": true
+        },
+        {
+          "name": "active specification unchanged",
+          "pass": true
+        },
+        {
+          "name": "one approved update call",
+          "pass": true
+        },
+        {
+          "name": "execution plan updated",
+          "pass": true
+        },
+        {
+          "name": "only execution plan changed",
+          "pass": true
+        },
+        {
+          "name": "no execution started",
+          "pass": true
+        }
+      ],
+      "verdict": "pass"
+    },
+    {
+      "schemaVersion": 1,
+      "evidenceKind": "real-model-behavioral",
+      "variant": "default",
+      "case": "cancel",
+      "invocation": {
+        "specificationState": "existing",
+        "planState": "existing",
+        "invocationMode": "planning-existing"
+      },
+      "fixtureConversation": [
+        {
+          "role": "user",
+          "text": "I want to review the active execution plan, but I have not approved any plan edit."
+        },
+        {
+          "role": "assistant",
+          "text": "An active execution plan already exists. Choose whether to discuss it, explicitly agree to an in-place update, or cancel without changes."
+        },
+        {
+          "role": "user",
+          "text": "Cancel. Do not change the execution plan."
+        }
+      ],
+      "prompt": {
+        "repositoryPath": "templates/default/plan/SKILL.md",
+        "sha256": "c6b65659a5613e96d232a931c696e38341363bcf4ed190872a5b3a977e63763d"
+      },
+      "runtime": {
+        "primeAgentVersion": "0.9.1",
+        "primeRalphVersion": "0.1.0",
+        "nodeVersion": "v22.22.2",
+        "requestedProvider": "openai-codex",
+        "requestedModel": "gpt-5.6-sol"
+      },
+      "observed": {
+        "provider": "openai-codex",
+        "model": "gpt-5.6-sol",
+        "stopReason": "stop",
+        "usage": {
+          "input": 1741,
+          "output": 38,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "totalTokens": 1779,
+          "cost": {
+            "input": 0.008705000000000001,
+            "output": 0.00114,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0.009845000000000001
+          }
+        },
+        "toolCalls": [],
+        "finalAssistantText": "Cancelled. The active execution plan was not changed."
+      },
+      "files": {
+        "changed": [],
+        "afterManifest": {
+          ".ralph": {
+            "kind": "directory"
+          },
+          ".ralph/plans": {
+            "kind": "directory"
+          },
+          ".ralph/plans/EXECUTION_PLAN.md": {
+            "kind": "file",
+            "bytes": 49,
+            "sha256": "0bef34514770568572deef456d52eed807f82c6cf059a29c082183cd6f76f583"
+          },
+          ".ralph/plans/SPECIFICATION.md": {
+            "kind": "file",
+            "bytes": 431,
+            "sha256": "c9d232619c3460936beed47b1e8c8a3051111bd50acf83ff277f3a794ef33040"
+          },
+          ".ralph/skills": {
+            "kind": "directory"
+          },
+          ".ralph/skills/plan": {
+            "kind": "directory"
+          },
+          ".ralph/skills/plan/SKILL.md": {
+            "kind": "file",
+            "bytes": 1817,
+            "sha256": "c6b65659a5613e96d232a931c696e38341363bcf4ed190872a5b3a977e63763d"
+          },
+          "acceptance-tool.mjs": {
+            "kind": "file",
+            "bytes": 2756,
+            "sha256": "9573cc9738362abbb712f8318ff778595070ae4cd632588eb1bc5341371aec5c"
+          }
+        },
+        "executionPlan": {
+          "bytes": 49,
+          "sha256": "0bef34514770568572deef456d52eed807f82c6cf059a29c082183cd6f76f583",
+          "content": "# Existing execution plan\n\nOne deployment slice.\n"
+        }
+      },
+      "timing": {
+        "startedAt": "2026-09-04T13:50:16.758Z",
+        "endedAt": "2026-09-04T13:50:25.052Z",
+        "durationMs": 8294
+      },
+      "assertions": [
+        {
+          "name": "process succeeded",
+          "pass": true
+        },
+        {
+          "name": "Prime Agent 0.9.1 recorded",
+          "pass": true
+        },
+        {
+          "name": "terminal assistant response",
+          "pass": true
+        },
+        {
+          "name": "selected provider observed",
+          "pass": true
+        },
+        {
+          "name": "selected model observed",
+          "pass": true
+        },
+        {
+          "name": "active specification unchanged",
+          "pass": true
+        },
+        {
+          "name": "cancel performs no tool call",
+          "pass": true
+        },
+        {
+          "name": "execution plan unchanged",
+          "pass": true
+        },
+        {
+          "name": "cancel changes no files",
+          "pass": true
+        },
+        {
+          "name": "no execution started",
+          "pass": true
+        }
+      ],
+      "verdict": "pass"
+    },
+    {
+      "schemaVersion": 1,
+      "evidenceKind": "real-model-behavioral",
+      "variant": "default",
+      "case": "reset-new",
+      "invocation": {
+        "specificationState": "existing",
+        "planState": "absent",
+        "invocationMode": "planning-reset-new"
+      },
+      "fixtureConversation": [],
+      "prompt": {
+        "repositoryPath": "templates/default/plan/SKILL.md",
+        "sha256": "c6b65659a5613e96d232a931c696e38341363bcf4ed190872a5b3a977e63763d"
+      },
+      "runtime": {
+        "primeAgentVersion": "0.9.1",
+        "primeRalphVersion": "0.1.0",
+        "nodeVersion": "v22.22.2",
+        "requestedProvider": "openai-codex",
+        "requestedModel": "gpt-5.6-sol"
+      },
+      "observed": {
+        "provider": "openai-codex",
+        "model": "gpt-5.6-sol",
+        "stopReason": "stop",
+        "usage": {
+          "input": 1479,
+          "output": 47,
+          "cacheRead": 1664,
+          "cacheWrite": 0,
+          "totalTokens": 3190,
+          "cost": {
+            "input": 0.0073950000000000005,
+            "output": 0.00141,
+            "cacheRead": 0.000832,
+            "cacheWrite": 0,
+            "total": 0.009637
+          }
+        },
+        "toolCalls": [
+          "read_planning_inputs",
+          "write_execution_plan"
+        ],
+        "finalAssistantText": "Created `.ralph/plans/EXECUTION_PLAN.md` with exactly two ordered vertical slices, explicit acceptance gates, validation behavior, tests, documentation, recovery steps, and no-network constraints. No implementation was started."
+      },
+      "files": {
+        "changed": [
+          ".ralph/plans/EXECUTION_PLAN.md"
+        ],
+        "afterManifest": {
+          ".ralph": {
+            "kind": "directory"
+          },
+          ".ralph/plans": {
+            "kind": "directory"
+          },
+          ".ralph/plans/EXECUTION_PLAN.md": {
+            "kind": "file",
+            "bytes": 5970,
+            "sha256": "c988c9ab611e71a585bfac241ab2f5dcd344e0ede253a0db4f5e377ff12ce481"
+          },
+          ".ralph/plans/SPECIFICATION.md": {
+            "kind": "file",
+            "bytes": 431,
+            "sha256": "c9d232619c3460936beed47b1e8c8a3051111bd50acf83ff277f3a794ef33040"
+          },
+          ".ralph/skills": {
+            "kind": "directory"
+          },
+          ".ralph/skills/plan": {
+            "kind": "directory"
+          },
+          ".ralph/skills/plan/SKILL.md": {
+            "kind": "file",
+            "bytes": 1817,
+            "sha256": "c6b65659a5613e96d232a931c696e38341363bcf4ed190872a5b3a977e63763d"
+          },
+          "acceptance-tool.mjs": {
+            "kind": "file",
+            "bytes": 2756,
+            "sha256": "9573cc9738362abbb712f8318ff778595070ae4cd632588eb1bc5341371aec5c"
+          }
+        },
+        "executionPlan": {
+          "bytes": 5970,
+          "sha256": "c988c9ab611e71a585bfac241ab2f5dcd344e0ede253a0db4f5e377ff12ce481",
+          "content": "# Orbit Ledger execution plan\n\n## Scope and fixed constraints\n\n- Implement only the behavior defined in `SPECIFICATION.md`.\n- Never use the network during implementation, testing, packaging, or verification.\n- Read the local file `input.csv`, whose exact required headers are `id,name`.\n- Write only a JSON array of header-keyed objects to standard output on success.\n- A valid row has an `id` that is a positive integer and a non-empty `name`.\n- Deliver exactly two vertical slices, in the order below. Slice 2 must not begin until Slice 1's acceptance gate passes.\n- Before changing code in Slice 1, identify the repository's existing executable entry point, language/build conventions, test framework, and documentation location; reuse them rather than introducing a parallel architecture. This is local inspection only and must not use the network.\n\n## Slice 1 — Local CSV-to-JSON happy path\n\n**Usable result:** Running the project locally reads `input.csv` and emits the valid rows as JSON on standard output.\n\n1. Inspect the local project structure and existing tests/build metadata to locate the narrowest appropriate implementation and test seams. Record any commands needed for repeatable local verification; do not fetch dependencies or access remote services.\n2. Implement reading `input.csv` from the process working directory with the exact header contract `id,name`.\n3. Convert each valid CSV data row into an object keyed by the headers and serialize the complete ordered collection as a JSON array to standard output. Preserve CSV row order and use the project's established representation conventions; do not emit diagnostics or other text to standard output.\n4. Add focused automated tests using isolated temporary working directories/files. Cover at minimum a valid single-row file, multiple valid rows with order preserved, an empty data set with only the exact header, correct JSON parsing/shape, and clean standard output. Include CSV quoting behavior if supported by the repository's CSV mechanism rather than implementing ad hoc delimiter splitting.\n5. Add or adapt a local test fixture only where needed; keep the production command independent of network access.\n\n**Slice 1 acceptance gate**\n\n- The established local test command passes without network access.\n- With an exact-header valid `input.csv`, the executable exits successfully and standard output parses as the expected JSON array of `id`/`name` objects in source order.\n- Header-only input produces `[]`.\n- No logs, status messages, or documentation text contaminate standard output.\n- Existing unrelated tests still pass.\n\n## Slice 2 — Validation, deterministic failure, and user documentation\n\n**Usable result:** The tool rejects every invalid row with exit code 2 while retaining the Slice 1 success behavior, and users have complete local usage documentation.\n\n1. Add row validation at the parsing boundary. Treat a row as invalid when `id` is not syntactically a positive integer (including zero, negative, empty, or non-integer values) or when `name` is empty. Validate all rows before writing the success JSON so failure cannot leave partial JSON on standard output.\n2. On any invalid row, terminate with process exit code `2`. Keep standard output free of the success payload; if the project convention calls for an error message, send a concise deterministic diagnostic to standard error without changing the required exit code.\n3. Add automated tests for each invalid class: zero id, negative id, non-integer id, empty id, and empty name. Include invalid rows in first, middle, and last positions as appropriate to prove fail-closed behavior and absence of partial standard-output JSON. Add a mixed valid/invalid input case and retain all Slice 1 regression tests.\n4. Add tests for contract-level malformed input that can represent an invalid row or violate the exact header requirement, using the same exit-code-2 path where consistent with the specification's invalid-input policy. At minimum cover wrong, missing, reordered, or extra headers and malformed row widths if the CSV library exposes them. Do not silently normalize an inexact header.\n5. Document the local invocation, required `input.csv` location, exact `id,name` header, valid-field rules, successful JSON/stdout contract, invalid-row exit code `2`, stderr behavior if present, representative success and failure examples, and the no-network operating constraint.\n6. Run the complete local verification suite and a manual command-level success/failure smoke check using disposable fixtures. Confirm no generated fixtures, caches, or build artifacts are unintentionally included in the deliverable.\n\n**Slice 2 acceptance gate**\n\n- Every specified invalid-row test exits with exactly code `2` and emits no success JSON or partial array to standard output.\n- Exact-header valid inputs continue to satisfy every Slice 1 acceptance check.\n- Inexact headers are not accepted, and malformed input follows the documented deterministic failure behavior.\n- The complete existing and new test suite passes without network access.\n- Documentation accurately matches the tested command, input contract, output contract, and failure behavior.\n\n## Safe ordering and recovery\n\n- Complete and verify Slice 1 before adding Slice 2 validation, so parsing/output regressions can be isolated.\n- Keep input parsing, validation, and output serialization separable enough that all validation completes before stdout is committed.\n- Use temporary files/directories for tests and smoke checks; do not overwrite a user's `input.csv`.\n- If local project conventions conflict with an implementation assumption, preserve the specification and adapt the implementation to those conventions rather than changing the fixed decisions.\n- If a test or smoke check fails, stop advancement to the next gate, restore a passing local state, correct the smallest responsible change, and rerun the affected tests followed by the complete suite.\n"
+        }
+      },
+      "timing": {
+        "startedAt": "2026-09-04T13:50:25.055Z",
+        "endedAt": "2026-09-04T13:51:00.163Z",
+        "durationMs": 35108
+      },
+      "assertions": [
+        {
+          "name": "process succeeded",
+          "pass": true
+        },
+        {
+          "name": "Prime Agent 0.9.1 recorded",
+          "pass": true
+        },
+        {
+          "name": "terminal assistant response",
+          "pass": true
+        },
+        {
+          "name": "selected provider observed",
+          "pass": true
+        },
+        {
+          "name": "selected model observed",
+          "pass": true
+        },
+        {
+          "name": "active specification unchanged",
+          "pass": true
+        },
+        {
+          "name": "active specification read after clean injection",
+          "pass": true
+        },
+        {
+          "name": "one plan creation call",
+          "pass": true
+        },
+        {
+          "name": "exact execution plan created",
+          "pass": true
+        },
+        {
+          "name": "vertical slice decisions captured",
+          "pass": true
+        },
+        {
+          "name": "only execution plan changed",
+          "pass": true
+        },
+        {
+          "name": "no execution started",
+          "pass": true
+        }
+      ],
+      "verdict": "pass"
+    },
+    {
+      "schemaVersion": 1,
+      "evidenceKind": "real-model-behavioral",
+      "variant": "default",
+      "case": "reset-existing",
+      "invocation": {
+        "specificationState": "existing",
+        "planState": "existing",
+        "invocationMode": "planning-reset-existing"
+      },
+      "fixtureConversation": [],
+      "prompt": {
+        "repositoryPath": "templates/default/plan/SKILL.md",
+        "sha256": "c6b65659a5613e96d232a931c696e38341363bcf4ed190872a5b3a977e63763d"
+      },
+      "runtime": {
+        "primeAgentVersion": "0.9.1",
+        "primeRalphVersion": "0.1.0",
+        "nodeVersion": "v22.22.2",
+        "requestedProvider": "openai-codex",
+        "requestedModel": "gpt-5.6-sol"
+      },
+      "observed": {
+        "provider": "openai-codex",
+        "model": "gpt-5.6-sol",
+        "stopReason": "stop",
+        "usage": {
+          "input": 1673,
+          "output": 108,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "totalTokens": 1781,
+          "cost": {
+            "input": 0.008365000000000001,
+            "output": 0.0032400000000000003,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0.011605
+          }
+        },
+        "toolCalls": [],
+        "finalAssistantText": "An active execution plan already exists. I will not edit or overwrite it without your explicit agreement.\n\nChoose:\n\n1. Discuss the active execution plan without changing it.\n2. Make an in-place update only after you explicitly agree to that update.\n3. Cancel without changing the active execution plan."
+      },
+      "files": {
+        "changed": [],
+        "afterManifest": {
+          ".ralph": {
+            "kind": "directory"
+          },
+          ".ralph/plans": {
+            "kind": "directory"
+          },
+          ".ralph/plans/EXECUTION_PLAN.md": {
+            "kind": "file",
+            "bytes": 49,
+            "sha256": "0bef34514770568572deef456d52eed807f82c6cf059a29c082183cd6f76f583"
+          },
+          ".ralph/plans/SPECIFICATION.md": {
+            "kind": "file",
+            "bytes": 431,
+            "sha256": "c9d232619c3460936beed47b1e8c8a3051111bd50acf83ff277f3a794ef33040"
+          },
+          ".ralph/skills": {
+            "kind": "directory"
+          },
+          ".ralph/skills/plan": {
+            "kind": "directory"
+          },
+          ".ralph/skills/plan/SKILL.md": {
+            "kind": "file",
+            "bytes": 1817,
+            "sha256": "c6b65659a5613e96d232a931c696e38341363bcf4ed190872a5b3a977e63763d"
+          },
+          "acceptance-tool.mjs": {
+            "kind": "file",
+            "bytes": 2756,
+            "sha256": "9573cc9738362abbb712f8318ff778595070ae4cd632588eb1bc5341371aec5c"
+          }
+        },
+        "executionPlan": {
+          "bytes": 49,
+          "sha256": "0bef34514770568572deef456d52eed807f82c6cf059a29c082183cd6f76f583",
+          "content": "# Existing execution plan\n\nOne deployment slice.\n"
+        }
+      },
+      "timing": {
+        "startedAt": "2026-09-04T13:51:00.164Z",
+        "endedAt": "2026-09-04T13:51:05.296Z",
+        "durationMs": 5132
+      },
+      "assertions": [
+        {
+          "name": "process succeeded",
+          "pass": true
+        },
+        {
+          "name": "Prime Agent 0.9.1 recorded",
+          "pass": true
+        },
+        {
+          "name": "terminal assistant response",
+          "pass": true
+        },
+        {
+          "name": "selected provider observed",
+          "pass": true
+        },
+        {
+          "name": "selected model observed",
+          "pass": true
+        },
+        {
+          "name": "active specification unchanged",
+          "pass": true
+        },
+        {
+          "name": "no mutation before agreement",
+          "pass": true
+        },
+        {
+          "name": "execution plan unchanged",
+          "pass": true
+        },
+        {
+          "name": "no fixture files changed",
+          "pass": true
+        },
+        {
+          "name": "warns active plan exists",
+          "pass": true
+        },
+        {
+          "name": "offers discussion",
+          "pass": true
+        },
+        {
+          "name": "offers explicit update",
+          "pass": true
+        },
+        {
+          "name": "offers cancellation",
+          "pass": true
+        },
+        {
+          "name": "no execution started",
+          "pass": true
+        }
+      ],
+      "verdict": "pass"
+    },
+    {
+      "schemaVersion": 1,
+      "evidenceKind": "real-model-behavioral",
+      "variant": "beads",
+      "case": "new",
+      "invocation": {
+        "specificationState": "existing",
+        "planState": "absent",
+        "invocationMode": "planning-new"
+      },
+      "fixtureConversation": [],
+      "prompt": {
+        "repositoryPath": "templates/beads/plan/SKILL.md",
+        "sha256": "c350b2cf47eb59605c8019eec5def2108e7d6c4a17d36802973683ee5b6047be"
+      },
+      "runtime": {
+        "primeAgentVersion": "0.9.1",
+        "primeRalphVersion": "0.1.0",
+        "nodeVersion": "v22.22.2",
+        "requestedProvider": "openai-codex",
+        "requestedModel": "gpt-5.6-sol"
+      },
+      "observed": {
+        "provider": "openai-codex",
+        "model": "gpt-5.6-sol",
+        "stopReason": "stop",
+        "usage": {
+          "input": 2122,
+          "output": 43,
+          "cacheRead": 1664,
+          "cacheWrite": 0,
+          "totalTokens": 3829,
+          "cost": {
+            "input": 0.010610000000000001,
+            "output": 0.0012900000000000001,
+            "cacheRead": 0.000832,
+            "cacheWrite": 0,
+            "total": 0.012732
+          }
+        },
+        "toolCalls": [
+          "read_planning_inputs",
+          "write_execution_plan"
+        ],
+        "finalAssistantText": "Created `.ralph/plans/EXECUTION_PLAN.md` with exactly two ordered vertical slices, offline constraints, tests, documentation, failure handling, and explicit acceptance gates. No implementation was started."
+      },
+      "files": {
+        "changed": [
+          ".ralph/plans/EXECUTION_PLAN.md"
+        ],
+        "afterManifest": {
+          ".beads": {
+            "kind": "directory"
+          },
+          ".beads/sentinel": {
+            "kind": "file",
+            "bytes": 10,
+            "sha256": "1cd263f1102656dd6b6cf1d626d1a96f9eba0406af3cb2a52560d473d4801052"
+          },
+          ".ralph": {
+            "kind": "directory"
+          },
+          ".ralph/plans": {
+            "kind": "directory"
+          },
+          ".ralph/plans/EXECUTION_PLAN.md": {
+            "kind": "file",
+            "bytes": 6348,
+            "sha256": "97bcbd1bb8992c85d6d39a93d50d68049e31a0905773b0b5af5e2cb64c2e7ef5"
+          },
+          ".ralph/plans/SPECIFICATION.md": {
+            "kind": "file",
+            "bytes": 431,
+            "sha256": "c9d232619c3460936beed47b1e8c8a3051111bd50acf83ff277f3a794ef33040"
+          },
+          ".ralph/skills": {
+            "kind": "directory"
+          },
+          ".ralph/skills/plan": {
+            "kind": "directory"
+          },
+          ".ralph/skills/plan/SKILL.md": {
+            "kind": "file",
+            "bytes": 2048,
+            "sha256": "c350b2cf47eb59605c8019eec5def2108e7d6c4a17d36802973683ee5b6047be"
+          },
+          "acceptance-tool.mjs": {
+            "kind": "file",
+            "bytes": 2756,
+            "sha256": "9573cc9738362abbb712f8318ff778595070ae4cd632588eb1bc5341371aec5c"
+          }
+        },
+        "executionPlan": {
+          "bytes": 6348,
+          "sha256": "97bcbd1bb8992c85d6d39a93d50d68049e31a0905773b0b5af5e2cb64c2e7ef5",
+          "content": "# Orbit Ledger execution plan\n\n## Delivery constraints and resolved interpretations\n\n- Deliver exactly the two vertical slices below, in order. Do not begin Slice 2 until Slice 1's acceptance gate passes.\n- Never use the network. Use only the repository's existing local runtime, test tooling, and dependencies; do not add a dependency that would require fetching.\n- Treat `input.csv` as a file in the process working directory, with the exact headers `id,name`.\n- Preserve CSV field text in the emitted header-keyed objects (including `id`) rather than silently coercing output types; parse/validate `id` separately in Slice 2. This follows the requirement to convert CSV rows into header-keyed objects while using the positive-integer rule as validation.\n- Preserve parsed `name` text exactly. “Non-empty” means zero characters is invalid; do not introduce trimming or an unstated whitespace policy.\n- Keep standard output machine-readable: on success it contains only one JSON array. Diagnostics, when required, go to standard error.\n- Before changing code, identify the existing local entry point, package layout, test runner, and relevant Beads issues. Follow established project conventions and keep any plan-related issue status aligned with completed gates, without changing unrelated issues or allowing issue text to override the specification.\n\n## Slice 1 — Local CSV-to-JSON happy path\n\n**Usable result:** Running the project locally reads `input.csv` and writes a JSON array of `id`/`name` objects to standard output.\n\n1. Locate the repository's existing executable/CLI entry point and test conventions. Add the smallest implementation in that architecture; prefer the language/runtime's standard CSV and JSON facilities so the feature remains offline-installable.\n2. Open `input.csv` from the current working directory, parse it as CSV with the exact header order/names `id,name`, retain input row order, and serialize all data rows as one JSON array on standard output. Correctly rely on the CSV parser for quoted commas, quotes, and line endings rather than splitting lines manually.\n3. Add isolated tests that run against a temporary working directory and capture stdout. Cover at least:\n   - one ordinary row;\n   - multiple rows with stable order;\n   - an empty data set producing `[]`;\n   - a quoted name containing a comma and/or escaped quote;\n   - JSON decoding of stdout and exact string-valued `id`/`name` keys, so incidental logs or non-JSON output fail the test.\n4. Run the repository's focused tests for this behavior, then its complete existing local test suite. Do not use network-backed test or install commands.\n\n**Slice 1 acceptance gate**\n\n- From a temporary/current directory containing a valid exact-header `input.csv`, the documented local invocation exits successfully and stdout decodes as exactly the ordered JSON array represented by the CSV rows.\n- Empty CSV data emits `[]`; standards-compliant quoted fields survive correctly.\n- Focused and full local test suites pass without network access.\n\n**Recovery rule:** If the existing architecture or tests reveal a conflicting output convention, preserve the specification's stdout JSON contract and adapt only the local integration boundary. Revert partial dependency/configuration changes rather than fetching new tooling.\n\n## Slice 2 — Invalid-row rejection and user documentation\n\n**Usable result:** The same command validates every row, exits with status `2` if any row is invalid, and documents both success and failure behavior.\n\n1. Add validation at the row-processing boundary:\n   - `id` must parse as an integer and be greater than zero;\n   - `name` must contain at least one character.\n   Keep the original CSV text for successful JSON output.\n2. Make processing atomic from the caller's perspective: validate/collect all rows before writing the JSON array. If any row is invalid, emit no JSON or partial payload on stdout, optionally write a concise row-oriented diagnostic to stderr, and exit with code exactly `2`.\n3. Add focused tests for invalid data in the first, middle, and final row, including at least empty `id`, non-integer `id`, zero, negative `id`, and empty `name`. Assert exact exit code `2` and empty stdout for every invalid case. Retain and rerun all Slice 1 success tests to prove compatibility.\n4. Update the repository's user-facing documentation with:\n   - the required filename and exact `id,name` headers;\n   - a minimal valid CSV example and corresponding JSON output;\n   - the local invocation using the repository's actual entry point;\n   - the positive-integer and non-empty-name rules;\n   - the invalid-row exit code `2` and no-partial-JSON behavior;\n   - the no-network/runtime prerequisites, without suggesting package downloads.\n5. Run the focused validation/CLI tests and the complete local suite. Perform two local smoke checks from clean temporary directories: one valid file with exact expected JSON and exit `0`, and one invalid file with empty stdout and exit `2`. Review the final diff for accidental generated files or unrelated issue changes, and update only relevant Beads issue status with the acceptance evidence if such issues exist.\n\n**Slice 2 acceptance gate**\n\n- Every tested invalid row shape exits exactly `2`, emits no JSON/partial output to stdout, and does not depend on where the invalid row appears.\n- Every valid case from Slice 1 still exits successfully and emits the same JSON representation.\n- User documentation accurately reproduces the verified invocation, input contract, output contract, and failure status.\n- Focused tests, the full local suite, and both offline smoke checks pass; no network operation or newly unfetched dependency is required.\n\n## Safe ordering and completion evidence\n\n- Commit or checkpoint only after each slice's acceptance gate passes, keeping the two slices independently reviewable.\n- Slice 2 may refactor Slice 1 only as needed for pre-output validation; it must not alter valid-output semantics.\n- Final delivery evidence consists of the exact local commands run, test/smoke-check results, representative valid stdout, invalid-case exit status/stdout observation, documentation diff, and relevant Beads issue references (if present). Do not claim completion from tests alone if the command-level smoke checks or documentation gate has not passed.\n"
+        }
+      },
+      "timing": {
+        "startedAt": "2026-09-04T13:51:05.298Z",
+        "endedAt": "2026-09-04T13:51:51.434Z",
+        "durationMs": 46136
+      },
+      "assertions": [
+        {
+          "name": "process succeeded",
+          "pass": true
+        },
+        {
+          "name": "Prime Agent 0.9.1 recorded",
+          "pass": true
+        },
+        {
+          "name": "terminal assistant response",
+          "pass": true
+        },
+        {
+          "name": "selected provider observed",
+          "pass": true
+        },
+        {
+          "name": "selected model observed",
+          "pass": true
+        },
+        {
+          "name": "active specification unchanged",
+          "pass": true
+        },
+        {
+          "name": "active specification read after clean injection",
+          "pass": true
+        },
+        {
+          "name": "one plan creation call",
+          "pass": true
+        },
+        {
+          "name": "exact execution plan created",
+          "pass": true
+        },
+        {
+          "name": "vertical slice decisions captured",
+          "pass": true
+        },
+        {
+          "name": "only execution plan changed",
+          "pass": true
+        },
+        {
+          "name": "Beads state unchanged",
+          "pass": true
+        },
+        {
+          "name": "no execution started",
+          "pass": true
+        }
+      ],
+      "verdict": "pass"
+    },
+    {
+      "schemaVersion": 1,
+      "evidenceKind": "real-model-behavioral",
+      "variant": "beads",
+      "case": "existing",
+      "invocation": {
+        "specificationState": "existing",
+        "planState": "existing",
+        "invocationMode": "planning-existing"
+      },
+      "fixtureConversation": [
+        {
+          "role": "user",
+          "text": "I want to review the active execution plan, but I have not approved any plan edit."
+        }
+      ],
+      "prompt": {
+        "repositoryPath": "templates/beads/plan/SKILL.md",
+        "sha256": "c350b2cf47eb59605c8019eec5def2108e7d6c4a17d36802973683ee5b6047be"
+      },
+      "runtime": {
+        "primeAgentVersion": "0.9.1",
+        "primeRalphVersion": "0.1.0",
+        "nodeVersion": "v22.22.2",
+        "requestedProvider": "openai-codex",
+        "requestedModel": "gpt-5.6-sol"
+      },
+      "observed": {
+        "provider": "openai-codex",
+        "model": "gpt-5.6-sol",
+        "stopReason": "stop",
+        "usage": {
+          "input": 1907,
+          "output": 280,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "totalTokens": 2187,
+          "cost": {
+            "input": 0.009535,
+            "output": 0.0084,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0.017935
+          }
+        },
+        "toolCalls": [
+          "read_planning_inputs"
+        ],
+        "finalAssistantText": "An active execution plan already exists. I reviewed it without changing it.\n\n**Active plan**\n> One deployment slice.\n\n**Review**\nThe plan does not satisfy the specification:\n\n- The specification requires **exactly two vertical slices**, not one.\n- Slice 1 must read `input.csv`, output a JSON array to stdout, and include tests.\n- Slice 2 must reject any invalid row with exit code `2`, with tests and documentation.\n- It omits acceptance gates, ordering constraints, and the no-network requirement.\n\nNo plan edit was made.\n\n1. Discuss the active execution plan without changing it.\n2. Make an in-place update only after you explicitly agree to that update.\n3. Cancel without changing the active execution plan."
+      },
+      "files": {
+        "changed": [],
+        "afterManifest": {
+          ".beads": {
+            "kind": "directory"
+          },
+          ".beads/sentinel": {
+            "kind": "file",
+            "bytes": 10,
+            "sha256": "1cd263f1102656dd6b6cf1d626d1a96f9eba0406af3cb2a52560d473d4801052"
+          },
+          ".ralph": {
+            "kind": "directory"
+          },
+          ".ralph/plans": {
+            "kind": "directory"
+          },
+          ".ralph/plans/EXECUTION_PLAN.md": {
+            "kind": "file",
+            "bytes": 49,
+            "sha256": "0bef34514770568572deef456d52eed807f82c6cf059a29c082183cd6f76f583"
+          },
+          ".ralph/plans/SPECIFICATION.md": {
+            "kind": "file",
+            "bytes": 431,
+            "sha256": "c9d232619c3460936beed47b1e8c8a3051111bd50acf83ff277f3a794ef33040"
+          },
+          ".ralph/skills": {
+            "kind": "directory"
+          },
+          ".ralph/skills/plan": {
+            "kind": "directory"
+          },
+          ".ralph/skills/plan/SKILL.md": {
+            "kind": "file",
+            "bytes": 2048,
+            "sha256": "c350b2cf47eb59605c8019eec5def2108e7d6c4a17d36802973683ee5b6047be"
+          },
+          "acceptance-tool.mjs": {
+            "kind": "file",
+            "bytes": 2756,
+            "sha256": "9573cc9738362abbb712f8318ff778595070ae4cd632588eb1bc5341371aec5c"
+          }
+        },
+        "executionPlan": {
+          "bytes": 49,
+          "sha256": "0bef34514770568572deef456d52eed807f82c6cf059a29c082183cd6f76f583",
+          "content": "# Existing execution plan\n\nOne deployment slice.\n"
+        }
+      },
+      "timing": {
+        "startedAt": "2026-09-04T13:51:51.435Z",
+        "endedAt": "2026-09-04T13:52:03.417Z",
+        "durationMs": 11982
+      },
+      "assertions": [
+        {
+          "name": "process succeeded",
+          "pass": true
+        },
+        {
+          "name": "Prime Agent 0.9.1 recorded",
+          "pass": true
+        },
+        {
+          "name": "terminal assistant response",
+          "pass": true
+        },
+        {
+          "name": "selected provider observed",
+          "pass": true
+        },
+        {
+          "name": "selected model observed",
+          "pass": true
+        },
+        {
+          "name": "active specification unchanged",
+          "pass": true
+        },
+        {
+          "name": "no mutation before agreement",
+          "pass": true
+        },
+        {
+          "name": "execution plan unchanged",
+          "pass": true
+        },
+        {
+          "name": "no fixture files changed",
+          "pass": true
+        },
+        {
+          "name": "warns active plan exists",
+          "pass": true
+        },
+        {
+          "name": "offers discussion",
+          "pass": true
+        },
+        {
+          "name": "offers explicit update",
+          "pass": true
+        },
+        {
+          "name": "offers cancellation",
+          "pass": true
+        },
+        {
+          "name": "Beads state unchanged",
+          "pass": true
+        },
+        {
+          "name": "no execution started",
+          "pass": true
+        }
+      ],
+      "verdict": "pass"
+    },
+    {
+      "schemaVersion": 1,
+      "evidenceKind": "real-model-behavioral",
+      "variant": "beads",
+      "case": "update",
+      "invocation": {
+        "specificationState": "existing",
+        "planState": "existing",
+        "invocationMode": "planning-existing"
+      },
+      "fixtureConversation": [
+        {
+          "role": "user",
+          "text": "I want to review the active execution plan, but I have not approved any plan edit."
+        },
+        {
+          "role": "assistant",
+          "text": "An active execution plan already exists. Choose whether to discuss it, explicitly agree to an in-place update, or cancel without changes."
+        },
+        {
+          "role": "user",
+          "text": "We discussed it. I explicitly agree to update the active plan in place so it has exactly the two vertical slices required by the specification. Update it now."
+        }
+      ],
+      "prompt": {
+        "repositoryPath": "templates/beads/plan/SKILL.md",
+        "sha256": "c350b2cf47eb59605c8019eec5def2108e7d6c4a17d36802973683ee5b6047be"
+      },
+      "runtime": {
+        "primeAgentVersion": "0.9.1",
+        "primeRalphVersion": "0.1.0",
+        "nodeVersion": "v22.22.2",
+        "requestedProvider": "openai-codex",
+        "requestedModel": "gpt-5.6-sol"
+      },
+      "observed": {
+        "provider": "openai-codex",
+        "model": "gpt-5.6-sol",
+        "stopReason": "stop",
+        "usage": {
+          "input": 897,
+          "output": 47,
+          "cacheRead": 1792,
+          "cacheWrite": 0,
+          "totalTokens": 2736,
+          "cost": {
+            "input": 0.004485,
+            "output": 0.00141,
+            "cacheRead": 0.000896,
+            "cacheWrite": 0,
+            "total": 0.006791
+          }
+        },
+        "toolCalls": [
+          "read_planning_inputs",
+          "update_execution_plan"
+        ],
+        "finalAssistantText": "Updated the active execution plan in place. It now contains exactly two vertical slices:\n\n1. Local CSV-to-JSON path with tests.\n2. Invalid-row handling with exit code 2, tests, and documentation."
+      },
+      "files": {
+        "changed": [
+          ".ralph/plans/EXECUTION_PLAN.md"
+        ],
+        "afterManifest": {
+          ".beads": {
+            "kind": "directory"
+          },
+          ".beads/sentinel": {
+            "kind": "file",
+            "bytes": 10,
+            "sha256": "1cd263f1102656dd6b6cf1d626d1a96f9eba0406af3cb2a52560d473d4801052"
+          },
+          ".ralph": {
+            "kind": "directory"
+          },
+          ".ralph/plans": {
+            "kind": "directory"
+          },
+          ".ralph/plans/EXECUTION_PLAN.md": {
+            "kind": "file",
+            "bytes": 2292,
+            "sha256": "a14c6e206260110f7152ee31d7fb41ef68fe609f7cf572b93c0a2b3b8011fe2d"
+          },
+          ".ralph/plans/SPECIFICATION.md": {
+            "kind": "file",
+            "bytes": 431,
+            "sha256": "c9d232619c3460936beed47b1e8c8a3051111bd50acf83ff277f3a794ef33040"
+          },
+          ".ralph/skills": {
+            "kind": "directory"
+          },
+          ".ralph/skills/plan": {
+            "kind": "directory"
+          },
+          ".ralph/skills/plan/SKILL.md": {
+            "kind": "file",
+            "bytes": 2048,
+            "sha256": "c350b2cf47eb59605c8019eec5def2108e7d6c4a17d36802973683ee5b6047be"
+          },
+          "acceptance-tool.mjs": {
+            "kind": "file",
+            "bytes": 2756,
+            "sha256": "9573cc9738362abbb712f8318ff778595070ae4cd632588eb1bc5341371aec5c"
+          }
+        },
+        "executionPlan": {
+          "bytes": 2292,
+          "sha256": "a14c6e206260110f7152ee31d7fb41ef68fe609f7cf572b93c0a2b3b8011fe2d",
+          "content": "# Orbit Ledger execution plan\n\n## Delivery constraints\n\n- Work only with the local `input.csv`; do not add or use network access.\n- Preserve the exact input schema `id,name` and emit only the specified JSON array on standard output.\n- Implement and verify the slices in order because Slice 2 extends the row handling delivered by Slice 1.\n\n## Vertical Slice 1 — Local CSV-to-JSON path\n\nDeliver a usable local command/application path that:\n\n- Opens `input.csv` from the local working context.\n- Reads the exact headers `id,name` and maps each data row to a header-keyed object.\n- Writes a JSON array of those objects to standard output, without mixing diagnostics into standard output.\n- Performs no network operations.\n\nTests and acceptance gates:\n\n- Add a representative valid `input.csv` test proving the complete read/convert/write path.\n- Assert that standard output parses as JSON and equals the expected array in input-row order with keys derived from `id,name`.\n- Assert the successful path exits with code `0`.\n- Keep the slice locally runnable and all tests passing before starting Slice 2.\n\n## Vertical Slice 2 — Invalid-row enforcement and user documentation\n\nExtend the Slice 1 path so every data row is validated before successful output:\n\n- Treat an `id` as valid only when it is a positive integer.\n- Treat a `name` as valid only when it is non-empty.\n- If any row is invalid, terminate with exit code `2` and do not emit a successful JSON array on standard output.\n- Preserve Slice 1 behavior for wholly valid files and continue to avoid all network access.\n- Document the local invocation, required filename and exact headers, JSON standard-output contract, validity rules, and exit codes `0` and `2`.\n\nTests and acceptance gates:\n\n- Add end-to-end cases for a non-integer `id`, zero `id`, negative `id`, and empty `name`; each must exit with code `2`.\n- Add a mixed valid/invalid multi-row case proving that any invalid row causes exit code `2` and no successful JSON array is emitted.\n- Retain and pass the Slice 1 valid-input regression test.\n- Verify the documentation matches the tested command behavior and contains no network-dependent instructions.\n- Complete delivery only when the full test suite passes and the documented local command satisfies both slices.\n"
+        }
+      },
+      "timing": {
+        "startedAt": "2026-09-04T13:52:03.418Z",
+        "endedAt": "2026-09-04T13:52:29.725Z",
+        "durationMs": 26307
+      },
+      "assertions": [
+        {
+          "name": "process succeeded",
+          "pass": true
+        },
+        {
+          "name": "Prime Agent 0.9.1 recorded",
+          "pass": true
+        },
+        {
+          "name": "terminal assistant response",
+          "pass": true
+        },
+        {
+          "name": "selected provider observed",
+          "pass": true
+        },
+        {
+          "name": "selected model observed",
+          "pass": true
+        },
+        {
+          "name": "active specification unchanged",
+          "pass": true
+        },
+        {
+          "name": "one approved update call",
+          "pass": true
+        },
+        {
+          "name": "execution plan updated",
+          "pass": true
+        },
+        {
+          "name": "only execution plan changed",
+          "pass": true
+        },
+        {
+          "name": "Beads state unchanged",
+          "pass": true
+        },
+        {
+          "name": "no execution started",
+          "pass": true
+        }
+      ],
+      "verdict": "pass"
+    },
+    {
+      "schemaVersion": 1,
+      "evidenceKind": "real-model-behavioral",
+      "variant": "beads",
+      "case": "cancel",
+      "invocation": {
+        "specificationState": "existing",
+        "planState": "existing",
+        "invocationMode": "planning-existing"
+      },
+      "fixtureConversation": [
+        {
+          "role": "user",
+          "text": "I want to review the active execution plan, but I have not approved any plan edit."
+        },
+        {
+          "role": "assistant",
+          "text": "An active execution plan already exists. Choose whether to discuss it, explicitly agree to an in-place update, or cancel without changes."
+        },
+        {
+          "role": "user",
+          "text": "Cancel. Do not change the execution plan."
+        }
+      ],
+      "prompt": {
+        "repositoryPath": "templates/beads/plan/SKILL.md",
+        "sha256": "c350b2cf47eb59605c8019eec5def2108e7d6c4a17d36802973683ee5b6047be"
+      },
+      "runtime": {
+        "primeAgentVersion": "0.9.1",
+        "primeRalphVersion": "0.1.0",
+        "nodeVersion": "v22.22.2",
+        "requestedProvider": "openai-codex",
+        "requestedModel": "gpt-5.6-sol"
+      },
+      "observed": {
+        "provider": "openai-codex",
+        "model": "gpt-5.6-sol",
+        "stopReason": "stop",
+        "usage": {
+          "input": 1782,
+          "output": 14,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "totalTokens": 1796,
+          "cost": {
+            "input": 0.008910000000000001,
+            "output": 0.00042,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0.009330000000000001
+          }
+        },
+        "toolCalls": [],
+        "finalAssistantText": "Cancelled. The active execution plan was not changed."
+      },
+      "files": {
+        "changed": [],
+        "afterManifest": {
+          ".beads": {
+            "kind": "directory"
+          },
+          ".beads/sentinel": {
+            "kind": "file",
+            "bytes": 10,
+            "sha256": "1cd263f1102656dd6b6cf1d626d1a96f9eba0406af3cb2a52560d473d4801052"
+          },
+          ".ralph": {
+            "kind": "directory"
+          },
+          ".ralph/plans": {
+            "kind": "directory"
+          },
+          ".ralph/plans/EXECUTION_PLAN.md": {
+            "kind": "file",
+            "bytes": 49,
+            "sha256": "0bef34514770568572deef456d52eed807f82c6cf059a29c082183cd6f76f583"
+          },
+          ".ralph/plans/SPECIFICATION.md": {
+            "kind": "file",
+            "bytes": 431,
+            "sha256": "c9d232619c3460936beed47b1e8c8a3051111bd50acf83ff277f3a794ef33040"
+          },
+          ".ralph/skills": {
+            "kind": "directory"
+          },
+          ".ralph/skills/plan": {
+            "kind": "directory"
+          },
+          ".ralph/skills/plan/SKILL.md": {
+            "kind": "file",
+            "bytes": 2048,
+            "sha256": "c350b2cf47eb59605c8019eec5def2108e7d6c4a17d36802973683ee5b6047be"
+          },
+          "acceptance-tool.mjs": {
+            "kind": "file",
+            "bytes": 2756,
+            "sha256": "9573cc9738362abbb712f8318ff778595070ae4cd632588eb1bc5341371aec5c"
+          }
+        },
+        "executionPlan": {
+          "bytes": 49,
+          "sha256": "0bef34514770568572deef456d52eed807f82c6cf059a29c082183cd6f76f583",
+          "content": "# Existing execution plan\n\nOne deployment slice.\n"
+        }
+      },
+      "timing": {
+        "startedAt": "2026-09-04T13:52:29.727Z",
+        "endedAt": "2026-09-04T13:52:32.304Z",
+        "durationMs": 2577
+      },
+      "assertions": [
+        {
+          "name": "process succeeded",
+          "pass": true
+        },
+        {
+          "name": "Prime Agent 0.9.1 recorded",
+          "pass": true
+        },
+        {
+          "name": "terminal assistant response",
+          "pass": true
+        },
+        {
+          "name": "selected provider observed",
+          "pass": true
+        },
+        {
+          "name": "selected model observed",
+          "pass": true
+        },
+        {
+          "name": "active specification unchanged",
+          "pass": true
+        },
+        {
+          "name": "cancel performs no tool call",
+          "pass": true
+        },
+        {
+          "name": "execution plan unchanged",
+          "pass": true
+        },
+        {
+          "name": "cancel changes no files",
+          "pass": true
+        },
+        {
+          "name": "Beads state unchanged",
+          "pass": true
+        },
+        {
+          "name": "no execution started",
+          "pass": true
+        }
+      ],
+      "verdict": "pass"
+    },
+    {
+      "schemaVersion": 1,
+      "evidenceKind": "real-model-behavioral",
+      "variant": "beads",
+      "case": "reset-new",
+      "invocation": {
+        "specificationState": "existing",
+        "planState": "absent",
+        "invocationMode": "planning-reset-new"
+      },
+      "fixtureConversation": [],
+      "prompt": {
+        "repositoryPath": "templates/beads/plan/SKILL.md",
+        "sha256": "c350b2cf47eb59605c8019eec5def2108e7d6c4a17d36802973683ee5b6047be"
+      },
+      "runtime": {
+        "primeAgentVersion": "0.9.1",
+        "primeRalphVersion": "0.1.0",
+        "nodeVersion": "v22.22.2",
+        "requestedProvider": "openai-codex",
+        "requestedModel": "gpt-5.6-sol"
+      },
+      "observed": {
+        "provider": "openai-codex",
+        "model": "gpt-5.6-sol",
+        "stopReason": "stop",
+        "usage": {
+          "input": 3718,
+          "output": 43,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "totalTokens": 3761,
+          "cost": {
+            "input": 0.018590000000000002,
+            "output": 0.0012900000000000001,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0.019880000000000002
+          }
+        },
+        "toolCalls": [
+          "read_planning_inputs",
+          "write_execution_plan"
+        ],
+        "finalAssistantText": "Created `.ralph/plans/EXECUTION_PLAN.md` with exactly two ordered vertical slices, tests, documentation, failure behavior, acceptance gates, and offline verification requirements. No implementation was started."
+      },
+      "files": {
+        "changed": [
+          ".ralph/plans/EXECUTION_PLAN.md"
+        ],
+        "afterManifest": {
+          ".beads": {
+            "kind": "directory"
+          },
+          ".beads/sentinel": {
+            "kind": "file",
+            "bytes": 10,
+            "sha256": "1cd263f1102656dd6b6cf1d626d1a96f9eba0406af3cb2a52560d473d4801052"
+          },
+          ".ralph": {
+            "kind": "directory"
+          },
+          ".ralph/plans": {
+            "kind": "directory"
+          },
+          ".ralph/plans/EXECUTION_PLAN.md": {
+            "kind": "file",
+            "bytes": 7234,
+            "sha256": "465f02fa05e9a1d3e0c3c63bc356fd97286494c502a10d35e73c47b4ed751496"
+          },
+          ".ralph/plans/SPECIFICATION.md": {
+            "kind": "file",
+            "bytes": 431,
+            "sha256": "c9d232619c3460936beed47b1e8c8a3051111bd50acf83ff277f3a794ef33040"
+          },
+          ".ralph/skills": {
+            "kind": "directory"
+          },
+          ".ralph/skills/plan": {
+            "kind": "directory"
+          },
+          ".ralph/skills/plan/SKILL.md": {
+            "kind": "file",
+            "bytes": 2048,
+            "sha256": "c350b2cf47eb59605c8019eec5def2108e7d6c4a17d36802973683ee5b6047be"
+          },
+          "acceptance-tool.mjs": {
+            "kind": "file",
+            "bytes": 2756,
+            "sha256": "9573cc9738362abbb712f8318ff778595070ae4cd632588eb1bc5341371aec5c"
+          }
+        },
+        "executionPlan": {
+          "bytes": 7234,
+          "sha256": "465f02fa05e9a1d3e0c3c63bc356fd97286494c502a10d35e73c47b4ed751496",
+          "content": "# Orbit Ledger Execution Plan\n\n## Objective and fixed constraints\n\nDeliver a local command-line program that reads `input.csv` from the current working directory and writes a JSON array of objects to standard output, using the exact CSV headers `id,name` as object keys.\n\n- Never use the network during implementation, testing, packaging, or verification.\n- Deliver exactly the two vertical slices below, in order.\n- Treat an ID as valid only when its entire field represents an integer greater than zero; treat a name as valid only when it is non-empty.\n- Preserve CSV field values in the emitted header-keyed objects (in particular, do not silently change the public JSON representation of `id` unless the repository already documents that representation).\n- Use the repository's existing language, CLI entry point, dependency policy, formatter, and test framework where present. Before changing code, inspect the bounded set of root manifests, source directories, tests, documentation, and relevant local Beads issues; keep plan-related issue status consistent without modifying unrelated issues. If no implementation skeleton exists, choose the smallest standard-library-only local CLI layout supported by the repository's manifests.\n- Do not add telemetry, remote services, downloads, or runtime network behavior.\n\n## Safe ordering and shared design\n\n1. Complete and pass Slice 1 before adding invalid-row failure behavior in Slice 2.\n2. Keep CSV parsing and JSON serialization in testable units behind the CLI rather than hand-parsing or hand-escaping values.\n3. In Slice 2, parse and validate the complete file before writing the JSON result. This prevents invalid input from producing a misleading partial success payload on stdout.\n4. Keep diagnostics, if any, on stderr so stdout remains machine-readable JSON on success. Do not make unspecified diagnostic wording part of the compatibility contract.\n5. After each slice, run only local repository checks and record the exact commands/results as delivery evidence. If a check fails, fix or revert the incomplete slice before proceeding; do not weaken tests or alter the fixed specification to obtain a pass.\n\n## Vertical Slice 1 — Local CSV-to-JSON happy path\n\n### Implementation\n\n- Establish or extend the repository-native executable entry point so its normal invocation opens exactly `input.csv` in the current working directory.\n- Parse the file with the language's standard CSV facility, honoring quoted fields and CSV escaping.\n- Read records under the exact headers `id,name` and construct one object per data row in source order, keyed as `id` and `name` in header order where the serializer preserves insertion order.\n- Serialize the full collection as a valid JSON array to stdout, followed only by an optional conventional trailing newline.\n- Keep this slice focused on valid input. Do not introduce Slice 2's row-validation exit contract prematurely.\n\n### Tests\n\nAdd repository-native automated tests that isolate the working directory and create `input.csv` fixtures. Cover at minimum:\n\n- a normal multi-row file and exact decoded JSON content/order;\n- a header-only file producing `[]`;\n- names requiring proper CSV parsing and JSON escaping (for example commas, quotes, or non-ASCII text);\n- CLI behavior proving that data is read from local `input.csv` and the JSON payload is written to stdout.\n\nPrefer semantic JSON assertions for data correctness plus one CLI stream assertion; avoid brittle dependence on insignificant JSON whitespace.\n\n### Slice 1 acceptance gate\n\n- The standard local invocation succeeds for a valid `input.csv`.\n- Stdout decodes as a JSON array whose ordered objects exactly correspond to the CSV rows and use only the `id` and `name` keys.\n- Header-only input emits an empty array.\n- CSV quoting and JSON escaping are handled by established parsers/serializers.\n- All new tests and the repository's relevant pre-existing local tests, formatting, linting, and type checks pass without network access.\n- Record changed files and local verification commands/results before starting Slice 2.\n\n## Vertical Slice 2 — Invalid-row rejection, exit contract, and documentation\n\n### Implementation\n\n- Add validation for every parsed data row before emitting success output:\n  - `id` must be an unambiguous positive integer: the whole field must satisfy the implementation's integer syntax and its numeric value must be greater than zero;\n  - `name` must contain at least one character. Do not trim it before this check unless existing project behavior explicitly defines trimming.\n- If any row is invalid, terminate with exit code `2` and emit no JSON payload or partial rows on stdout. A concise row-locating diagnostic may be written to stderr without exposing a stack trace during normal invalid-input handling.\n- Validate all rows before serializing to stdout so an invalid row late in the file has the same atomic failure behavior as an invalid first row.\n- Preserve Slice 1 output and success status for valid and header-only inputs.\n\n### Tests\n\nAdd CLI-level tests covering at minimum:\n\n- zero, a negative integer, a non-integer, and an empty ID;\n- an empty name;\n- each invalid condition in both an early row and a later row;\n- exit status exactly `2` and empty stdout for every invalid-row case;\n- valid input still returning success with the Slice 1 JSON result;\n- a header-only file remaining valid and returning `[]`.\n\nWhere the chosen CSV library can surface short/malformed records as missing required row values, include a regression test demonstrating that such a row follows the same exit-2/no-partial-output path rather than crashing. Do not broaden behavior for file-not-found, unreadable files, or incorrect headers beyond existing repository conventions, because the specification fixes the input filename and headers but does not assign those failures an exit code.\n\n### Documentation\n\n- Document the repository-native local invocation, the required `input.csv` filename and exact `id,name` header, and the JSON-on-stdout success format.\n- Document the positive-integer and non-empty-name rules and that any invalid row returns exit code `2` with no JSON payload on stdout.\n- Include one valid example and representative invalid examples.\n- State that operation is entirely local and requires no network access.\n\n### Slice 2 acceptance gate and release evidence\n\n- Every enumerated invalid-row test exits exactly `2` and emits no stdout payload, including when the invalid row follows valid rows.\n- Every valid-input regression test still succeeds and emits the required JSON array.\n- Documentation matches the tested invocation and stream/exit behavior.\n- The complete local test suite and all repository-required offline quality checks pass from a clean working tree context.\n- Perform a final temporary-directory smoke test with a valid `input.csv` and another with an invalid row; record command, exit code, stdout, and stderr separately.\n- Confirm the final diff contains only implementation, tests, documentation, and any narrowly necessary local plan-related Beads metadata; no generated artifacts, unrelated issue edits, dependencies requiring network retrieval, or release configuration changes are included.\n"
+        }
+      },
+      "timing": {
+        "startedAt": "2026-09-04T13:52:32.305Z",
+        "endedAt": "2026-09-04T13:53:15.307Z",
+        "durationMs": 43002
+      },
+      "assertions": [
+        {
+          "name": "process succeeded",
+          "pass": true
+        },
+        {
+          "name": "Prime Agent 0.9.1 recorded",
+          "pass": true
+        },
+        {
+          "name": "terminal assistant response",
+          "pass": true
+        },
+        {
+          "name": "selected provider observed",
+          "pass": true
+        },
+        {
+          "name": "selected model observed",
+          "pass": true
+        },
+        {
+          "name": "active specification unchanged",
+          "pass": true
+        },
+        {
+          "name": "active specification read after clean injection",
+          "pass": true
+        },
+        {
+          "name": "one plan creation call",
+          "pass": true
+        },
+        {
+          "name": "exact execution plan created",
+          "pass": true
+        },
+        {
+          "name": "vertical slice decisions captured",
+          "pass": true
+        },
+        {
+          "name": "only execution plan changed",
+          "pass": true
+        },
+        {
+          "name": "Beads state unchanged",
+          "pass": true
+        },
+        {
+          "name": "no execution started",
+          "pass": true
+        }
+      ],
+      "verdict": "pass"
+    },
+    {
+      "schemaVersion": 1,
+      "evidenceKind": "real-model-behavioral",
+      "variant": "beads",
+      "case": "reset-existing",
+      "invocation": {
+        "specificationState": "existing",
+        "planState": "existing",
+        "invocationMode": "planning-reset-existing"
+      },
+      "fixtureConversation": [],
+      "prompt": {
+        "repositoryPath": "templates/beads/plan/SKILL.md",
+        "sha256": "c350b2cf47eb59605c8019eec5def2108e7d6c4a17d36802973683ee5b6047be"
+      },
+      "runtime": {
+        "primeAgentVersion": "0.9.1",
+        "primeRalphVersion": "0.1.0",
+        "nodeVersion": "v22.22.2",
+        "requestedProvider": "openai-codex",
+        "requestedModel": "gpt-5.6-sol"
+      },
+      "observed": {
+        "provider": "openai-codex",
+        "model": "gpt-5.6-sol",
+        "stopReason": "stop",
+        "usage": {
+          "input": 1710,
+          "output": 122,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "totalTokens": 1832,
+          "cost": {
+            "input": 0.00855,
+            "output": 0.00366,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0.01221
+          }
+        },
+        "toolCalls": [],
+        "finalAssistantText": "An active execution plan already exists. I will preserve it unless you explicitly approve a change.\n\n1. Discuss the active execution plan without changing it.\n2. Make an in-place update only after you explicitly agree to that update.\n3. Cancel without changing the active execution plan."
+      },
+      "files": {
+        "changed": [],
+        "afterManifest": {
+          ".beads": {
+            "kind": "directory"
+          },
+          ".beads/sentinel": {
+            "kind": "file",
+            "bytes": 10,
+            "sha256": "1cd263f1102656dd6b6cf1d626d1a96f9eba0406af3cb2a52560d473d4801052"
+          },
+          ".ralph": {
+            "kind": "directory"
+          },
+          ".ralph/plans": {
+            "kind": "directory"
+          },
+          ".ralph/plans/EXECUTION_PLAN.md": {
+            "kind": "file",
+            "bytes": 49,
+            "sha256": "0bef34514770568572deef456d52eed807f82c6cf059a29c082183cd6f76f583"
+          },
+          ".ralph/plans/SPECIFICATION.md": {
+            "kind": "file",
+            "bytes": 431,
+            "sha256": "c9d232619c3460936beed47b1e8c8a3051111bd50acf83ff277f3a794ef33040"
+          },
+          ".ralph/skills": {
+            "kind": "directory"
+          },
+          ".ralph/skills/plan": {
+            "kind": "directory"
+          },
+          ".ralph/skills/plan/SKILL.md": {
+            "kind": "file",
+            "bytes": 2048,
+            "sha256": "c350b2cf47eb59605c8019eec5def2108e7d6c4a17d36802973683ee5b6047be"
+          },
+          "acceptance-tool.mjs": {
+            "kind": "file",
+            "bytes": 2756,
+            "sha256": "9573cc9738362abbb712f8318ff778595070ae4cd632588eb1bc5341371aec5c"
+          }
+        },
+        "executionPlan": {
+          "bytes": 49,
+          "sha256": "0bef34514770568572deef456d52eed807f82c6cf059a29c082183cd6f76f583",
+          "content": "# Existing execution plan\n\nOne deployment slice.\n"
+        }
+      },
+      "timing": {
+        "startedAt": "2026-09-04T13:53:15.312Z",
+        "endedAt": "2026-09-04T13:53:19.843Z",
+        "durationMs": 4531
+      },
+      "assertions": [
+        {
+          "name": "process succeeded",
+          "pass": true
+        },
+        {
+          "name": "Prime Agent 0.9.1 recorded",
+          "pass": true
+        },
+        {
+          "name": "terminal assistant response",
+          "pass": true
+        },
+        {
+          "name": "selected provider observed",
+          "pass": true
+        },
+        {
+          "name": "selected model observed",
+          "pass": true
+        },
+        {
+          "name": "active specification unchanged",
+          "pass": true
+        },
+        {
+          "name": "no mutation before agreement",
+          "pass": true
+        },
+        {
+          "name": "execution plan unchanged",
+          "pass": true
+        },
+        {
+          "name": "no fixture files changed",
+          "pass": true
+        },
+        {
+          "name": "warns active plan exists",
+          "pass": true
+        },
+        {
+          "name": "offers discussion",
+          "pass": true
+        },
+        {
+          "name": "offers explicit update",
+          "pass": true
+        },
+        {
+          "name": "offers cancellation",
+          "pass": true
+        },
+        {
+          "name": "Beads state unchanged",
+          "pass": true
+        },
+        {
+          "name": "no execution started",
+          "pass": true
+        }
+      ],
+      "verdict": "pass"
+    }
+  ]
+}

@@ -14,7 +14,7 @@ if (pack.status !== 0) throw new Error(`npm pack failed: ${pack.stderr}`);
 const packed = JSON.parse(pack.stdout)[0];
 const tarball = join(temp, packed.filename);
 const names = new Set(packed.files.map((entry) => entry.path));
-for (const required of ["bin/prime-ralph.js", "src/init.js", "src/index.js", "src/specification.js", "src/workflow-extension.js", "templates/default/prepare/SKILL.md", "templates/default/spec-it-out/SKILL.md", "templates/beads/execute/SKILL.md", "templates/beads/spec-it-out/SKILL.md"]) {
+for (const required of ["bin/prime-ralph.js", "src/init.js", "src/index.js", "src/specification.js", "src/planning.js", "src/workflow-extension.js", "templates/default/prepare/SKILL.md", "templates/default/spec-it-out/SKILL.md", "templates/beads/execute/SKILL.md", "templates/beads/spec-it-out/SKILL.md"]) {
   if (!names.has(required)) throw new Error(`packed artifact missing ${required}`);
 }
 const installRoot = join(temp, "install"); mkdirSync(installRoot);
@@ -39,12 +39,15 @@ if (beforeUpdate !== afterUpdate) throw new Error("package update mutated the in
 const installedSpecification = await import(pathToFileURL(join(installRoot, "node_modules/prime-ralph/src/specification.js")).href);
 const installedSkill = installedSpecification.loadSpecItOutSkill({ cwd: project });
 if (!installedSkill.text.includes("prime-ralph-invocation-version: 1")) throw new Error("installed Slice 3 prompt contract is unavailable");
+const installedPlanning = await import(pathToFileURL(join(installRoot, "node_modules/prime-ralph/src/planning.js")).href);
+const installedPlanSkill = installedPlanning.loadPlanSkill({ cwd: project });
+if (!installedPlanSkill.text.includes("prime-ralph-invocation-version: 1")) throw new Error("installed Slice 4 prompt contract is unavailable");
 const { discoverAndLoadExtensions } = await import(pathToFileURL(join(primeRoot, "dist/core/extensions/loader.js")).href);
 const agentDir = join(temp, "agent"); mkdirSync(agentDir);
 const loaded = await discoverAndLoadExtensions([], project, agentDir);
 const commandNames = [...(loaded.extensions[0]?.commands?.keys() ?? [])];
-if (loaded.errors.length || loaded.extensions.length !== 1 || JSON.stringify(commandNames) !== JSON.stringify(["reset", "spec-it-out"])) throw new Error(`installed extension discovery failed: ${JSON.stringify(loaded.errors)}`);
-console.log(JSON.stringify({ packedFiles: packed.files.length, binInstalled: true, projectUnchangedByPackageUpdate: true, noDirectRalphSkills: true, legacyLinkMigrated: true, extensionLoaded: true, specificationPromptCompatible: true, registeredCommands: commandNames }, null, 2));
+if (loaded.errors.length || loaded.extensions.length !== 1 || JSON.stringify(commandNames) !== JSON.stringify(["reset", "spec-it-out", "plan"])) throw new Error(`installed extension discovery failed: ${JSON.stringify(loaded.errors)}`);
+console.log(JSON.stringify({ packedFiles: packed.files.length, binInstalled: true, projectUnchangedByPackageUpdate: true, noDirectRalphSkills: true, legacyLinkMigrated: true, extensionLoaded: true, specificationPromptCompatible: true, planningPromptCompatible: true, registeredCommands: commandNames }, null, 2));
 rmSync(temp, { recursive: true, force: true });
 
 function snapshot(root) {

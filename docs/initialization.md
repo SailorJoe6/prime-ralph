@@ -45,10 +45,10 @@ Because stealth tracks only the current invocation, rerunning with `--stealth` a
 
 ## Lifecycle boundary
 
-Initialization performs filesystem setup only. It does not import the production extension, launch Prime Agent, call a provider, deliver `prepare`, select a phase, create a goal, or start execution. A later normal Prime Agent session discovers the project-local extension. At the Slice 3 boundary, the production commands are `/reset` and `/spec-it-out`; planning and execution remain unavailable.
+Initialization performs filesystem setup only. It does not import the production extension, launch Prime Agent, call a provider, deliver `prepare`, select a phase, create a goal, or start execution. A later normal Prime Agent session discovers the project-local extension. At the Slice 4 boundary, the production commands are `/reset`, `/spec-it-out`, and `/plan`; automatic execution and blocked handling remain unavailable.
 
 Package installation and update remain separate operations. Updating the package changes the extension symlink target's implementation and bundled templates for future projects, but it does not rewrite initialized project skills or entrypoints. Run `prime-ralph init` again to apply bounded legacy-link cleanup. End the current Prime Agent session and start or reload a session after updating package source; `/reload` alone is not accepted evidence that previously cached transitive extension modules changed.
 
-## Slice 3 prompt compatibility
+## Prompt compatibility
 
-Newly initialized projects receive a `spec-it-out` skill with `prime-ralph-invocation-version: 1`. Slice 3 requires this marker because the skill consumes authoritative state supplied by the plugin. A project initialized by an earlier package retains its customized or older file, so `/spec-it-out` and existing-spec `/reset` fail safely with an actionable compatibility error until the owner deliberately merges the current canonical invocation contract. Re-running `prime-ralph init` does not overwrite the file.
+Newly initialized projects receive `spec-it-out` and `plan` skills with `prime-ralph-invocation-version: 1`. These markers are required because both skills consume authoritative state supplied by the plugin. A project initialized by an earlier package retains customized or older files, so the affected command fails safely with an actionable compatibility error until the owner deliberately merges the current canonical invocation contract. Re-running `prime-ralph init` does not overwrite either file.

@@ -4,12 +4,13 @@ Slice 3 adds interactive specification startup and `/spec-it-out` without exposi
 
 ## Command surface
 
-The production extension registers exactly:
+The production Slice 4 extension registers:
 
 - `/reset`
 - `/spec-it-out`
+- `/plan`
 
-It does not register `/plan`, `/execute`, or blocked-phase commands. Prime Agent's native `/clear` remains unchanged.
+It does not register `/execute` or blocked-phase commands. This document focuses on the Slice 3 specification behavior; planning is documented separately. Prime Agent's native `/clear` remains unchanged.
 
 ## Startup preparation
 
@@ -20,7 +21,7 @@ The hidden `prime_ralph_startup_prepare` message records the current Prime Agent
 - rebuilding extensions through `/reload` never replays startup preparation; and
 - a fork that inherits its parent's branch is not suppressed by the parent's marker.
 
-An active specification does not start planning in Slice 3. The extension reports that planning startup is not available. A path conflict or invalid/missing prepare skill sends no startup prompt and produces a bounded diagnostic.
+Creating an active specification during the current specification phase does not start planning. A new session that already has an active specification selects the Slice 4 planning startup described in [`planning.md`](planning.md). A path conflict or invalid/missing prepare skill sends no startup prompt and produces a bounded diagnostic.
 
 ## Exact active-specification state
 
@@ -56,7 +57,7 @@ The project skill must declare `prime-ralph-invocation-version: 1`. Package upda
 - With an active specification, the one atomic boundary contains `prepare` first, followed by `spec-it-out` in `specification-reset-existing` mode.
 - With a conflict or incompatible skill, no marker, compaction, or prompt is produced.
 
-The existing reset projection and recovery protocol remains authoritative. Creating a specification during the session does not start planning.
+The existing reset projection and recovery protocol remains authoritative. Creating a specification during the session does not start planning. The user must invoke `/plan`; specification-phase `/reset` remains in the existing-specification discussion behavior.
 
 ## Evidence layers
 

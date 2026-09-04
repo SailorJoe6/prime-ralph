@@ -42,7 +42,9 @@ test("specification templates protect the active specification and cleared-sourc
 test("planning templates protect plans and never start execution", () => {
   for (const variant of ["default", "beads"]) {
     const text = load(variant, "plan");
-    for (const pattern of [/\.ralph\/plans\/SPECIFICATION\.md/, /\.ralph\/plans\/EXECUTION_PLAN\.md/, /do not overwrite/i, /explicitly requested in-place update/i, /cancel/i, /must not start execution/i, /must first pause/i]) assert.match(text, pattern);
+    for (const pattern of [/\.ralph\/plans\/SPECIFICATION\.md/, /\.ralph\/plans\/EXECUTION_PLAN\.md/, /prime-ralph-invocation/, /planning-new/, /planning-existing/, /planning-reset-new/, /planning-reset-existing/, /do not overwrite/i, /Offer exactly these choices/i, /Discuss the active execution plan/i, /in-place update only after/i, /Cancel without changing/i, /must not start execution/i]) assert.match(text, pattern);
+    assert.match(text, /prime-ralph-invocation-version:\s*1/);
+    assert.doesNotMatch(text, /execution lifecycle is running|must first pause|native control/i);
   }
 });
 

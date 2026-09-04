@@ -112,7 +112,7 @@ if (!result.newPreservedConversation || !result.newModeDelivered) failures.push(
 if (!result.commandHandlersDidNotWrite) failures.push("specification command handler mutated planning documents");
 if (!result.existingPreservedConversation || !result.existingModeDelivered) failures.push("existing-spec command lost context or metadata");
 if (!result.resetPrepareFirst || !result.resetExistingModeDelivered || !result.resetExcludedStaleConversation || result.resetProviderMessageCount !== 1) failures.push("specification reset boundary incorrect");
-if (result.planExists || result.executionEntries !== 0 || result.registeredCommands.includes("plan") || result.registeredCommands.includes("execute")) failures.push("later workflow state was introduced");
+if (result.planExists || result.executionEntries !== 0 || !result.registeredCommands.includes("plan") || result.registeredCommands.includes("execute")) failures.push("later workflow state was introduced");
 await session.disposeAsync({ kernelSnapshot: false });
 if (failures.length) { console.error(JSON.stringify({ ...result, failures }, null, 2)); process.exit(1); }
 console.log(JSON.stringify(result, null, 2));
