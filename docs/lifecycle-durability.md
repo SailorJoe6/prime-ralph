@@ -39,6 +39,12 @@ The admitted record survives extension reload. Ralph reconstructs the execution 
 
 This is the immediate safety half of the selected hybrid design. A later increment will add one correlated public-API custom compaction at initial continuation admission, with exact-once recovery after the compaction aborts that host turn. Until that is proven, durable projection remains the provider-facing boundary and no compaction behavior has changed.
 
+## Projection-consumption protocol
+
+The execution state can now attach one versioned boundary transaction to the current admitted continuation. The transaction starts `armed` with one bounded request ID and moves only forward to `projection-consumed`. The existing state-chain recovery validates this nested record and rejects rollback, request replacement, or malformed stages. Historical admitted-continuation records without the nested transaction remain valid.
+
+Pure correlation helpers require the exact session, Ralph lifecycle, cycle, native goal, continuation count, boundary identity, and request ID before consumption or suppression. A consumed record therefore gives later automatic-compaction integration a durable reason to suppress only its matching queued boundary after a steering-selected provider pass already ran. This increment deliberately does not call `ctx.compact()`, register compaction hooks, inject a resume prompt, or change current workflow behavior. Reload and compaction-error integration remain separate increments.
+
 ## Terminal execution-log recovery
 
 A blocked or completed pass now records its final assistant message and timestamp in the lifecycle state before it writes `.ralph/logs/EXECUTION_LOG.md`. The terminal closeout clears that intent only after the log append succeeds.

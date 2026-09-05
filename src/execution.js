@@ -14,6 +14,8 @@ export const RESTORED_BLOCKED_GUIDANCE = "The specification and execution plan w
 export const EXECUTION_MODES = Object.freeze(["execution-start", "execution-continue", "execution-resume", "execution-reset-running", "execution-reset-paused"]);
 export const BLOCKED_MODES = Object.freeze(["blocked-start", "blocked-reset", "blocked-restored"]);
 export const EXECUTION_STATUSES = Object.freeze(["inactive", "running", "waiting", "paused"]);
+export const EXECUTION_BOUNDARY_PROTOCOL_VERSION = 1;
+export const EXECUTION_BOUNDARY_STAGES = Object.freeze(["armed", "projection-consumed"]);
 
 function loadSkill({ cwd, name, relativePath, maxBytes = MAX_EXECUTION_SKILL_BYTES }) {
   const path = resolve(cwd, relativePath);
@@ -82,14 +84,35 @@ export function latestGoalState(entries) {
   return null;
 }
 
+function validAdmittedContinuation(value) {
+  if (value == null) return true;
+  if (!(typeof value.identity === "string" && value.identity && typeof value.goalId === "string" && value.goalId &&
+    Number.isInteger(value.continuationsUsed) && value.continuationsUsed >= 0 && value.identity === `${value.goalId}:${value.continuationsUsed}` &&
+    Number.isInteger(value.cycle) && value.cycle >= 1 && EXECUTION_MODES.includes(value.mode))) return false;
+  if (value.boundary == null) return true;
+  return value.boundary.protocolVersion === EXECUTION_BOUNDARY_PROTOCOL_VERSION &&
+    typeof value.boundary.requestId === "string" && value.boundary.requestId.length > 0 && value.boundary.requestId.length <= 200 &&
+    EXECUTION_BOUNDARY_STAGES.includes(value.boundary.stage);
+}
+
+function validBoundaryProgression(previous, next) {
+  const before = previous?.admittedContinuation, after = next?.admittedContinuation;
+  if (!before?.boundary) return !after?.boundary || after.boundary.stage === "armed";
+  const sameEpoch = previous?.sessionId === next?.sessionId && previous?.lifecycleId === next?.lifecycleId && previous?.cycle === next?.cycle;
+  if (!sameEpoch) return !after?.boundary || after.boundary.stage === "armed";
+  if (!after || before.identity !== after.identity || !after.boundary || before.boundary.requestId !== after.boundary.requestId || before.boundary.protocolVersion !== after.boundary.protocolVersion) return false;
+  return EXECUTION_BOUNDARY_STAGES.indexOf(after.boundary.stage) >= EXECUTION_BOUNDARY_STAGES.indexOf(before.boundary.stage);
+}
+
 function validLifecycleState(value, sessionId) {
   if (!(value && value.source === "prime-ralph" && value.protocolVersion === EXECUTION_PROTOCOL_VERSION && value.sessionId === sessionId &&
     EXECUTION_STATUSES.includes(value.status) && ["planning", "execution", "blocked"].includes(value.phase) && Number.isInteger(value.transition) && value.transition >= 0 &&
-    Number.isInteger(value.cycle) && value.cycle >= 0)) return false;
+    Number.isInteger(value.cycle) && value.cycle >= 0 && validAdmittedContinuation(value.admittedContinuation))) return false;
   const validPhaseStatus = (value.phase === "planning" && value.status === "inactive") ||
     (value.phase === "execution" && ["running", "waiting", "paused"].includes(value.status)) ||
     (value.phase === "blocked" && value.status === "inactive");
   if (!validPhaseStatus) return false;
+  if (value.phase === "execution" && value.admittedContinuation?.boundary && value.admittedContinuation.cycle !== value.cycle) return false;
   if (value.status !== "inactive" && (typeof value.lifecycleId !== "string" || !value.lifecycleId || value.cycle < 1)) return false;
   if (value.status === "waiting" && (!value.wait || typeof value.wait.id !== "string" || !value.wait.id)) return false;
   if (value.status !== "waiting" && value.wait != null) return false;
@@ -113,6 +136,9 @@ export function latestExecutionState(entries, sessionId) {
     if (latest && data.transition <= latest.transition) {
       throw new ExecutionStateRecoveryError("Ralph lifecycle recovery stopped at a stale or duplicate state record; preserve the session and inspect bounded diagnostics before retrying");
     }
+    if (latest && !validBoundaryProgression(latest, data)) {
+      throw new ExecutionStateRecoveryError("Ralph lifecycle recovery stopped at an invalid execution-boundary transition; preserve the session and inspect bounded diagnostics before retrying");
+    }
     latest = data;
   }
   return latest ? Object.freeze({ ...latest }) : inactiveExecutionState(sessionId);
@@ -123,6 +149,7 @@ export function nextExecutionState(current, patch) {
   if (next.status === "waiting" && (!next.wait || typeof next.wait.id !== "string" || !next.wait.id)) throw new TypeError("waiting lifecycle requires a wait record");
   if (next.status !== "waiting" && next.wait != null) throw new TypeError("only a waiting lifecycle may retain a wait record");
   if (!validLifecycleState(next, current.sessionId)) throw new TypeError("invalid Ralph execution state transition record");
+  if (!validBoundaryProgression(current, next)) throw new TypeError("invalid Ralph execution-boundary state transition");
   const from = `${current.phase}/${current.status}`, to = `${next.phase}/${next.status}`;
   const allowed = {
     "planning/inactive": new Set(["planning/inactive", "execution/running", "blocked/inactive"]),
@@ -143,9 +170,42 @@ export function nextExecutionState(current, patch) {
   return Object.freeze(next);
 }
 
+function exactExecutionBoundaryCorrelation(state, message) {
+  const admitted = state?.admittedContinuation, boundary = admitted?.boundary, details = message?.details;
+  return message?.customType === EXECUTION_MESSAGE_TYPE && boundary != null && details?.source === "prime-ralph" && details.protocolVersion === EXECUTION_PROTOCOL_VERSION &&
+    details.sessionId === state.sessionId && details.lifecycleId === state.lifecycleId && details.cycle === state.cycle &&
+    details.goalId === admitted.goalId && details.continuationsUsed === admitted.continuationsUsed &&
+    details.boundaryIdentity === admitted.identity && details.automaticCompactionRequestId === boundary.requestId;
+}
+
+export function armExecutionBoundaryProjection(current, { requestId } = {}) {
+  const admitted = current?.admittedContinuation;
+  if (current?.phase !== "execution" || current.status !== "running" || !validAdmittedContinuation(admitted) || admitted?.cycle !== current.cycle) {
+    throw new Error("an active admitted execution continuation is required before arming projection consumption");
+  }
+  if (typeof requestId !== "string" || requestId.length === 0 || requestId.length > 200) throw new TypeError("execution boundary requestId must contain 1 to 200 characters");
+  if (admitted.boundary) {
+    if (admitted.boundary.requestId === requestId) return current;
+    throw new Error("the admitted execution continuation already owns a different boundary request");
+  }
+  return nextExecutionState(current, { admittedContinuation: { ...admitted, boundary: { protocolVersion: EXECUTION_BOUNDARY_PROTOCOL_VERSION, requestId, stage: "armed" } } });
+}
+
+export function consumeExecutionBoundaryProjection(current, message) {
+  if (!exactExecutionBoundaryCorrelation(current, message)) throw new Error("execution boundary projection correlation is stale or mismatched");
+  const boundary = current.admittedContinuation.boundary;
+  if (boundary.stage === "projection-consumed") return current;
+  if (boundary.stage !== "armed") throw new Error("execution boundary projection is not armed");
+  return nextExecutionState(current, { admittedContinuation: { ...current.admittedContinuation, boundary: { ...boundary, stage: "projection-consumed" } } });
+}
+
+export function shouldSuppressExecutionBoundary(current, message) {
+  return current?.admittedContinuation?.boundary?.stage === "projection-consumed" && exactExecutionBoundaryCorrelation(current, message);
+}
+
 export function beginExecution(current, { lifecycleId, driverGoalId = null }) {
   if (current.status !== "inactive" || current.phase === "blocked") throw new Error(`cannot start execution while Ralph lifecycle is ${current.status} in ${current.phase} phase`);
-  return nextExecutionState(current, { phase: "execution", status: "running", lifecycleId, cycle: 1, driverGoalId, pendingDecision: null, wait: null, provenanceId: null, forwardConfirmed: false });
+  return nextExecutionState(current, { phase: "execution", status: "running", lifecycleId, cycle: 1, driverGoalId, pendingDecision: null, wait: null, provenanceId: null, forwardConfirmed: false, admittedContinuation: null });
 }
 
 export function reconcileGoalState(current, goal) {

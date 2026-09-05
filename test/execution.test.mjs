@@ -7,7 +7,9 @@ import {
   BLOCKED_MESSAGE_TYPE,
   EXECUTION_MESSAGE_TYPE,
   EXECUTION_STATE_ENTRY_TYPE,
+  armExecutionBoundaryProjection,
   beginExecution,
+  consumeExecutionBoundaryProjection,
   executionContextProjection,
   formatBlockedInjection,
   formatExecutionInjection,
@@ -18,6 +20,7 @@ import {
   loadExecuteSkill,
   nextExecutionState,
   reconcileGoalState,
+  shouldSuppressExecutionBoundary,
 } from "../src/execution.js";
 
 function project() { const cwd = mkdtempSync(join(tmpdir(), "prime-ralph-execution-")); mkdirSync(join(cwd, ".ralph/skills/execute"), { recursive: true }); mkdirSync(join(cwd, ".ralph/skills/blocked"), { recursive: true }); return cwd; }
@@ -111,4 +114,141 @@ test("native goal clear cancels a recorded driver and error pauses it", () => {
   const running = beginExecution(inactiveExecutionState("s"), { lifecycleId: "life", driverGoalId: "goal" });
   const cleared = reconcileGoalState(running, { status: "idle", active: false }); assert.equal(cleared.status, "inactive"); assert.match(cleared.cancellation, /cleared/);
   const failed = reconcileGoalState(running, { status: "error", active: false }); assert.equal(failed.status, "paused");
+});
+
+
+function admittedExecutionState() {
+  const running = beginExecution(inactiveExecutionState("boundary-session"), { lifecycleId: "boundary-life", driverGoalId: "boundary-goal" });
+  return nextExecutionState(running, { admittedContinuation: { identity: "boundary-goal:3", goalId: "boundary-goal", continuationsUsed: 3, cycle: 1, mode: "execution-continue" } });
+}
+
+function boundaryMessage(state, overrides = {}) {
+  return {
+    customType: EXECUTION_MESSAGE_TYPE,
+    details: {
+      source: "prime-ralph",
+      protocolVersion: 1,
+      sessionId: state.sessionId,
+      lifecycleId: state.lifecycleId,
+      cycle: state.cycle,
+      goalId: state.admittedContinuation.goalId,
+      continuationsUsed: state.admittedContinuation.continuationsUsed,
+      boundaryIdentity: state.admittedContinuation.identity,
+      automaticCompactionRequestId: state.admittedContinuation.boundary.requestId,
+      ...overrides,
+    },
+  };
+}
+
+test("legacy admitted continuations remain valid without a boundary transaction", () => {
+  const legacy = admittedExecutionState();
+  const recovered = latestExecutionState([{ type: "custom", customType: EXECUTION_STATE_ENTRY_TYPE, data: legacy }], legacy.sessionId);
+  assert.deepEqual(recovered.admittedContinuation, legacy.admittedContinuation);
+  assert.equal(recovered.admittedContinuation.boundary, undefined);
+});
+
+test("recovery accepts the historical cycle-advance record that retained the prior boundary-less continuation", () => {
+  const running = beginExecution(inactiveExecutionState("legacy-session"), { lifecycleId: "legacy-life", driverGoalId: "legacy-goal" });
+  const admittedOne = nextExecutionState(running, { admittedContinuation: { identity: "legacy-goal:1", goalId: "legacy-goal", continuationsUsed: 1, cycle: 1, mode: "execution-continue" } });
+  const advancedLegacy = { ...admittedOne, transition: admittedOne.transition + 1, cycle: 2 };
+  const admittedTwo = { ...advancedLegacy, transition: advancedLegacy.transition + 1, admittedContinuation: { identity: "legacy-goal:2", goalId: "legacy-goal", continuationsUsed: 2, cycle: 2, mode: "execution-continue" } };
+  const record = (data) => ({ type: "custom", customType: EXECUTION_STATE_ENTRY_TYPE, data });
+  assert.deepEqual(latestExecutionState([record(running), record(admittedOne), record(advancedLegacy), record(admittedTwo)], running.sessionId), admittedTwo);
+});
+
+test("projection consumption is durable, exact, and idempotent", () => {
+  const legacy = admittedExecutionState();
+  const armed = armExecutionBoundaryProjection(legacy, { requestId: "boundary-request" });
+  assert.equal(armed.admittedContinuation.boundary.stage, "armed");
+  const message = boundaryMessage(armed);
+  assert.equal(shouldSuppressExecutionBoundary(armed, message), false);
+
+  const consumed = consumeExecutionBoundaryProjection(armed, message);
+  assert.equal(consumed.admittedContinuation.boundary.stage, "projection-consumed");
+  assert.equal(shouldSuppressExecutionBoundary(consumed, message), true);
+  assert.equal(consumeExecutionBoundaryProjection(consumed, message), consumed);
+
+  const record = (data) => ({ type: "custom", customType: EXECUTION_STATE_ENTRY_TYPE, data });
+  const recovered = latestExecutionState([record(legacy), record(armed), record(consumed)], consumed.sessionId);
+  assert.equal(recovered.admittedContinuation.boundary.stage, "projection-consumed");
+  assert.equal(shouldSuppressExecutionBoundary(recovered, message), true);
+});
+
+test("projection suppression rejects every mismatched correlation field", () => {
+  const armed = armExecutionBoundaryProjection(admittedExecutionState(), { requestId: "boundary-request" });
+  const consumed = consumeExecutionBoundaryProjection(armed, boundaryMessage(armed));
+  const mismatches = {
+    source: "other", protocolVersion: 2, sessionId: "other-session", lifecycleId: "other-life", cycle: 2,
+    goalId: "other-goal", continuationsUsed: 4, boundaryIdentity: "other-goal:4", automaticCompactionRequestId: "other-request",
+  };
+  for (const [key, value] of Object.entries(mismatches)) {
+    const message = boundaryMessage(consumed, { [key]: value });
+    assert.equal(shouldSuppressExecutionBoundary(consumed, message), false, key);
+    assert.throws(() => consumeExecutionBoundaryProjection(armed, message), /stale or mismatched/, key);
+  }
+  assert.equal(shouldSuppressExecutionBoundary(consumed, { ...boundaryMessage(consumed), customType: "other" }), false);
+});
+
+test("execution-boundary state validation fails closed and consumption cannot roll back", () => {
+  const legacy = admittedExecutionState();
+  const armed = armExecutionBoundaryProjection(legacy, { requestId: "boundary-request" });
+  const consumed = consumeExecutionBoundaryProjection(armed, boundaryMessage(armed));
+  const record = (data) => ({ type: "custom", customType: EXECUTION_STATE_ENTRY_TYPE, data });
+  for (const boundary of [
+    { protocolVersion: 2, requestId: "boundary-request", stage: "armed" },
+    { protocolVersion: 1, requestId: "", stage: "armed" },
+    { protocolVersion: 1, requestId: "x".repeat(201), stage: "armed" },
+    { protocolVersion: 1, requestId: "boundary-request", stage: "unknown" },
+  ]) {
+    const invalid = { ...armed, admittedContinuation: { ...armed.admittedContinuation, boundary } };
+    assert.throws(() => latestExecutionState([record(invalid)], invalid.sessionId), /invalid state record/);
+  }
+  assert.throws(
+    () => nextExecutionState(legacy, { admittedContinuation: { ...legacy.admittedContinuation, boundary: { protocolVersion: 1, requestId: "boundary-request", stage: "projection-consumed" } } }),
+    /invalid Ralph execution-boundary state transition/,
+  );
+  assert.throws(
+    () => nextExecutionState(consumed, { admittedContinuation: { ...consumed.admittedContinuation, boundary: { ...consumed.admittedContinuation.boundary, stage: "armed" } } }),
+    /invalid Ralph execution-boundary state transition/,
+  );
+  assert.throws(() => nextExecutionState(consumed, { admittedContinuation: null }), /invalid Ralph execution-boundary state transition/);
+  assert.throws(
+    () => nextExecutionState(consumed, { admittedContinuation: { identity: "boundary-goal:4", goalId: "boundary-goal", continuationsUsed: 4, cycle: 1, mode: "execution-continue", boundary: { protocolVersion: 1, requestId: "other-request", stage: "armed" } } }),
+    /invalid Ralph execution-boundary state transition/,
+  );
+  assert.throws(
+    () => nextExecutionState(consumed, { admittedContinuation: { ...consumed.admittedContinuation, boundary: { ...consumed.admittedContinuation.boundary, requestId: "other-request" } } }),
+    /invalid Ralph execution-boundary state transition/,
+  );
+  const advanced = nextExecutionState(consumed, { cycle: 2, admittedContinuation: null });
+  assert.equal(advanced.cycle, 2); assert.equal(advanced.admittedContinuation, null);
+  const nextArmedContinuation = { identity: "boundary-goal:4", goalId: "boundary-goal", continuationsUsed: 4, cycle: 2, mode: "execution-continue", boundary: { protocolVersion: 1, requestId: "next-request", stage: "armed" } };
+  assert.equal(nextExecutionState(consumed, { cycle: 2, admittedContinuation: nextArmedContinuation }).admittedContinuation.boundary.stage, "armed");
+  const nextConsumedContinuation = { ...nextArmedContinuation, boundary: { ...nextArmedContinuation.boundary, stage: "projection-consumed" } };
+  assert.throws(() => nextExecutionState(consumed, { cycle: 2, admittedContinuation: nextConsumedContinuation }), /invalid Ralph execution-boundary state transition/);
+  assert.throws(() => nextExecutionState(consumed, { lifecycleId: "other-life", cycle: 1, admittedContinuation: { ...nextConsumedContinuation, cycle: 1 } }), /invalid Ralph execution-boundary state transition/);
+
+  for (const admittedContinuation of [
+    { ...consumed.admittedContinuation, boundary: { ...consumed.admittedContinuation.boundary, stage: "armed" } },
+    null,
+    { identity: "boundary-goal:4", goalId: "boundary-goal", continuationsUsed: 4, cycle: 1, mode: "execution-continue", boundary: { protocolVersion: 1, requestId: "other-request", stage: "armed" } },
+  ]) {
+    const rollback = { ...consumed, transition: consumed.transition + 1, admittedContinuation };
+    assert.throws(() => latestExecutionState([record(consumed), record(rollback)], consumed.sessionId), /invalid execution-boundary transition/);
+  }
+  const directConsumedCycle = { ...consumed, transition: consumed.transition + 1, cycle: 2, admittedContinuation: nextConsumedContinuation };
+  const directConsumedLifecycle = { ...consumed, transition: consumed.transition + 1, lifecycleId: "other-life", admittedContinuation: { ...nextConsumedContinuation, cycle: 1 } };
+  assert.throws(() => latestExecutionState([record(consumed), record(directConsumedCycle)], consumed.sessionId), /invalid execution-boundary transition/);
+  assert.throws(() => latestExecutionState([record(consumed), record(directConsumedLifecycle)], consumed.sessionId), /invalid execution-boundary transition/);
+  assert.deepEqual(latestExecutionState([record(directConsumedCycle)], consumed.sessionId), directConsumedCycle);
+});
+
+test("arming is single-owner and requires the current admitted continuation", () => {
+  const legacy = admittedExecutionState();
+  const armed = armExecutionBoundaryProjection(legacy, { requestId: "boundary-request" });
+  assert.equal(armExecutionBoundaryProjection(armed, { requestId: "boundary-request" }), armed);
+  assert.throws(() => armExecutionBoundaryProjection(armed, { requestId: "other-request" }), /different boundary request/);
+  assert.throws(() => armExecutionBoundaryProjection(beginExecution(inactiveExecutionState("s"), { lifecycleId: "life" }), { requestId: "request" }), /active admitted execution continuation/);
+  assert.throws(() => armExecutionBoundaryProjection(legacy, { requestId: "" }), /1 to 200 characters/);
+  assert.throws(() => armExecutionBoundaryProjection(legacy, { requestId: "x".repeat(201) }), /1 to 200 characters/);
 });

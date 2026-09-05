@@ -500,7 +500,7 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
         if (live.pendingDecision?.action === "continue" && typeof live.pendingDecision.finalAssistantMessage === "string") {
           try {
             appendLog({ cwd: ctx.cwd, sessionId: id, lifecycleId: live.lifecycleId, action: live.pendingDecision.action, phase: "execute", cycle: live.cycle, finalAssistantMessage: live.pendingDecision.finalAssistantMessage, timestamp: new Date(live.pendingDecision.timestamp) });
-            live = persistExecution(ctx, nextExecutionState(live, { cycle: live.cycle + 1, pendingDecision: null, resetRequested: false }));
+            live = persistExecution(ctx, nextExecutionState(live, { cycle: live.cycle + 1, pendingDecision: null, resetRequested: false, admittedContinuation: null }));
           } catch (error) {
             ctx.abort(); persistExecution(ctx, nextExecutionState(live, { status: "paused", pendingDecision: null, wait: null, pauseReason: `execution boundary commit failed: ${error.message}` }));
             ctx.ui.notify(`Ralph execution boundary failed safely: ${error.message}`, "error"); return { messages: [] };
