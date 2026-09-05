@@ -11,7 +11,7 @@ const specSkill = { path: "/project/.ralph/skills/spec-it-out/SKILL.md", text: "
 const planSkill = { path: "/project/.ralph/skills/plan/SKILL.md", text: "---\nname: plan\ndescription: test\nprime-ralph-invocation-version: 1\n---\nplan body" };
 const executeSkill = { path: "/project/.ralph/skills/execute/SKILL.md", text: "---\nname: execute\ndescription: test\nprime-ralph-invocation-version: 1\n---\nexecute body" };
 const blockedSkill = { path: "/project/.ralph/skills/blocked/SKILL.md", text: "---\nname: blocked\ndescription: test\nprime-ralph-invocation-version: 1\n---\nblocked body" };
-function harness({ specificationState = "absent", planState = "absent", branch = [], inspectSpecError, inspectPlanError, sendError, loadPrepareError, loadPlanError, blockedState = "absent", blockedProofState = "complete", restoredProofState = "unproven", appendFailureAt: initialAppendFailureAt, logFailureAt, sessionId = "session-1", sharedLogs, closeoutTimeoutMs } = {}) {
+function harness({ specificationState = "absent", planState = "absent", branch = [], inspectSpecError, inspectPlanError, sendError, loadPrepareError, loadPlanError, blockedState = "absent", blockedProofState = "complete", restoredProofState = "unproven", appendFailureAt: initialAppendFailureAt, logFailureAt, sessionId = "session-1", rlmDepth = 0, sharedLogs, closeoutTimeoutMs } = {}) {
   const commands = new Map(), tools = new Map(), handlers = new Map(), sent = [], userMessages = [], notices = [], compactions = [], entries = [], logs = sharedLogs ?? [], transactions = [];
   let spec = specificationState, plan = planState, blocked = blockedState, restored = restoredProofState, blockedLifecycle = [...branch].reverse().find((entry) => entry?.data?.provenanceId)?.data.provenanceId ?? "blocked-life", nextEntry = branch.length, pending = false, idle = true, aborted = 0, appendCalls = 0, appendFailureAt = initialAppendFailureAt, logCalls = 0;
   const pi = {
@@ -56,7 +56,7 @@ function harness({ specificationState = "absent", planState = "absent", branch =
     cwd: "/project", waitForIdle: async () => {}, isIdle: () => idle,
     hasPendingMessages: () => pending, abort: () => { aborted += 1; },
     compact: (options) => compactions.push(options),
-    sessionManager: { getBranch: () => branch, getSessionId: () => sessionId },
+    sessionManager: { getBranch: () => branch, getHeader: () => ({ rlmDepth }), getSessionId: () => sessionId },
     ui: { notify: (...args) => notices.push(args) },
   };
   const emit = async (name, event) => { for (const handler of handlers.get(name) ?? []) await handler(event, ctx); };
@@ -83,6 +83,13 @@ test("delivers no-spec startup prepare once and suppresses reload replay", async
   assert.equal(h.sent.length, 1);
   assert.equal(h.sent[0].message.customType, STARTUP_PREPARE_MESSAGE_TYPE);
   assert.match(h.sent[0].message.content, /<skill name="prepare"/);
+});
+
+test("RLM child startup leaves the first turn to its spawn task", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing", rlmDepth: 1 });
+  await h.emit("session_start", { reason: "startup" });
+  assert.equal(h.sent.length, 0);
+  assert.equal(h.branch.length, 0);
 });
 
 test("new and resumed no-spec sessions each receive their own prepare boundary", async () => {

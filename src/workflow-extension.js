@@ -585,6 +585,7 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
     });
 
     pi.on("session_start", (event, ctx) => {
+      if ((ctx.sessionManager.getHeader()?.rlmDepth ?? 0) > 0) return;
       const id = sessionId(ctx); let live;
       try { live = latestExecutionState(branch(ctx), id); }
       catch (error) { ctx.ui.notify(`Ralph could not recover lifecycle state safely. ${error.message}`, "error"); return; }

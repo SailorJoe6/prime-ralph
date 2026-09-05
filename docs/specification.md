@@ -15,7 +15,7 @@ The blocked interaction is delivered internally rather than exposed as a separat
 
 ## Startup preparation
 
-For `session_start` reasons other than `reload`, the extension inspects the exact active specification path. If no active specification exists and the current session has no durable startup boundary, it validates and delivers `.ralph/skills/prepare/SKILL.md` as the first provider turn.
+For top-level `session_start` reasons other than `reload`, the extension inspects the exact active specification path. If no active specification exists and the current session has no durable startup boundary, it validates and delivers `.ralph/skills/prepare/SKILL.md` as the first provider turn. RLM child sessions (`rlmDepth > 0`) skip automatic Ralph startup so the explicit RLM spawn task owns their first turn. This temporary admission workaround also omits the project knowledge and behavioral guidance supplied by `prepare` from those child sessions.
 
 The hidden `prime_ralph_startup_prepare` message records the current Prime Agent session ID. This gives two distinct guarantees:
 

@@ -23,7 +23,7 @@ Prime Agent's built-in `/clear` remains unchanged. In Prime Agent `0.9.1`, `/cle
 
 ## Slice 3 specification behavior
 
-In a real session with no active specification, the extension delivers `prepare` exactly once before ordinary interaction. The durable boundary is keyed to the current session, so `/reload` does not replay it and a fork is not suppressed by an inherited parent marker.
+In a real top-level session with no active specification, the extension delivers `prepare` exactly once before ordinary interaction. The durable boundary is keyed to the current session, so `/reload` does not replay it and a fork is not suppressed by an inherited parent marker. RLM child sessions (`rlmDepth > 0`) receive no automatic Ralph startup turn; their explicit spawn task owns the first turn. This is a temporary compatibility guard for an upstream admission bug. It knowingly means RLM children do not receive Ralph's `prepare` or planning context.
 
 `/spec-it-out` keeps the current conversation. Code classifies the exact `.ralph/plans/SPECIFICATION.md` path and supplies a closed, versioned invocation mode. The project skill owns questions, warnings, future/update/cancel choices, consent, and document writing. The handler never writes a planning document. Parent or destination symlinks and unsupported path types fail before prompt delivery.
 

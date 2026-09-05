@@ -6,7 +6,7 @@ Slice 4 added the complete interactive planning path. Slice 5 adds automatic exe
 
 The production extension registers `/reset`, `/spec-it-out`, `/plan`, and `/execute`. Exact blocked planning documents take startup precedence and route interaction through the blocked workflow. If those documents were moved back manually, Ralph keeps that recovery in the blocked workflow while it verifies the active files and original unblock condition. `/plan` and `/execute` remain unavailable until that check succeeds. The user then starts a new execution run explicitly with `/execute`.
 
-A normal session with an exact active `.ralph/plans/SPECIFICATION.md` starts in planning. The extension validates `prepare`, the exact active-plan state, and the project `plan` skill before admitting one hidden message. That message contains `prepare` first and the plan invocation second. An absent active specification retains the specification startup behavior.
+A normal top-level session with an exact active `.ralph/plans/SPECIFICATION.md` starts in planning. The extension validates `prepare`, the exact active-plan state, and the project `plan` skill before admitting one hidden message. That message contains `prepare` first and the plan invocation second. An absent active specification retains the specification startup behavior. RLM child sessions (`rlmDepth > 0`) skip this automatic planning turn so the explicit RLM spawn task runs first.
 
 Prime Agent `0.9.1` does not expose a reliable conditional command-registration predicate. `/plan` is therefore registered consistently and uses the specified fallback when the active specification is absent: it reports the required path and makes no context or document change.
 
