@@ -85,9 +85,22 @@ export function createWorkflowExtension({
     const persistExecution = (ctx, state) => {
       pi.appendEntry(EXECUTION_STATE_ENTRY_TYPE, state); executionStates.set(sessionId(ctx), state); return state;
     };
+    const hasPendingTerminalLog = (state) => ["block", "complete"].includes(state.pendingDecision?.action);
+    const finishPendingExecutionLog = (ctx, state) => {
+      const pending = state.pendingDecision;
+      if (!hasPendingTerminalLog(state) || typeof pending.finalAssistantMessage !== "string" || !pending.finalAssistantMessage.trim() || typeof pending.timestamp !== "string") return state;
+      appendLog({ cwd: ctx.cwd, sessionId: sessionId(ctx), lifecycleId: state.lifecycleId, action: pending.action, phase: "execute", cycle: pending.cycle, finalAssistantMessage: pending.finalAssistantMessage, timestamp: new Date(pending.timestamp) });
+      return persistExecution(ctx, nextExecutionState(state, { pendingDecision: null }));
+    };
+    const requireTerminalLogReady = (state) => {
+      if (hasPendingTerminalLog(state)) throw new Error("the prior terminal execution pass has not captured a valid final assistant message for its durable log closeout; preserve the session and retry recovery before another workflow transition");
+      return state;
+    };
     const execution = (ctx, { reconcile = true } = {}) => {
-      const current = rawExecution(ctx);
+      let current = rawExecution(ctx);
       if (!reconcile) return current;
+      current = finishPendingExecutionLog(ctx, current);
+      if (hasPendingTerminalLog(current)) return current;
       const goalReconciled = reconcileGoalState(current, latestGoalState(branch(ctx)));
       const reconciled = goalReconciled === current ? current : persistExecution(ctx, goalReconciled);
       return reconcilePlanningLocation(ctx, reconciled);
@@ -184,7 +197,7 @@ export function createWorkflowExtension({
     resetRuntime = createResetExtension({
       loadPrepare, loadSpecItOut, inspectSpecification, createRequestId,
       handleReset: async ({ ctx }) => {
-        const state = execution(ctx);
+        const state = requireTerminalLogReady(execution(ctx));
         if (state.phase === "execution" && state.status === "running") {
           persistExecution(ctx, nextExecutionState(state, { resetRequested: true }));
           if (!ctx.isIdle()) pi.sendUserMessage("<prime-ralph-reset-request>Finish or safely stop the current operation, then make the required Ralph lifecycle decision at the earliest eligible boundary. Do not start unrelated work.</prime-ralph-reset-request>", { deliverAs: "steer" });
@@ -196,7 +209,7 @@ export function createWorkflowExtension({
         return false;
       },
       resolveResetInjection: ({ ctx }) => {
-        const state = execution(ctx);
+        const state = requireTerminalLogReady(execution(ctx));
         if (isRestoredRecovery(state)) {
           const proof = requireRestoredProof(ctx, state);
           return { content: restoredContent(ctx, proof.lifecycleId), details: { workflowPhase: "planning", invocationMode: "blocked-restored", recovery: "active-pair-restored", provenanceId: proof.lifecycleId, sessionId: sessionId(ctx) } };
@@ -228,7 +241,7 @@ export function createWorkflowExtension({
       promptSnippet: "Use ralph_lifecycle exactly once at the semantic end of a Ralph execution pass, or for the matching blocked/waiting control.",
       parameters: lifecycleParameters, executionMode: "sequential",
       async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-        let state = execution(ctx, { reconcile: false });
+        let state = finishPendingExecutionLog(ctx, execution(ctx, { reconcile: false }));
         const result = (text, details = {}) => ({ content: [{ type: "text", text }], details: { protocolVersion: EXECUTION_PROTOCOL_VERSION, ...details } });
         if (params.action === "status") {
           if (state.phase === "blocked") {
@@ -240,6 +253,7 @@ Condition required before execution can restart: ${condition}`, { state });
           }
           return result(`Ralph is ${state.status} in the ${state.phase} workflow.`, { state });
         }
+        requireTerminalLogReady(state);
         if (["unblock", "confirm-forward"].includes(params.action)) {
           if (state.phase !== "blocked" && !(params.action === "confirm-forward" && state.phase === "planning")) throw new Error("Ralph is not resolving blocked work right now");
           if (!params.provenanceId || params.provenanceId !== state.provenanceId) throw new Error("This request refers to different or missing blocked work. Check Ralph's current status and retry with its current identifier.");
@@ -316,7 +330,7 @@ Condition required before execution can restart: ${condition}`, { state });
       description: "Develop a new or existing Ralph specification in the current conversation",
       handler: async (args, ctx) => {
         if (args.trim()) throw new Error("Usage: /spec-it-out"); await ctx.waitForIdle();
-        const live = execution(ctx);
+        const live = requireTerminalLogReady(execution(ctx));
         if (live.status === "running") { ctx.ui.notify("Pause the active Ralph execution lifecycle with /goal pause before using /spec-it-out.", "warning"); return; }
         if (live.status === "waiting") { ctx.ui.notify("Ralph is waiting with its native goal already complete; establish readiness or explicitly cancel the lifecycle before using /spec-it-out.", "warning"); return; }
         if (isRestoredRecovery(live)) { ctx.ui.notify(`${restoredRecoveryMessage} Continue the unblock check or use /reset to restart it before editing the specification.`, "warning"); return; }
@@ -338,7 +352,7 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
       description: "Create or discuss the Ralph execution plan for the active specification",
       handler: async (args, ctx) => {
         if (args.trim()) throw new Error("Usage: /plan"); await ctx.waitForIdle();
-        const live = execution(ctx);
+        const live = requireTerminalLogReady(execution(ctx));
         if (live.status === "running") { ctx.ui.notify("Pause the active Ralph execution lifecycle with /goal pause before using /plan.", "warning"); return; }
         if (live.status === "waiting") { ctx.ui.notify("Ralph is waiting with its native goal already complete; establish readiness or explicitly cancel the lifecycle before using /plan.", "warning"); return; }
         if (isRestoredRecovery(live)) { ctx.ui.notify(`${restoredRecoveryMessage} Continue the unblock check or use /reset to restart it before editing the plan.`, "warning"); return; }
@@ -372,7 +386,7 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
         const { specification, plan } = validatePair(ctx);
         if (specification.state !== "existing") { ctx.ui.notify("Ralph execution requires .ralph/plans/SPECIFICATION.md before /execute.", "warning"); return; }
         if (plan.state !== "existing") { ctx.ui.notify("Ralph execution requires .ralph/plans/EXECUTION_PLAN.md after the active specification before /execute.", "warning"); return; }
-        let live = execution(ctx);
+        let live = requireTerminalLogReady(execution(ctx));
         if (isRestoredRecovery(live)) { ctx.ui.notify(`${restoredRecoveryMessage} Continue the unblock check or use /reset to restart it. After Ralph verifies the files and blocker, run /execute again.`, "warning"); return; }
         if (["running", "waiting"].includes(live.status)) { ctx.ui.notify(`Ralph execution lifecycle ${live.lifecycleId} is already ${live.status}; no second lifecycle was created.`, "warning"); return; }
         if (live.status === "paused" && ["paused", "budget_limited"].includes(goal(ctx)?.status)) { ctx.ui.notify("Resume the same native Prime Agent goal with /goal resume; /execute will not create a second lifecycle.", "warning"); return; }
@@ -392,7 +406,7 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
     });
 
     pi.on("before_agent_start", (_event, ctx) => {
-      const live = execution(ctx), id = sessionId(ctx);
+      const live = requireTerminalLogReady(execution(ctx)), id = sessionId(ctx);
       if (live.status === "waiting") activeLifecycleTurns.set(id, { kind: "waiting-check" });
       if (live.phase === "blocked" && live.blockedContextEstablished !== true) {
         if (isRestoredRecovery(live)) {
@@ -427,7 +441,7 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
         const resetForBoundary = live.resetRequested === true, resumedForBoundary = live.resumed === true;
         if (live.pendingDecision?.action === "continue" && typeof live.pendingDecision.finalAssistantMessage === "string") {
           try {
-            appendLog({ cwd: ctx.cwd, sessionId: id, phase: "execute", cycle: live.cycle, finalAssistantMessage: live.pendingDecision.finalAssistantMessage, timestamp: new Date(live.pendingDecision.timestamp) });
+            appendLog({ cwd: ctx.cwd, sessionId: id, lifecycleId: live.lifecycleId, action: live.pendingDecision.action, phase: "execute", cycle: live.cycle, finalAssistantMessage: live.pendingDecision.finalAssistantMessage, timestamp: new Date(live.pendingDecision.timestamp) });
             live = persistExecution(ctx, nextExecutionState(live, { cycle: live.cycle + 1, pendingDecision: null, resetRequested: false }));
           } catch (error) {
             ctx.abort(); persistExecution(ctx, nextExecutionState(live, { status: "paused", pendingDecision: null, wait: null, pauseReason: `execution boundary commit failed: ${error.message}` }));
@@ -469,8 +483,9 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
         } else if (decision === "ready" || decision === "wait") {
           live = persistExecution(ctx, nextExecutionState(live, { pendingDecision: null }));
         } else if (decision === "block" || decision === "complete") {
-          appendLog({ cwd: ctx.cwd, sessionId: id, phase: "execute", cycle: live.pendingDecision.cycle, finalAssistantMessage: text, timestamp: now() });
-          live = persistExecution(ctx, nextExecutionState(live, { pendingDecision: null }));
+          live = persistExecution(ctx, nextExecutionState(live, { pendingDecision: { ...live.pendingDecision, finalAssistantMessage: text, timestamp: now().toISOString() } }));
+          live = finishPendingExecutionLog(ctx, live);
+          requireTerminalLogReady(live);
         } else if (live.phase === "execution" && live.status === "running") {
           ctx.abort(); live = persistExecution(ctx, nextExecutionState(live, { status: "paused", pendingDecision: null, wait: null, pauseReason: "execution pass ended without a lifecycle decision" }));
           ctx.ui.notify("Ralph execution paused because the pass ended without an accepted lifecycle decision.", "error");
@@ -515,6 +530,8 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
       executionStates.set(id, live);
       let blocked, specification;
       try {
+        live = finishPendingExecutionLog(ctx, live);
+        requireTerminalLogReady(live);
         blocked = blockedState(ctx);
         if (blocked.state === "partial") throw new Error("Only one planning file is in .ralph/plans/blocked/. Restore or complete the exact specification and execution plan pair before Ralph can continue.");
         if (blocked.state === "complete") {

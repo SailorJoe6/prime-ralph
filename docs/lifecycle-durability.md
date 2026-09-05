@@ -23,6 +23,12 @@ A retained branch may begin at a transition greater than zero after compaction. 
 
 This rule prevents a corrupt or replayed newest record from resurrecting an older running state, admitting a second lifecycle, or silently dropping a waiting state.
 
+## Terminal execution-log recovery
+
+A blocked or completed pass now records its final assistant message and timestamp in the lifecycle state before it writes `.ralph/logs/EXECUTION_LOG.md`. The terminal closeout clears that intent only after the log append succeeds.
+
+If the log append fails, reload or the next same-session workflow transition retries the durable intent before it changes lifecycle state or admits another phase prompt. If the log append succeeds but the following state append fails, recovery may attempt the same log entry again. The execution log's semantic entry identity includes the session, Ralph lifecycle, terminal action, phase, cycle, and final message, so a retry is idempotent without collapsing a later lifecycle that happens to reuse the same cycle number and text. An incomplete or textless terminal intent fails closed instead of being silently erased. This ordering preserves the completed pass across either failure without reopening execution, duplicating the lifecycle, or relying on transcript reconstruction.
+
 ## Remaining durability work
 
-Later increments still need failure injection around state append, log append, driver stop, readiness, and the file transactions that are not already covered. Reset races must also be repeated across extension reload. Each increment must leave a failed operation either safely retryable or durably terminal and must preserve the session JSONL and REPL state.
+Later increments still need failure injection around other state-append positions, driver stop, readiness, and the file transactions that are not already covered. Reset races must also be repeated across extension reload. Each increment must leave a failed operation either safely retryable or durably terminal and must preserve the session JSONL and REPL state.

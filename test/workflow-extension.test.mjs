@@ -11,9 +11,9 @@ const specSkill = { path: "/project/.ralph/skills/spec-it-out/SKILL.md", text: "
 const planSkill = { path: "/project/.ralph/skills/plan/SKILL.md", text: "---\nname: plan\ndescription: test\nprime-ralph-invocation-version: 1\n---\nplan body" };
 const executeSkill = { path: "/project/.ralph/skills/execute/SKILL.md", text: "---\nname: execute\ndescription: test\nprime-ralph-invocation-version: 1\n---\nexecute body" };
 const blockedSkill = { path: "/project/.ralph/skills/blocked/SKILL.md", text: "---\nname: blocked\ndescription: test\nprime-ralph-invocation-version: 1\n---\nblocked body" };
-function harness({ specificationState = "absent", planState = "absent", branch = [], inspectSpecError, inspectPlanError, sendError, loadPrepareError, loadPlanError, blockedState = "absent", blockedProofState = "complete", restoredProofState = "unproven", appendFailureAt, sessionId = "session-1" } = {}) {
-  const commands = new Map(), tools = new Map(), handlers = new Map(), sent = [], userMessages = [], notices = [], compactions = [], entries = [], logs = [], transactions = [];
-  let spec = specificationState, plan = planState, blocked = blockedState, restored = restoredProofState, blockedLifecycle = [...branch].reverse().find((entry) => entry?.data?.provenanceId)?.data.provenanceId ?? "blocked-life", nextEntry = branch.length, pending = false, idle = true, aborted = 0, appendCalls = 0;
+function harness({ specificationState = "absent", planState = "absent", branch = [], inspectSpecError, inspectPlanError, sendError, loadPrepareError, loadPlanError, blockedState = "absent", blockedProofState = "complete", restoredProofState = "unproven", appendFailureAt: initialAppendFailureAt, logFailureAt, sessionId = "session-1", sharedLogs } = {}) {
+  const commands = new Map(), tools = new Map(), handlers = new Map(), sent = [], userMessages = [], notices = [], compactions = [], entries = [], logs = sharedLogs ?? [], transactions = [];
+  let spec = specificationState, plan = planState, blocked = blockedState, restored = restoredProofState, blockedLifecycle = [...branch].reverse().find((entry) => entry?.data?.provenanceId)?.data.provenanceId ?? "blocked-life", nextEntry = branch.length, pending = false, idle = true, aborted = 0, appendCalls = 0, appendFailureAt = initialAppendFailureAt, logCalls = 0;
   const pi = {
     registerCommand(name, command) { commands.set(name, command); },
     registerTool(tool) { tools.set(tool.name, tool); },
@@ -41,7 +41,13 @@ function harness({ specificationState = "absent", planState = "absent", branch =
     adoptRestoredDocuments: (options) => { const value = { operation: "adopt-restored", lifecycleId: options.lifecycleId }; transactions.push(value); restored = "unproven"; return value; },
     verifyAdoptedDocuments: (options) => { const value = { operation: "verify-adopted", lifecycleId: options.lifecycleId }; transactions.push(value); return value; },
     archiveDocuments: (options) => { const value = { operation: "archive", lifecycleId: options.lifecycleId, archiveName: options.archiveName }; transactions.push(value); spec = "absent"; plan = "absent"; return value; },
-    appendLog: (value) => { logs.push(value); return { written: true }; },
+    appendLog: (value) => {
+      logCalls += 1;
+      if (logCalls === logFailureAt) throw new Error("injected execution log failure");
+      const duplicate = logs.some((entry) => entry.sessionId === value.sessionId && entry.lifecycleId === value.lifecycleId && entry.action === value.action && entry.phase === value.phase && entry.cycle === value.cycle && entry.finalAssistantMessage === value.finalAssistantMessage);
+      if (!duplicate) logs.push(value);
+      return { written: !duplicate, reason: duplicate ? "duplicate" : undefined };
+    },
     now: () => new Date("2026-09-04T00:00:00.000Z"),
     createRequestId: (() => { let id = 0; return () => `id${++id}`; })(),
   })(pi);
@@ -59,7 +65,7 @@ function harness({ specificationState = "absent", planState = "absent", branch =
     await emit("message_start", { message: { role: "custom", ...message } });
     await emit("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] });
   };
-  return { commands, tools, handlers, sent, userMessages, notices, branch, entries, compactions, logs, transactions, ctx, emit, fallback, settle, state: () => latestExecutionState(branch, sessionId), addGoal: (data) => branch.push({ type: "custom", customType: "thread_goal_state", data }), setPending: (value) => { pending = value; }, setIdle: (value) => { idle = value; }, aborted: () => aborted, setSpecification: (value) => { spec = value; }, setPlan: (value) => { plan = value; }, setRestored: (value) => { restored = value; }, setBlocked: (value) => { blocked = value; } };
+  return { commands, tools, handlers, sent, userMessages, notices, branch, entries, compactions, logs, transactions, ctx, emit, fallback, settle, state: () => latestExecutionState(branch, sessionId), addGoal: (data) => branch.push({ type: "custom", customType: "thread_goal_state", data }), setPending: (value) => { pending = value; }, setIdle: (value) => { idle = value; }, aborted: () => aborted, setSpecification: (value) => { spec = value; }, setPlan: (value) => { plan = value; }, setRestored: (value) => { restored = value; }, setBlocked: (value) => { blocked = value; }, failStateAppendIn: (offset) => { appendFailureAt = appendCalls + offset; }, logAttempts: () => logCalls };
 }
 
 test("registers the complete Slice 5 command and lifecycle-control surface", () => {
@@ -322,6 +328,91 @@ test("block commits one pair transaction, logs final help, and first user respon
   assert.deepEqual(projected.messages, [{ role: "custom", ...injected.message }, user]);
 });
 
+test("terminal log failure preserves a durable closeout intent and reconstructed extension retries it", async () => {
+  const sharedLogs = [];
+  const h = harness({ specificationState: "existing", planState: "existing", logFailureAt: 1, sharedLogs });
+  const initial = await startExecution(h);
+  await h.emit("before_agent_start", { prompt: h.sent.at(-1).message.content });
+  h.addGoal({ goalId: "goal", status: "complete", active: false });
+  await control(h, { action: "block", lifecycleId: initial.lifecycleId, cycle: 1, reason: "credential missing", unblockCondition: "operator authenticates", wakeupsStopped: true });
+  await h.emit("turn_end", finalEvent("Please authenticate the provider."));
+  assert.equal(h.state().phase, "blocked");
+  assert.equal(h.state().pendingDecision.action, "block");
+  assert.equal(h.state().pendingDecision.finalAssistantMessage, "Please authenticate the provider.");
+  assert.match(h.notices.at(-1)[0], /closeout failed safely.*execution log failure/i);
+  const rebuilt = harness({ branch: h.branch, blockedState: "complete", sharedLogs });
+  await rebuilt.emit("session_start", { reason: "reload" });
+  assert.equal(sharedLogs.length, 1);
+  assert.equal(rebuilt.state().pendingDecision, null);
+  assert.equal(rebuilt.sent.filter((item) => item.message.customType === BLOCKED_MESSAGE_TYPE).length, 1);
+});
+
+test("state append failure after terminal log write leaves an idempotent retry intent", async () => {
+  const sharedLogs = [];
+  const h = harness({ specificationState: "existing", planState: "existing", sharedLogs });
+  const initial = await startExecution(h);
+  await h.emit("before_agent_start", { prompt: h.sent.at(-1).message.content });
+  h.addGoal({ goalId: "goal", status: "complete", active: false });
+  await control(h, { action: "block", lifecycleId: initial.lifecycleId, cycle: 1, reason: "credential missing", unblockCondition: "operator authenticates", wakeupsStopped: true });
+  h.failStateAppendIn(2);
+  await h.emit("turn_end", finalEvent("Please authenticate the provider."));
+  assert.equal(sharedLogs.length, 1);
+  assert.equal(h.state().pendingDecision.finalAssistantMessage, "Please authenticate the provider.");
+  const rebuilt = harness({ branch: h.branch, blockedState: "complete", sharedLogs });
+  await rebuilt.emit("session_start", { reason: "reload" });
+  assert.equal(rebuilt.logAttempts(), 1);
+  assert.equal(sharedLogs.length, 1);
+  assert.equal(rebuilt.state().pendingDecision, null);
+});
+
+test("same-session unblock finishes a failed terminal log before changing lifecycle state", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing", logFailureAt: 1 });
+  const initial = await startExecution(h);
+  await h.emit("before_agent_start", { prompt: h.sent.at(-1).message.content });
+  h.addGoal({ goalId: "goal", status: "complete", active: false });
+  await control(h, { action: "block", lifecycleId: initial.lifecycleId, cycle: 1, reason: "credential missing", unblockCondition: "operator authenticates", wakeupsStopped: true });
+  await h.emit("turn_end", finalEvent("Please authenticate the provider."));
+  await control(h, { action: "unblock", provenanceId: initial.lifecycleId });
+  assert.equal(h.logAttempts(), 2);
+  assert.equal(h.logs.length, 1);
+  assert.equal(h.state().pendingDecision, null);
+  assert.equal(h.transactions.at(-1).operation, "unblock");
+});
+
+test("same-session execute finishes a failed completion log before starting a new lifecycle", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing", logFailureAt: 1 });
+  const initial = await startExecution(h);
+  await h.emit("before_agent_start", { prompt: h.sent.at(-1).message.content });
+  h.addGoal({ goalId: "goal", status: "complete", active: false });
+  await control(h, { action: "complete", lifecycleId: initial.lifecycleId, cycle: 1, archive: false });
+  await h.emit("turn_end", finalEvent("All requirements are complete."));
+  await h.emit("agent_end", { messages: [finalEvent("All requirements are complete.").message] });
+  await h.commands.get("execute").handler("", h.ctx);
+  assert.equal(h.logAttempts(), 2);
+  assert.equal(h.logs.length, 1);
+  assert.equal(h.compactions.length, 2);
+  h.fallback();
+  assert.notEqual(h.state().lifecycleId, initial.lifecycleId);
+});
+
+test("textless terminal turns fail closed and cannot erase an incomplete log intent", async () => {
+  const events = [finalEvent(" "), { type: "turn_end", message: { role: "assistant", stopReason: "stop", content: [{ type: "thinking", thinking: "hidden" }] }, toolResults: [] }];
+  for (const event of events) {
+    const h = harness({ specificationState: "existing", planState: "existing" });
+    const initial = await startExecution(h);
+    await h.emit("before_agent_start", { prompt: h.sent.at(-1).message.content });
+    h.addGoal({ goalId: "goal", status: "complete", active: false });
+    await control(h, { action: "block", lifecycleId: initial.lifecycleId, cycle: 1, reason: "credential missing", unblockCondition: "operator authenticates", wakeupsStopped: true });
+    await h.emit("turn_end", event);
+    assert.equal(h.logs.length, 0);
+    assert.equal(h.state().pendingDecision.action, "block");
+    assert.match(h.notices.at(-1)[0], /has not captured a valid final assistant message/i);
+    await assert.rejects(h.emit("before_agent_start", { prompt: "next turn" }), /has not captured a valid final assistant message/i);
+    await assert.rejects(control(h, { action: "unblock", provenanceId: initial.lifecycleId }), /has not captured a valid final assistant message/i);
+    assert.equal(h.state().pendingDecision.action, "block");
+  }
+});
+
 test("unblock requires provenance and forward confirmation before a fresh explicit execute", async () => {
   const branch = [{ type: "custom", customType: EXECUTION_STATE_ENTRY_TYPE, data: { protocolVersion: 1, source: "prime-ralph", sessionId: "session-1", transition: 2, phase: "blocked", status: "inactive", lifecycleId: "blocked-life", cycle: 1, driverGoalId: null, pendingDecision: null, wait: null, provenanceId: "blocked-life", forwardConfirmed: false, blockedContextEstablished: true } }];
   const h = harness({ branch, blockedState: "complete", specificationState: "absent", planState: "absent" });
@@ -430,6 +521,7 @@ test("startup keeps an exact manually restored pair blocked and delivers one rec
 test("same-session commands notice when the user has already moved the blocked pair", async () => {
   const h = harness({ specificationState: "existing", planState: "existing" }); const initial = await startExecution(h);
   h.addGoal({ goalId: "goal", status: "complete", active: false }); await control(h, { action: "block", lifecycleId: initial.lifecycleId, cycle: 1, reason: "credential missing", unblockCondition: "operator authenticates", wakeupsStopped: true });
+  await h.emit("turn_end", finalEvent("Please authenticate the provider."));
   h.setBlocked("absent"); h.setSpecification("existing"); h.setPlan("existing"); h.setRestored("complete");
   await h.commands.get("execute").handler("", h.ctx);
   assert.equal(h.state().phase, "blocked"); assert.equal(h.state().recovery, "active-pair-restored"); assert.match(h.notices.at(-1)[0], /moved back to their active folder/);

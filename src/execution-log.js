@@ -57,8 +57,8 @@ function formatSession(sessionId) {
   return `\n## Session ${sessionId}\n<!-- prime-ralph-session:${encodedMarker(sessionId)} -->\n`;
 }
 
-function entryIdentity({ sessionId, phase, cycle, finalAssistantMessage }) {
-  return createHash("sha256").update(JSON.stringify({ sessionId, phase, cycle, finalAssistantMessage })).digest("hex");
+function entryIdentity({ sessionId, lifecycleId, action, phase, cycle, finalAssistantMessage }) {
+  return createHash("sha256").update(JSON.stringify({ sessionId, lifecycleId, action, phase, cycle, finalAssistantMessage })).digest("hex");
 }
 
 function formatEntry({ timestamp, phase, cycle, finalAssistantMessage, identity }) {
@@ -67,16 +67,18 @@ function formatEntry({ timestamp, phase, cycle, finalAssistantMessage, identity 
 
 /**
  * Append one terminal cycle message. Waiting transitions intentionally produce no log entry.
- * Duplicate session/phase/cycle/message events are ignored even when their timestamps differ.
+ * Duplicate session/lifecycle/action/phase/cycle/message events are ignored even when their timestamps differ.
  */
 export function appendExecutionLogEntry({
-  cwd = process.cwd(), sessionId, phase, cycle, finalAssistantMessage,
+  cwd = process.cwd(), sessionId, lifecycleId, action, phase, cycle, finalAssistantMessage,
   timestamp = new Date(), lstat = lstatSync, readFile = readFileSync,
   mkdir = mkdirSync, writeFile = writeFileSync, appendFile = appendFileSync,
 } = {}) {
   validateSingleLine(sessionId, "sessionId");
   validateSingleLine(phase, "phase");
   if (phase === "waiting") return Object.freeze({ written: false, reason: "waiting", path: resolve(cwd, EXECUTION_LOG_RELATIVE_PATH) });
+  validateSingleLine(lifecycleId, "lifecycleId");
+  validateSingleLine(action, "action");
   if (!Number.isSafeInteger(cycle) || cycle < 0) throw new TypeError("cycle must be a non-negative safe integer");
   if (typeof finalAssistantMessage !== "string" || !finalAssistantMessage.trim()) throw new TypeError("finalAssistantMessage must be a non-empty string");
   const isoTimestamp = normalizeTimestamp(timestamp);
@@ -91,7 +93,7 @@ export function appendExecutionLogEntry({
     try { existing = readFile(path, "utf8"); }
     catch (error) { throw new ExecutionLogError(`execution log is unreadable: ${EXECUTION_LOG_RELATIVE_PATH}`, { cause: error }); }
   }
-  const identity = entryIdentity({ sessionId, phase, cycle, finalAssistantMessage });
+  const identity = entryIdentity({ sessionId, lifecycleId, action, phase, cycle, finalAssistantMessage });
   if (existing.includes(`<!-- prime-ralph-entry:${identity} -->`)) {
     return Object.freeze({ written: false, reason: "duplicate", path, identity });
   }

@@ -17,7 +17,7 @@ function project() {
 function occurrences(text, token) { return text.split(token).length - 1; }
 function entry(cwd, overrides = {}) {
   return appendExecutionLogEntry({
-    cwd, sessionId: "session-1", phase: "execute", cycle: 1,
+    cwd, sessionId: "session-1", lifecycleId: "lifecycle-1", action: "continue", phase: "execute", cycle: 1,
     finalAssistantMessage: "Implemented the task.\nAll focused tests pass.",
     timestamp: "2026-04-05T06:07:08Z", ...overrides,
   });
@@ -59,6 +59,13 @@ test("deduplicates the same semantic entry even if its timestamp changes", () =>
 test("same message in a different cycle is a distinct entry", () => {
   const cwd = project(); const first = entry(cwd); const second = entry(cwd, { cycle: 2 });
   assert.equal(second.written, true); assert.notEqual(first.identity, second.identity);
+});
+
+test("same session cycle and message in a later lifecycle is a distinct entry", () => {
+  const cwd = project(); const first = entry(cwd);
+  const second = entry(cwd, { lifecycleId: "lifecycle-2" });
+  assert.equal(second.written, true); assert.notEqual(first.identity, second.identity);
+  assert.equal(occurrences(readFileSync(first.path, "utf8"), "Final assistant message:"), 2);
 });
 
 test("waiting transitions never create or append to a log", () => {
@@ -132,7 +139,8 @@ test("write and append errors are wrapped with the fixed path", () => {
 test("invalid metadata and messages are rejected", () => {
   const cwd = project();
   for (const overrides of [
-    { sessionId: "" }, { sessionId: "bad\nid" }, { phase: "" }, { phase: "bad\nphase" },
+    { sessionId: "" }, { sessionId: "bad\nid" }, { lifecycleId: "" }, { lifecycleId: "bad\nid" },
+    { action: "" }, { action: "bad\naction" }, { phase: "" }, { phase: "bad\nphase" },
     { cycle: -1 }, { cycle: 1.5 }, { finalAssistantMessage: "  " }, { timestamp: "not-a-date" },
   ]) assert.throws(() => entry(cwd, overrides), TypeError);
   assert.equal(existsSync(join(cwd, EXECUTION_LOG_RELATIVE_PATH)), false);
