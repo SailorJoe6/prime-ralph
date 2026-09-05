@@ -350,6 +350,16 @@ test("native goal clear cancels the same lifecycle and reload preserves markers 
   const count = h.sent.length; await h.emit("session_start", { reason: "reload" }); assert.equal(h.sent.length, count);
 });
 
+test("reload fails closed without prompts when the durable lifecycle chain is stale", async () => {
+  const base = latestExecutionState([], "session-1");
+  const running = { ...base, transition: 1, phase: "execution", status: "running", lifecycleId: "life", cycle: 1 };
+  const record = (data) => ({ type: "custom", customType: EXECUTION_STATE_ENTRY_TYPE, data });
+  const h = harness({ specificationState: "existing", planState: "existing", branch: [record(running), record(running)] });
+  await h.emit("session_start", { reason: "reload" });
+  assert.equal(h.sent.length, 0);
+  assert.match(h.notices.at(-1)[0], /could not recover lifecycle state safely.*stale or duplicate/i);
+});
+
 
 test("a fresh lifecycle refuses an unrelated native goal and ready requires a new goal identity", async () => {
   const conflict = harness({ specificationState: "existing", planState: "existing" }); conflict.addGoal({ goalId: "other", status: "active", active: true });

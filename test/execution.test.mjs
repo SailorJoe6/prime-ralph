@@ -40,12 +40,26 @@ test("formats closed execution and blocked invocation metadata", () => {
   assert.throws(() => formatExecutionInjection({ path: "/x", text: "x" }, { mode: "other", lifecycleId: "x", cycle: 1 }), /unknown/);
 });
 
-test("persists and recovers only matching session lifecycle state", () => {
+test("persists matching session lifecycle state and fails closed on invalid recovery", () => {
   const base = inactiveExecutionState("session-a"); const running = beginExecution(base, { lifecycleId: "life" });
   const entries = [{ type: "custom", customType: EXECUTION_STATE_ENTRY_TYPE, data: running }];
   assert.deepEqual(latestExecutionState(entries, "session-a"), running);
   assert.equal(latestExecutionState(entries, "session-b").status, "inactive");
-  assert.equal(latestExecutionState([{ type: "custom", customType: EXECUTION_STATE_ENTRY_TYPE, data: { ...running, status: "bogus" } }], "session-a").status, "inactive");
+  assert.throws(
+    () => latestExecutionState([{ type: "custom", customType: EXECUTION_STATE_ENTRY_TYPE, data: { ...running, status: "bogus" } }], "session-a"),
+    /recovery stopped at an invalid state record/,
+  );
+});
+
+test("recovery rejects stale and duplicate lifecycle records instead of resurrecting older state", () => {
+  const base = inactiveExecutionState("session-a");
+  const running = beginExecution(base, { lifecycleId: "life" });
+  const waiting = nextExecutionState(running, { status: "waiting", wait: { id: "wait", reason: "job", readiness: "exit" } });
+  const record = (data) => ({ type: "custom", customType: EXECUTION_STATE_ENTRY_TYPE, data });
+  assert.deepEqual(latestExecutionState([record(running), record(waiting)], "session-a"), waiting);
+  assert.throws(() => latestExecutionState([record(running), record(running)], "session-a"), /stale or duplicate state record/);
+  assert.throws(() => latestExecutionState([record(waiting), record(running)], "session-a"), /stale or duplicate state record/);
+  assert.deepEqual(latestExecutionState([record({ ...running, sessionId: "other" }), record(waiting)], "session-a"), waiting);
 });
 
 test("lifecycle transitions enforce identity, waiting records, and one active lifecycle", () => {
@@ -85,12 +99,12 @@ test("blocked projection preserves the nearest triggering user rather than stale
 });
 
 
-test("reducer rejects forbidden phase jumps and recovery ignores inconsistent markers", () => {
+test("reducer rejects forbidden phase jumps and recovery fails closed on inconsistent markers", () => {
   const base = inactiveExecutionState("s"), running = beginExecution(base, { lifecycleId: "life" });
   assert.throws(() => nextExecutionState(base, { phase: "execution", status: "paused", lifecycleId: "life", cycle: 1 }), /invalid Ralph lifecycle transition/);
   assert.throws(() => nextExecutionState(running, { phase: "blocked", status: "inactive", wait: null, provenanceId: null }), /state transition record|provenance/);
   const invalid = { ...running, phase: "planning", status: "running", transition: 99 };
-  assert.equal(latestExecutionState([{ type: "custom", customType: EXECUTION_STATE_ENTRY_TYPE, data: invalid }], "s").status, "inactive");
+  assert.throws(() => latestExecutionState([{ type: "custom", customType: EXECUTION_STATE_ENTRY_TYPE, data: invalid }], "s"), /recovery stopped at an invalid state record/);
 });
 
 test("native goal clear cancels a recorded driver and error pauses it", () => {

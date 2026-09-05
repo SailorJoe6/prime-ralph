@@ -96,13 +96,26 @@ function validLifecycleState(value, sessionId) {
   if (value.phase === "blocked" && (typeof value.provenanceId !== "string" || !value.provenanceId)) return false;
   return true;
 }
+export class ExecutionStateRecoveryError extends Error {
+  constructor(message) { super(message); this.name = "ExecutionStateRecoveryError"; }
+}
+
 export function latestExecutionState(entries, sessionId) {
   if (!Array.isArray(entries)) return inactiveExecutionState(sessionId);
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
-    const entry = entries[index];
-    if (entry?.type === "custom" && entry.customType === EXECUTION_STATE_ENTRY_TYPE && validLifecycleState(entry.data, sessionId)) return Object.freeze({ ...entry.data });
+  let latest = null;
+  for (const entry of entries) {
+    if (entry?.type !== "custom" || entry.customType !== EXECUTION_STATE_ENTRY_TYPE) continue;
+    const data = entry.data;
+    if (data?.sessionId !== sessionId) continue;
+    if (!validLifecycleState(data, sessionId)) {
+      throw new ExecutionStateRecoveryError("Ralph lifecycle recovery stopped at an invalid state record; preserve the session and inspect bounded diagnostics before retrying");
+    }
+    if (latest && data.transition <= latest.transition) {
+      throw new ExecutionStateRecoveryError("Ralph lifecycle recovery stopped at a stale or duplicate state record; preserve the session and inspect bounded diagnostics before retrying");
+    }
+    latest = data;
   }
-  return inactiveExecutionState(sessionId);
+  return latest ? Object.freeze({ ...latest }) : inactiveExecutionState(sessionId);
 }
 
 export function nextExecutionState(current, patch) {

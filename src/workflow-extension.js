@@ -509,7 +509,10 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
     });
 
     pi.on("session_start", (event, ctx) => {
-      const id = sessionId(ctx); let live = latestExecutionState(branch(ctx), id); executionStates.set(id, live);
+      const id = sessionId(ctx); let live;
+      try { live = latestExecutionState(branch(ctx), id); }
+      catch (error) { ctx.ui.notify(`Ralph could not recover lifecycle state safely. ${error.message}`, "error"); return; }
+      executionStates.set(id, live);
       let blocked, specification;
       try {
         blocked = blockedState(ctx);
