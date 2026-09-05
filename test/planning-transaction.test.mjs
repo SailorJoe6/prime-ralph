@@ -11,8 +11,8 @@ import {
   ACTIVE_EXECUTION_PLAN_PATH, ACTIVE_SPECIFICATION_PATH,
   ARCHIVE_ROOT_PATH, archivePlanningPaths, inspectBlockedPlanningTransaction,
   BLOCKED_EXECUTION_PLAN_PATH, BLOCKED_PROVENANCE_PATH, BLOCKED_SPECIFICATION_PATH,
-  MAX_TRANSACTION_DOCUMENT_BYTES, PlanningTransactionError, archivePlanningDocuments, blockPlanningDocuments,
-  moveFileNoReplaceSync, unblockPlanningDocuments,
+  MAX_TRANSACTION_DOCUMENT_BYTES, MAX_TRANSACTION_MARKER_BYTES, PlanningTransactionError, adoptRestoredPlanningDocuments, archivePlanningDocuments,
+  blockPlanningDocuments, inspectRestoredPlanningTransaction, moveFileNoReplaceSync, unblockPlanningDocuments, verifyAdoptedPlanningDocuments,
 } from "../src/planning-transaction.js";
 
 const ARCHIVE = archivePlanningPaths("release-1");
@@ -34,6 +34,10 @@ function blocked(cwd, id = "life-1") {
 }
 function contents(cwd, paths) {
   return paths.map((path) => existsSync(join(cwd, path)) ? readFileSync(join(cwd, path), "utf8") : undefined);
+}
+function manuallyRestore(cwd) {
+  moveFileNoReplaceSync(join(cwd, BLOCKED_SPECIFICATION_PATH), join(cwd, ACTIVE_SPECIFICATION_PATH));
+  moveFileNoReplaceSync(join(cwd, BLOCKED_EXECUTION_PLAN_PATH), join(cwd, ACTIVE_EXECUTION_PLAN_PATH));
 }
 
 for (const operation of ["block", "archive"]) {
@@ -64,6 +68,46 @@ test("unblock restores the matching pair, removes provenance, and does not auto-
   assert.deepEqual(contents(cwd, [BLOCKED_SPECIFICATION_PATH, BLOCKED_EXECUTION_PLAN_PATH, BLOCKED_PROVENANCE_PATH]), [undefined, undefined, undefined]);
   assert.deepEqual(contents(cwd, [ARCHIVE_SPECIFICATION_PATH, ARCHIVE_EXECUTION_PLAN_PATH]), [undefined, undefined]);
   assert.equal(result.provenancePath, undefined);
+});
+
+
+test("adopt restored verifies the exact active pair and removes only its saved blocked-work marker", () => {
+  const cwd = project(); blocked(cwd, "life-1"); manuallyRestore(cwd);
+  const inspected = inspectRestoredPlanningTransaction({ cwd });
+  assert.equal(inspected.state, "complete"); assert.equal(inspected.lifecycleId, "life-1");
+  const result = adoptRestoredPlanningDocuments({ cwd, lifecycleId: "life-1" });
+  assert.equal(result.operation, "adopt-restored");
+  assert.deepEqual(contents(cwd, [ACTIVE_SPECIFICATION_PATH, ACTIVE_EXECUTION_PLAN_PATH]), ["spec", "plan"]);
+  assert.deepEqual(contents(cwd, [BLOCKED_SPECIFICATION_PATH, BLOCKED_EXECUTION_PLAN_PATH, BLOCKED_PROVENANCE_PATH]), [undefined, undefined, undefined]);
+});
+
+test("adopt restored fails closed for modified, partial, stale, and wrong-lifecycle recovery", () => {
+  for (const kind of ["modified", "partial", "stale", "oversized", "wrong-lifecycle"]) {
+    const cwd = project(); blocked(cwd, "life-1"); manuallyRestore(cwd);
+    if (kind === "modified") writeFileSync(join(cwd, ACTIVE_EXECUTION_PLAN_PATH), "evil", { flag: "w" });
+    if (kind === "partial") unlinkSync(join(cwd, ACTIVE_EXECUTION_PLAN_PATH));
+    if (kind === "stale") writeFileSync(join(cwd, BLOCKED_PROVENANCE_PATH), "{}", { flag: "w" });
+    if (kind === "oversized") writeFileSync(join(cwd, BLOCKED_PROVENANCE_PATH), "x".repeat(MAX_TRANSACTION_MARKER_BYTES + 1), { flag: "w" });
+    const before = contents(cwd, [ACTIVE_SPECIFICATION_PATH, ACTIVE_EXECUTION_PLAN_PATH, BLOCKED_PROVENANCE_PATH]);
+    assert.throws(() => adoptRestoredPlanningDocuments({ cwd, lifecycleId: kind === "wrong-lifecycle" ? "life-2" : "life-1" }), /restored|saved blocked-work record|active planning document pair/);
+    assert.deepEqual(contents(cwd, [ACTIVE_SPECIFICATION_PATH, ACTIVE_EXECUTION_PLAN_PATH, BLOCKED_PROVENANCE_PATH]), before);
+  }
+});
+
+test("adopted evidence verifies recovery after the marker is already gone", () => {
+  const cwd = project(); blocked(cwd, "life-1"); manuallyRestore(cwd);
+  const provenance = inspectRestoredPlanningTransaction({ cwd }).provenance;
+  adoptRestoredPlanningDocuments({ cwd, lifecycleId: "life-1" });
+  assert.equal(verifyAdoptedPlanningDocuments({ cwd, lifecycleId: "life-1", provenance }).operation, "verify-adopted");
+  writeFileSync(join(cwd, ACTIVE_SPECIFICATION_PATH), "changed", { flag: "w" });
+  assert.throws(() => verifyAdoptedPlanningDocuments({ cwd, lifecycleId: "life-1", provenance }), /do not match/);
+});
+
+test("adopt restored leaves retryable state when marker removal fails", () => {
+  const cwd = project(); blocked(cwd, "life-1"); manuallyRestore(cwd);
+  assert.throws(() => adoptRestoredPlanningDocuments({ cwd, lifecycleId: "life-1", unlink: () => { throw new Error("marker busy"); } }), /could not remove the saved blocked-work record/);
+  assert.deepEqual(contents(cwd, [ACTIVE_SPECIFICATION_PATH, ACTIVE_EXECUTION_PLAN_PATH]), ["spec", "plan"]);
+  assert.equal(existsSync(join(cwd, BLOCKED_PROVENANCE_PATH)), true);
 });
 
 for (const [label, setup, invoke, pattern] of [

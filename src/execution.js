@@ -10,8 +10,9 @@ export const BLOCKED_MESSAGE_TYPE = "prime_ralph_blocked_skill";
 export const EXECUTE_SKILL_RELATIVE_PATH = ".ralph/skills/execute/SKILL.md";
 export const BLOCKED_SKILL_RELATIVE_PATH = ".ralph/skills/blocked/SKILL.md";
 export const MAX_EXECUTION_SKILL_BYTES = 128 * 1024;
+export const RESTORED_BLOCKED_GUIDANCE = "The specification and execution plan were moved back to their active folder outside Ralph's normal unblock step. Ralph must verify that they are the same files and that the original blocker is resolved before execution can restart. Inspect the recorded blocker and unblock condition. If the condition is satisfied, call ralph_lifecycle confirm-forward; Ralph will verify the files and finish the recovery. Do not move the files again and do not call unblock.";
 export const EXECUTION_MODES = Object.freeze(["execution-start", "execution-continue", "execution-resume", "execution-reset-running", "execution-reset-paused"]);
-export const BLOCKED_MODES = Object.freeze(["blocked-start", "blocked-reset"]);
+export const BLOCKED_MODES = Object.freeze(["blocked-start", "blocked-reset", "blocked-restored"]);
 export const EXECUTION_STATUSES = Object.freeze(["inactive", "running", "waiting", "paused"]);
 
 function loadSkill({ cwd, name, relativePath, maxBytes = MAX_EXECUTION_SKILL_BYTES }) {
@@ -65,7 +66,7 @@ export function formatExecutionInjection(skill, { mode, lifecycleId, cycle, stat
 export function formatBlockedInjection(skill, { mode, provenanceId }) {
   if (!BLOCKED_MODES.includes(mode)) throw new TypeError(`unknown blocked invocation mode: ${mode}`);
   if (typeof provenanceId !== "string" || !provenanceId) throw new TypeError("blocked provenanceId is required");
-  return format(skill, { protocolVersion: EXECUTION_PROTOCOL_VERSION, skill: "blocked", invocationMode: mode, lifecycleState: "inactive", workflowPhase: "blocked", provenanceId });
+  return format(skill, { protocolVersion: EXECUTION_PROTOCOL_VERSION, skill: "blocked", invocationMode: mode, lifecycleState: "inactive", workflowPhase: mode === "blocked-restored" ? "planning" : "blocked", provenanceId, ...(mode === "blocked-restored" ? { recovery: "active-pair-restored" } : {}) });
 }
 
 export function inactiveExecutionState(sessionId) {

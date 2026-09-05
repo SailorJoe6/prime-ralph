@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-05T01:22:21.939Z",
+  "results": [
+    {
+      "variant": "default",
+      "provider": "openai-codex",
+      "model": "gpt-5.6-sol",
+      "primeAgentVersion": "0.9.1",
+      "promptSha256": "23aa3bcb2c561fe6da135047b091e71e9fc24fcd80601881c6375f8a51f13a79",
+      "toolSequence": [
+        {
+          "name": "read_recovery_documents"
+        },
+        {
+          "name": "ralph_lifecycle",
+          "action": "status",
+          "hasCurrentIdentifier": true
+        },
+        {
+          "name": "ralph_lifecycle",
+          "action": "confirm-forward",
+          "hasCurrentIdentifier": true
+        }
+      ],
+      "finalResponse": "Recovery confirmed: the provider login is restored, and both planning files were verified unchanged.\n\nWork remains stopped. Run `/execute` to begin a fresh execution run.",
+      "assertions": {
+        "processPassed": true,
+        "inspectedStatus": true,
+        "readRestoredDocuments": true,
+        "confirmedAfterEvidence": true,
+        "didNotUnblockAgain": true,
+        "finalExplainsStoppedState": true,
+        "finalAvoidsInternalJargon": true
+      },
+      "verdict": "pass",
+      "exitStatus": 0
+    },
+    {
+      "variant": "beads",
+      "provider": "openai-codex",
+      "model": "gpt-5.6-sol",
+      "primeAgentVersion": "0.9.1",
+      "promptSha256": "a6bbb8ce9f5b11b3e1fc35526529c4718391e402fb559bf1421f31679a9fabab",
+      "toolSequence": [
+        {
+          "name": "read_recovery_documents"
+        },
+        {
+          "name": "ralph_lifecycle",
+          "action": "status",
+          "hasCurrentIdentifier": true
+        },
+        {
+          "name": "ralph_lifecycle",
+          "action": "confirm-forward",
+          "hasCurrentIdentifier": true
+        }
+      ],
+      "finalResponse": "Recovery confirmed: the restored planning files match, and the provider login condition is satisfied.\n\nWork remains stopped. Run `/execute` to start a fresh execution run.",
+      "assertions": {
+        "processPassed": true,
+        "inspectedStatus": true,
+        "readRestoredDocuments": true,
+        "confirmedAfterEvidence": true,
+        "didNotUnblockAgain": true,
+        "finalExplainsStoppedState": true,
+        "finalAvoidsInternalJargon": true
+      },
+      "verdict": "pass",
+      "exitStatus": 0
+    }
+  ]
+}

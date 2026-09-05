@@ -35,6 +35,8 @@ test("formats closed execution and blocked invocation metadata", () => {
   assert.match(execute, /"skill":"execute"/); assert.match(execute, /"cycle":2/); assert.match(execute, /"driver":"prime-agent-goal"/);
   const blocked = formatBlockedInjection({ path: "/b", text: skill("blocked") }, { mode: "blocked-start", provenanceId: "proof" });
   assert.match(blocked, /"workflowPhase":"blocked"/);
+  const restored = formatBlockedInjection({ path: "/b", text: skill("blocked") }, { mode: "blocked-restored", provenanceId: "proof" });
+  assert.match(restored, /"workflowPhase":"planning"/); assert.match(restored, /"recovery":"active-pair-restored"/);
   assert.throws(() => formatExecutionInjection({ path: "/x", text: "x" }, { mode: "other", lifecycleId: "x", cycle: 1 }), /unknown/);
 });
 

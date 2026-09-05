@@ -11,7 +11,7 @@ The production Slice 5 extension registers:
 - `/plan`
 - `/execute`
 
-It does not register `/execute` or blocked-phase commands. This document focuses on the Slice 3 specification behavior; planning is documented separately. Prime Agent's native `/clear` remains unchanged.
+The blocked interaction is delivered internally rather than exposed as a separate slash command. This document focuses on specification behavior; planning and execution are documented separately. Prime Agent's native `/clear` remains unchanged.
 
 ## Startup preparation
 
@@ -22,7 +22,7 @@ The hidden `prime_ralph_startup_prepare` message records the current Prime Agent
 - rebuilding extensions through `/reload` never replays startup preparation; and
 - a fork that inherits its parent's branch is not suppressed by the parent's marker.
 
-Creating an active specification during the current specification phase does not start planning. A new session that already has an active specification selects the Slice 4 planning startup described in [`planning.md`](planning.md). A path conflict or invalid/missing prepare skill sends no startup prompt and produces a bounded diagnostic.
+Creating an active specification during the current specification phase does not start planning. A new session that already has an active specification normally selects the planning startup described in [`planning.md`](planning.md). Proven blocked work takes precedence, including an exact pair that was manually returned to the active folder but still needs its unblock condition checked. A path conflict or invalid/missing prepare skill sends no startup prompt and produces a bounded diagnostic.
 
 ## Exact active-specification state
 

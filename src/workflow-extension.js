@@ -12,11 +12,16 @@ import {
 } from "./specification.js";
 import {
   BLOCKED_MESSAGE_TYPE, EXECUTION_MESSAGE_TYPE, EXECUTION_PROTOCOL_VERSION, EXECUTION_STATE_ENTRY_TYPE,
+  RESTORED_BLOCKED_GUIDANCE,
   beginExecution, executionContextProjection, formatBlockedInjection, formatExecutionInjection,
   latestExecutionState, latestGoalState, loadBlockedSkill, loadExecuteSkill, nextExecutionState, reconcileGoalState,
 } from "./execution.js";
 import { appendExecutionLogEntry } from "./execution-log.js";
-import { archivePlanningDocuments, blockPlanningDocuments, inspectBlockedPlanningTransaction, unblockPlanningDocuments } from "./planning-transaction.js";
+import {
+  adoptRestoredPlanningDocuments, archivePlanningDocuments, blockPlanningDocuments,
+  inspectBlockedPlanningTransaction, inspectRestoredPlanningTransaction, unblockPlanningDocuments,
+  verifyAdoptedPlanningDocuments,
+} from "./planning-transaction.js";
 import { isFinalNormalAssistantTurn } from "./cycle-boundary-poc.js";
 import { RESET_MESSAGE_TYPE } from "./reset-context.js";
 
@@ -62,11 +67,14 @@ export function createWorkflowExtension({
   loadExecute = loadExecuteSkill, loadBlocked = loadBlockedSkill,
   inspectSpecification = inspectActiveSpecification, inspectPlan = inspectActivePlan,
   inspectBlocked = inspectBlockedPlanningDocuments, inspectBlockedProof = inspectBlockedPlanningTransaction,
-  blockDocuments = blockPlanningDocuments, unblockDocuments = unblockPlanningDocuments, archiveDocuments = archivePlanningDocuments,
+  inspectRestoredProof = inspectRestoredPlanningTransaction,
+  blockDocuments = blockPlanningDocuments, unblockDocuments = unblockPlanningDocuments,
+  adoptRestoredDocuments = adoptRestoredPlanningDocuments, verifyAdoptedDocuments = verifyAdoptedPlanningDocuments,
+  archiveDocuments = archivePlanningDocuments,
   appendLog = appendExecutionLogEntry, createRequestId = randomUUID, now = () => new Date(),
 } = {}) {
   return function workflowExtension(pi) {
-    const startupSessions = new Set(), sessionPhases = new Map(), executionStates = new Map(), activeLifecycleTurns = new Map(), executionRoundBoundaries = new Map();
+    const startupSessions = new Set(), sessionPhases = new Map(), executionStates = new Map(), activeLifecycleTurns = new Map(), activeBlockedTurns = new Set(), executionRoundBoundaries = new Map();
     const sessionId = (ctx) => ctx.sessionManager.getSessionId();
     const branch = (ctx) => ctx.sessionManager.getBranch();
     const rawExecution = (ctx) => {
@@ -75,13 +83,14 @@ export function createWorkflowExtension({
       executionStates.set(id, state); return state;
     };
     const persistExecution = (ctx, state) => {
-      executionStates.set(sessionId(ctx), state); pi.appendEntry(EXECUTION_STATE_ENTRY_TYPE, state); return state;
+      pi.appendEntry(EXECUTION_STATE_ENTRY_TYPE, state); executionStates.set(sessionId(ctx), state); return state;
     };
     const execution = (ctx, { reconcile = true } = {}) => {
       const current = rawExecution(ctx);
       if (!reconcile) return current;
-      const reconciled = reconcileGoalState(current, latestGoalState(branch(ctx)));
-      return reconciled === current ? current : persistExecution(ctx, reconciled);
+      const goalReconciled = reconcileGoalState(current, latestGoalState(branch(ctx)));
+      const reconciled = goalReconciled === current ? current : persistExecution(ctx, goalReconciled);
+      return reconcilePlanningLocation(ctx, reconciled);
     };
     const goal = (ctx) => latestGoalState(branch(ctx));
     const blockedState = (ctx) => {
@@ -99,6 +108,48 @@ export function createWorkflowExtension({
       const blocked = blockedState(ctx);
       if (blocked.state !== "absent") throw new Error("Ralph has blocked planning documents; resolve them through the blocked workflow before using this command.");
     };
+    const isRestoredRecovery = (state) => ["active-pair-restored", "active-pair-adoption-pending"].includes(state?.recovery) && state.forwardConfirmed !== true && typeof state.provenanceId === "string";
+    const restoredRecoveryMessage = "The specification and execution plan were moved back to their active folder outside Ralph's normal unblock step. Ralph must verify that they are the same files and that the original blocker is resolved before execution can restart.";
+    const requireRestoredProof = (ctx, state) => {
+      const proof = inspectRestoredProof({ cwd: ctx.cwd });
+      if (state?.recovery === "active-pair-adoption-pending" && ["absent", "unproven"].includes(proof.state) && state.adoption?.provenance) {
+        verifyAdoptedDocuments({ cwd: ctx.cwd, lifecycleId: state.provenanceId, provenance: state.adoption.provenance });
+        return { state: "complete", lifecycleId: state.provenanceId, provenance: state.adoption.provenance, adopted: true };
+      }
+      if (proof.state !== "complete") {
+        const guidance = {
+          absent: "both active planning files are missing",
+          partial: "only one active planning file is present",
+          unproven: "the saved blocked-work record is missing",
+          stale: "the saved blocked-work record is invalid",
+          modified: "one or both active planning files differ from the saved blocked versions",
+          conflict: "blocked and active planning files both exist",
+        };
+        throw new Error(`${restoredRecoveryMessage} Verification stopped because ${guidance[proof.state] ?? `the restored files are ${proof.state}`}. Preserve the files and repair that exact condition before retrying.`);
+      }
+      if (state?.provenanceId && proof.lifecycleId !== state.provenanceId) throw new Error(`${restoredRecoveryMessage} The saved record belongs to different blocked work. Preserve the files and inspect the conflicting record before retrying.`);
+      return proof;
+    };
+    const reconcilePlanningLocation = (ctx, state) => {
+      const unresolved = state.phase === "blocked" || (state.status === "inactive" && state.provenanceId && state.forwardConfirmed !== true);
+      if (!unresolved) return state;
+      const blocked = blockedState(ctx);
+      if (blocked.state === "partial") throw new Error("Only one planning file is in .ralph/plans/blocked/. Restore or complete the exact specification and execution plan pair before Ralph can continue.");
+      if (blocked.state === "complete") {
+        const proof = requireBlockedProof(ctx, state.provenanceId);
+        if (!isRestoredRecovery(state)) return state;
+        return persistExecution(ctx, nextExecutionState(state, { phase: "blocked", status: "inactive", lifecycleId: null, cycle: 0, pendingDecision: null, provenanceId: proof.lifecycleId, forwardConfirmed: false, blockedContextEstablished: false, blockedContextMode: "blocked", recovery: null, adoption: null }));
+      }
+      if (state.recovery === "active-pair-adoption-pending") return state;
+      const restored = inspectRestoredProof({ cwd: ctx.cwd });
+      if (restored.state !== "complete") {
+        if (state.phase === "blocked") requireRestoredProof(ctx, state);
+        return state;
+      }
+      if (state.provenanceId && restored.lifecycleId !== state.provenanceId) throw new Error(`${restoredRecoveryMessage} The saved record belongs to different blocked work. Preserve the files and inspect the conflicting record before retrying.`);
+      return persistExecution(ctx, nextExecutionState(state, { phase: "blocked", status: "inactive", lifecycleId: null, cycle: 0, pendingDecision: null, wait: null, provenanceId: restored.lifecycleId, forwardConfirmed: false, blockedContextEstablished: false, blockedContextMode: "restored", recovery: "active-pair-restored", adoption: null }));
+    };
+    const hasRestoredBoundary = (entries, id, provenanceId) => Array.isArray(entries) && entries.some((entry) => entry?.type === "custom_message" && entry.customType === BLOCKED_MESSAGE_TYPE && entry.details?.source === "prime-ralph" && entry.details?.protocolVersion === EXECUTION_PROTOCOL_VERSION && entry.details?.sessionId === id && entry.details?.invocationMode === "blocked-restored" && entry.details?.provenanceId === provenanceId);
     const setPhase = (ctx, phase) => sessionPhases.set(sessionId(ctx), phase);
     const getPhase = (ctx) => {
       const id = sessionId(ctx), live = execution(ctx);
@@ -126,6 +177,9 @@ export function createWorkflowExtension({
       return `${formatPrepareInjection(prepare)}\n${formatBlockedInjection(skill, { mode, provenanceId })}`;
     };
 
+    const restoredContent = (ctx, provenanceId) => `${blockedContent(ctx, "blocked-restored", provenanceId)}
+<prime-ralph-restored-guidance>${RESTORED_BLOCKED_GUIDANCE}</prime-ralph-restored-guidance>`;
+
     let resetRuntime;
     resetRuntime = createResetExtension({
       loadPrepare, loadSpecItOut, inspectSpecification, createRequestId,
@@ -143,6 +197,10 @@ export function createWorkflowExtension({
       },
       resolveResetInjection: ({ ctx }) => {
         const state = execution(ctx);
+        if (isRestoredRecovery(state)) {
+          const proof = requireRestoredProof(ctx, state);
+          return { content: restoredContent(ctx, proof.lifecycleId), details: { workflowPhase: "planning", invocationMode: "blocked-restored", recovery: "active-pair-restored", provenanceId: proof.lifecycleId, sessionId: sessionId(ctx) } };
+        }
         if (state.phase === "blocked") {
           const proof = requireBlockedProof(ctx, state.provenanceId);
           return { content: blockedContent(ctx, "blocked-reset", proof.lifecycleId), details: { workflowPhase: "blocked", invocationMode: "blocked-reset", provenanceId: proof.lifecycleId, sessionId: sessionId(ctx) } };
@@ -172,19 +230,42 @@ export function createWorkflowExtension({
       async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
         let state = execution(ctx, { reconcile: false });
         const result = (text, details = {}) => ({ content: [{ type: "text", text }], details: { protocolVersion: EXECUTION_PROTOCOL_VERSION, ...details } });
-        if (params.action === "status") return result(`Ralph lifecycle is ${state.status} in ${state.phase} phase.`, { state });
-        if (["unblock", "confirm-forward"].includes(params.action)) {
-          if (state.phase !== "blocked" && !(params.action === "confirm-forward" && state.phase === "planning")) throw new Error("Ralph is not in the required blocked recovery state");
-          if (!params.provenanceId || params.provenanceId !== state.provenanceId) throw new Error("blocked provenance identifier is stale or missing");
-          if (params.action === "unblock") {
-            const transaction = unblockDocuments({ cwd: ctx.cwd, lifecycleId: params.provenanceId });
-            state = persistExecution(ctx, nextExecutionState(state, { phase: "planning", status: "inactive", pendingDecision: null, forwardConfirmed: false, blockedContextEstablished: false }));
-            setPhase(ctx, "planning");
-            return result("Blocked planning documents were restored. Confirm forward readiness before asking the user to invoke /execute.", { action: "unblock", transaction, state });
+        if (params.action === "status") {
+          if (state.phase === "blocked") {
+            const reason = typeof state.block?.reason === "string" && state.block.reason.trim() ? state.block.reason.trim().slice(0, 1000) : "not recorded; inspect the planning documents or ask the user";
+            const condition = typeof state.block?.unblockCondition === "string" && state.block.unblockCondition.trim() ? state.block.unblockCondition.trim().slice(0, 1000) : "not recorded; inspect the planning documents or ask the user";
+            return result(`Ralph is resolving blocked work.
+Recorded blocker: ${reason}
+Condition required before execution can restart: ${condition}`, { state });
           }
-          state = persistExecution(ctx, nextExecutionState(state, { forwardConfirmed: true }));
-          return result("Forward execution is confirmed. Execution remains inactive until the user invokes /execute.", { action: "confirm-forward", state });
+          return result(`Ralph is ${state.status} in the ${state.phase} workflow.`, { state });
         }
+        if (["unblock", "confirm-forward"].includes(params.action)) {
+          if (state.phase !== "blocked" && !(params.action === "confirm-forward" && state.phase === "planning")) throw new Error("Ralph is not resolving blocked work right now");
+          if (!params.provenanceId || params.provenanceId !== state.provenanceId) throw new Error("This request refers to different or missing blocked work. Check Ralph's current status and retry with its current identifier.");
+          if (params.action === "unblock") {
+            if (isRestoredRecovery(state)) throw new Error("The planning files are already in the active folder. Check the original blocker, then use confirm-forward instead of moving them again.");
+            const transaction = unblockDocuments({ cwd: ctx.cwd, lifecycleId: params.provenanceId });
+            state = persistExecution(ctx, nextExecutionState(state, { phase: "planning", status: "inactive", pendingDecision: null, forwardConfirmed: false, blockedContextEstablished: false, blockedContextMode: null, recovery: null, adoption: null }));
+            setPhase(ctx, "planning");
+            return result("The specification and execution plan are back in the active folder. Confirm that the original blocker is resolved, then tell the user to run /execute.", { action: "unblock", transaction, state });
+          }
+          let transaction = null;
+          if (state.phase === "blocked") {
+            if (!isRestoredRecovery(state)) throw new Error("The planning files are still in the blocked folder. Resolve the blocker and restore them before confirming that execution can continue.");
+            activeBlockedTurns.add(sessionId(ctx));
+            let proof = requireRestoredProof(ctx, state);
+            if (state.recovery !== "active-pair-adoption-pending") {
+              state = persistExecution(ctx, nextExecutionState(state, { recovery: "active-pair-adoption-pending", adoption: { lifecycleId: state.provenanceId, provenance: proof.provenance } }));
+            }
+            if (proof.adopted !== true) transaction = adoptRestoredDocuments({ cwd: ctx.cwd, lifecycleId: params.provenanceId });
+            else transaction = { operation: "verify-adopted", lifecycleId: params.provenanceId };
+          }
+          state = persistExecution(ctx, nextExecutionState(state, { phase: "planning", status: "inactive", pendingDecision: null, forwardConfirmed: true, blockedContextEstablished: false, blockedContextMode: null, recovery: null, adoption: null }));
+          setPhase(ctx, "planning");
+          return result("The planning files are verified and the original blocker is resolved. Ralph remains stopped until the user runs /execute.", { action: "confirm-forward", transaction, state });
+        }
+
         if (!params.lifecycleId || params.lifecycleId !== state.lifecycleId || params.cycle !== state.cycle) throw new Error("Ralph lifecycle or cycle identifier is stale or missing");
         if (state.pendingDecision) throw new Error("this lifecycle turn already has a semantic decision");
         const nativeGoal = goal(ctx), goalActive = nativeGoal?.status === "active";
@@ -238,6 +319,7 @@ export function createWorkflowExtension({
         const live = execution(ctx);
         if (live.status === "running") { ctx.ui.notify("Pause the active Ralph execution lifecycle with /goal pause before using /spec-it-out.", "warning"); return; }
         if (live.status === "waiting") { ctx.ui.notify("Ralph is waiting with its native goal already complete; establish readiness or explicitly cancel the lifecycle before using /spec-it-out.", "warning"); return; }
+        if (isRestoredRecovery(live)) { ctx.ui.notify(`${restoredRecoveryMessage} Continue the unblock check or use /reset to restart it before editing the specification.`, "warning"); return; }
         if (live.phase === "blocked") {
           const proof = requireBlockedProof(ctx, live.provenanceId), skill = loadSpecItOut({ cwd: ctx.cwd }), mode = "specification-existing";
           const guidance = `<prime-ralph-blocked-specification>Blocked provenance ${proof.lifecycleId} makes .ralph/plans/blocked/SPECIFICATION.md the protected existing specification for this interaction. Discuss it, offer an explicitly approved in-place update there, or cancel. Do not offer future-specification creation and do not restore or resume execution through this command.</prime-ralph-blocked-specification>`;
@@ -259,6 +341,7 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
         const live = execution(ctx);
         if (live.status === "running") { ctx.ui.notify("Pause the active Ralph execution lifecycle with /goal pause before using /plan.", "warning"); return; }
         if (live.status === "waiting") { ctx.ui.notify("Ralph is waiting with its native goal already complete; establish readiness or explicitly cancel the lifecycle before using /plan.", "warning"); return; }
+        if (isRestoredRecovery(live)) { ctx.ui.notify(`${restoredRecoveryMessage} Continue the unblock check or use /reset to restart it before editing the plan.`, "warning"); return; }
         if (live.phase === "blocked") { ctx.ui.notify("Resolve the blocked Ralph workflow before using /plan.", "warning"); return; }
         requireNoBlocked(ctx);
         const specification = inspectSpecification({ cwd: ctx.cwd }); assertState(specification.state, "specification");
@@ -290,9 +373,10 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
         if (specification.state !== "existing") { ctx.ui.notify("Ralph execution requires .ralph/plans/SPECIFICATION.md before /execute.", "warning"); return; }
         if (plan.state !== "existing") { ctx.ui.notify("Ralph execution requires .ralph/plans/EXECUTION_PLAN.md after the active specification before /execute.", "warning"); return; }
         let live = execution(ctx);
+        if (isRestoredRecovery(live)) { ctx.ui.notify(`${restoredRecoveryMessage} Continue the unblock check or use /reset to restart it. After Ralph verifies the files and blocker, run /execute again.`, "warning"); return; }
         if (["running", "waiting"].includes(live.status)) { ctx.ui.notify(`Ralph execution lifecycle ${live.lifecycleId} is already ${live.status}; no second lifecycle was created.`, "warning"); return; }
         if (live.status === "paused" && ["paused", "budget_limited"].includes(goal(ctx)?.status)) { ctx.ui.notify("Resume the same native Prime Agent goal with /goal resume; /execute will not create a second lifecycle.", "warning"); return; }
-        if (live.status === "inactive" && live.provenanceId && live.forwardConfirmed !== true) { ctx.ui.notify("Blocked planning documents were restored but forward execution has not been confirmed by the blocked workflow.", "warning"); return; }
+        if (live.status === "inactive" && live.provenanceId && live.forwardConfirmed !== true) { ctx.ui.notify("The planning files are back in the active folder, but the agent has not confirmed that the original blocker is resolved. Ask it to finish the unblock check, then run /execute again.", "warning"); return; }
         const starting = live.status === "inactive", nativeGoal = goal(ctx);
         if (starting && ["active", "paused", "budget_limited"].includes(nativeGoal?.status)) {
           ctx.ui.notify("Ralph execution cannot start while an unrelated native Prime Agent goal is active or paused; complete or clear that goal first.", "warning"); return;
@@ -311,6 +395,10 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
       const live = execution(ctx), id = sessionId(ctx);
       if (live.status === "waiting") activeLifecycleTurns.set(id, { kind: "waiting-check" });
       if (live.phase === "blocked" && live.blockedContextEstablished !== true) {
+        if (isRestoredRecovery(live)) {
+          const proof = requireRestoredProof(ctx, live);
+          return { message: { customType: BLOCKED_MESSAGE_TYPE, content: restoredContent(ctx, proof.lifecycleId), display: false, details: { source: "prime-ralph", protocolVersion: EXECUTION_PROTOCOL_VERSION, requestId: createRequestId(), sessionId: sessionId(ctx), workflowPhase: "blocked", invocationMode: "blocked-restored", recovery: "active-pair-restored", provenanceId: proof.lifecycleId, preserveTrigger: true } } };
+        }
         const proof = requireBlockedProof(ctx, live.provenanceId);
         return { message: { customType: BLOCKED_MESSAGE_TYPE, content: blockedContent(ctx, "blocked-start", proof.lifecycleId), display: false, details: { source: "prime-ralph", protocolVersion: EXECUTION_PROTOCOL_VERSION, requestId: createRequestId(), sessionId: sessionId(ctx), workflowPhase: "blocked", invocationMode: "blocked-start", provenanceId: proof.lifecycleId, preserveTrigger: true } } };
       }
@@ -362,7 +450,7 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
         const messages = executionContextProjection(event.messages, { allowedTypes: [EXECUTION_MESSAGE_TYPE], lifecycleId: live.lifecycleId });
         if (messages) return { messages };
       }
-      if (live.phase === "blocked" && newestRalphPhase.customType === BLOCKED_MESSAGE_TYPE) {
+      if ((live.phase === "blocked" || activeBlockedTurns.has(id)) && newestRalphPhase.customType === BLOCKED_MESSAGE_TYPE) {
         const messages = executionContextProjection(event.messages, { allowedTypes: [BLOCKED_MESSAGE_TYPE], provenanceId: live.provenanceId });
         if (messages) return { messages };
       }
@@ -370,7 +458,8 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
 
     pi.on("turn_end", (event, ctx) => {
       if (!isFinalNormalAssistantTurn(event)) return;
-      const id = sessionId(ctx), active = activeLifecycleTurns.get(id);
+      const id = sessionId(ctx); activeBlockedTurns.delete(id);
+      const active = activeLifecycleTurns.get(id);
       if (!active) return;
       let live = execution(ctx, { reconcile: false });
       const decision = live.pendingDecision?.action, text = assistantText(event.message);
@@ -398,11 +487,14 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
       if ((message?.role === "user" && live.status === "waiting") || message?.customType === "goal_context" || message?.customType === EXECUTION_MESSAGE_TYPE || (message?.customType === RESET_MESSAGE_TYPE && message.details?.workflowPhase === "execution" && message.details?.invocationMode !== "execution-reset-paused")) {
         activeLifecycleTurns.set(id, { kind: "execute" });
       }
-      if (message?.customType === BLOCKED_MESSAGE_TYPE && live.phase === "blocked" && live.blockedContextEstablished !== true) persistExecution(ctx, nextExecutionState(live, { blockedContextEstablished: true }));
+      if (message?.customType === BLOCKED_MESSAGE_TYPE) {
+        activeBlockedTurns.add(id);
+        if (live.phase === "blocked" && live.blockedContextEstablished !== true) persistExecution(ctx, nextExecutionState(live, { blockedContextEstablished: true, blockedContextMode: message.details?.invocationMode === "blocked-restored" ? "restored" : "blocked" }));
+      }
     });
 
     pi.on("agent_end", (_event, ctx) => {
-      const id = sessionId(ctx); if (!activeLifecycleTurns.has(id)) return;
+      const id = sessionId(ctx); activeBlockedTurns.delete(id); if (!activeLifecycleTurns.has(id)) return;
       const live = execution(ctx, { reconcile: false });
       if (live.phase === "execution" && live.status === "running") persistExecution(ctx, nextExecutionState(live, { status: "paused", pendingDecision: null, wait: null, pauseReason: "execution agent ended without normal closeout" }));
       activeLifecycleTurns.delete(id);
@@ -418,38 +510,56 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
 
     pi.on("session_start", (event, ctx) => {
       const id = sessionId(ctx); let live = latestExecutionState(branch(ctx), id); executionStates.set(id, live);
-      if (event.reason === "reload") return;
       let blocked, specification;
       try {
         blocked = blockedState(ctx);
-        if (blocked.state === "partial") throw new Error("blocked planning document pair is partial; restore or complete the exact pair before Ralph can start");
+        if (blocked.state === "partial") throw new Error("Only one planning file is in .ralph/plans/blocked/. Restore or complete the exact specification and execution plan pair before Ralph can continue.");
         if (blocked.state === "complete") {
           const proof = requireBlockedProof(ctx);
-          live = persistExecution(ctx, nextExecutionState(live, { phase: "blocked", status: "inactive", lifecycleId: null, cycle: 0, pendingDecision: null, provenanceId: proof.lifecycleId, forwardConfirmed: false, blockedContextEstablished: false }));
+          const alreadyCurrent = live.phase === "blocked" && !isRestoredRecovery(live) && live.provenanceId === proof.lifecycleId && live.blockedContextMode === "blocked";
+          if (!alreadyCurrent) live = persistExecution(ctx, nextExecutionState(live, { phase: "blocked", status: "inactive", lifecycleId: null, cycle: 0, pendingDecision: null, provenanceId: proof.lifecycleId, forwardConfirmed: false, blockedContextEstablished: false, blockedContextMode: "blocked", recovery: null, adoption: null }));
           setPhase(ctx, "blocked");
-          if (startupSessions.has(id)) return;
+          if (startupSessions.has(id) || (event.reason === "reload" && alreadyCurrent)) return;
           pi.sendMessage({ customType: BLOCKED_MESSAGE_TYPE, content: blockedContent(ctx, "blocked-start", proof.lifecycleId), display: false, details: { source: "prime-ralph", protocolVersion: EXECUTION_PROTOCOL_VERSION, requestId: createRequestId(), sessionId: id, workflowPhase: "blocked", invocationMode: "blocked-start", provenanceId: proof.lifecycleId, preserveTrigger: false } }, { triggerTurn: true, deliverAs: "followUp" });
           startupSessions.add(id); return;
         }
         specification = inspectSpecification({ cwd: ctx.cwd }); assertState(specification.state, "specification");
         const plan = inspectPlan({ cwd: ctx.cwd }); assertState(plan.state, "execution plan");
-        if (live.phase === "blocked") {
-          if (specification.state !== "existing" || plan.state !== "existing") throw new Error("blocked provenance is absent but the exact active planning pair is not complete; repair the pair before Ralph can start");
-          live = persistExecution(ctx, nextExecutionState(live, { phase: "planning", status: "inactive", pendingDecision: null, wait: null, forwardConfirmed: false, blockedContextEstablished: false, recovery: "unblocked pair recovered without automatic resume" }));
+        const restored = inspectRestoredProof({ cwd: ctx.cwd });
+        const recoveryCandidate = restored.state === "complete" || isRestoredRecovery(live) || (live.phase === "blocked" && live.provenanceId);
+        if (recoveryCandidate) {
+          if (live.recovery === "active-pair-adoption-pending" && ["absent", "unproven"].includes(restored.state) && live.adoption?.provenance) {
+            verifyAdoptedDocuments({ cwd: ctx.cwd, lifecycleId: live.provenanceId, provenance: live.adoption.provenance });
+            live = persistExecution(ctx, nextExecutionState(live, { phase: "planning", status: "inactive", pendingDecision: null, wait: null, forwardConfirmed: true, blockedContextEstablished: false, blockedContextMode: null, recovery: null, adoption: null }));
+            setPhase(ctx, "planning");
+          } else {
+            const candidate = restored.state === "complete" ? { ...live, provenanceId: restored.lifecycleId } : live;
+            const proof = requireRestoredProof(ctx, candidate);
+            const recovery = live.recovery === "active-pair-adoption-pending" ? live.recovery : "active-pair-restored";
+            const alreadyCurrent = live.phase === "blocked" && live.provenanceId === proof.lifecycleId && live.recovery === recovery && live.blockedContextMode === "restored";
+            if (!alreadyCurrent) live = persistExecution(ctx, nextExecutionState(live, { phase: "blocked", status: "inactive", lifecycleId: null, cycle: 0, pendingDecision: null, wait: null, provenanceId: proof.lifecycleId, forwardConfirmed: false, blockedContextEstablished: false, blockedContextMode: "restored", recovery, adoption: live.adoption ?? null }));
+            setPhase(ctx, "blocked");
+            if (startupSessions.has(id) || hasRestoredBoundary(branch(ctx), id, proof.lifecycleId) || (event.reason === "reload" && alreadyCurrent)) return;
+            pi.sendMessage({ customType: BLOCKED_MESSAGE_TYPE, content: restoredContent(ctx, proof.lifecycleId), display: false, details: { source: "prime-ralph", protocolVersion: EXECUTION_PROTOCOL_VERSION, requestId: createRequestId(), sessionId: id, workflowPhase: "blocked", invocationMode: "blocked-restored", recovery: "active-pair-restored", provenanceId: proof.lifecycleId, preserveTrigger: false } }, { triggerTurn: true, deliverAs: "followUp" });
+            startupSessions.add(id); return;
+          }
+        } else if (["partial", "modified", "stale", "conflict"].includes(restored.state)) {
+          requireRestoredProof(ctx, { ...live, provenanceId: restored.lifecycleId ?? live.provenanceId });
         } else if (live.phase === "execution" && live.status !== "inactive" && (specification.state !== "existing" || plan.state !== "existing")) {
           live = persistExecution(ctx, nextExecutionState(live, { phase: "planning", status: "inactive", pendingDecision: null, wait: null, cancellation: "active planning pair unavailable during recovery" }));
         }
-      } catch (error) { ctx.ui.notify(`Ralph startup was not delivered: ${error.message}`, "error"); return; }
+      } catch (error) { ctx.ui.notify(`Ralph could not start safely. ${error.message}`, "error"); return; }
       const recovered = latestSessionPhase(branch(ctx), id); if (recovered && !["execution", "blocked"].includes(recovered)) sessionPhases.set(id, recovered);
       const phase = recovered && !["execution", "blocked"].includes(recovered) ? recovered : specification.state === "existing" ? "planning" : "specification";
       sessionPhases.set(id, phase);
-      if (startupSessions.has(id) || hasStartupPrepareBoundary(branch(ctx), id) || hasPlanningStartupBoundary(branch(ctx), id)) return;
+      if (event.reason === "reload" || startupSessions.has(id) || hasStartupPrepareBoundary(branch(ctx), id) || hasPlanningStartupBoundary(branch(ctx), id)) return;
       try {
         const prepare = loadPrepare({ cwd: ctx.cwd }); let message;
         if (phase === "specification") message = { customType: STARTUP_PREPARE_MESSAGE_TYPE, content: formatPrepareInjection(prepare), display: false, details: { source: "prime-ralph", protocolVersion: SPECIFICATION_PROTOCOL_VERSION, requestId: createRequestId(), sessionId: id, mode: "specification-new", workflowPhase: "specification" } };
         else {
           const plan = inspectPlan({ cwd: ctx.cwd }); assertState(plan.state, "execution plan"); const skill = loadPlan({ cwd: ctx.cwd }), mode = plan.state === "existing" ? "planning-existing" : "planning-new";
-          message = { customType: PLANNING_STARTUP_MESSAGE_TYPE, content: `${formatPrepareInjection(prepare)}\n${formatPlanningInjection(skill, mode)}`, display: false, details: { source: "prime-ralph", protocolVersion: PLANNING_PROTOCOL_VERSION, requestId: createRequestId(), sessionId: id, mode, planState: plan.state, workflowPhase: "planning" } };
+          message = { customType: PLANNING_STARTUP_MESSAGE_TYPE, content: `${formatPrepareInjection(prepare)}
+${formatPlanningInjection(skill, mode)}`, display: false, details: { source: "prime-ralph", protocolVersion: PLANNING_PROTOCOL_VERSION, requestId: createRequestId(), sessionId: id, mode, planState: plan.state, workflowPhase: "planning" } };
         }
         pi.sendMessage(message, { triggerTurn: true, deliverAs: "followUp" }); startupSessions.add(id);
       } catch (error) { ctx.ui.notify(`Ralph ${phase} startup was not delivered: ${error.message}`, "error"); }

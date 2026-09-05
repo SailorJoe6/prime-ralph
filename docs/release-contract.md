@@ -47,7 +47,7 @@ Slice 4 ended with the `/reset`, `/spec-it-out`, and `/plan` catalog. Slice 5 ad
 
 ## Slice 5 execution contract
 
-A valid `/execute` starts one plugin-owned lifecycle. Prime Agent's native thread goal is the sole continuation driver; the extension adds no competing loop. The versioned `ralph_lifecycle` tool requires current lifecycle/cycle tokens and explicit execute-skill decisions for continue, wait, ready, block, and complete. Native goal pause/resume/clear reconcile with the same lifecycle. Exact pair transactions and provenance protect blocked recovery and optional named archive. Completed passes append only to `.ralph/logs/EXECUTION_LOG.md`; waiting checks do not. See [`execution.md`](execution.md).
+A valid `/execute` starts one automatic execution run. Prime Agent's native thread goal is the only mechanism that starts later agent turns; the extension adds no competing loop. The versioned `ralph_lifecycle` tool requires the current run and cycle identifiers and explicit execute-skill decisions for continue, wait, ready, block, and complete. Native goal pause, resume, and clear map to the same run. Exact pair transactions protect normal blocked recovery and optional named archive. If the exact blocked files were moved back manually, the extension verifies them against the saved hashes, keeps execution stopped while the original blocker is checked, and removes only the saved marker after explicit confirmation. Completed cycles append only to `.ralph/logs/EXECUTION_LOG.md`; waiting checks do not. See [`execution.md`](execution.md).
 
 ## Slice 1 reset contract
 
@@ -88,6 +88,9 @@ PRIME_AGENT_CORE_ROOT=/path/to/prime-agent/node_modules/@earendil-works/pi-agent
 npm run accept:execution
 PRIME_AGENT_ROOT=/path/to/prime-agent \
 PRIME_AGENT_CORE_ROOT=/path/to/prime-agent/node_modules/@earendil-works/pi-agent-core \
+npm run accept:blocked-recovery
+PRIME_AGENT_ROOT=/path/to/prime-agent \
+PRIME_AGENT_CORE_ROOT=/path/to/prime-agent/node_modules/@earendil-works/pi-agent-core \
 npm run accept:reset-busy
 PRIME_AGENT_ROOT=/path/to/prime-agent \
 PRIME_AGENT_CORE_ROOT=/path/to/prime-agent/node_modules/@earendil-works/pi-agent-core \
@@ -100,6 +103,14 @@ PRIME_RALPH_REAL_MODEL_ACCEPTANCE=1 \
 PRIME_RALPH_ACCEPT_PROVIDER=<provider> \
 PRIME_RALPH_ACCEPT_MODEL=<model> \
 npm run accept:model:plan -- --variant all --case all
+PRIME_RALPH_REAL_MODEL_ACCEPTANCE=1 \
+PRIME_RALPH_ACCEPT_PROVIDER=<provider> \
+PRIME_RALPH_ACCEPT_MODEL=<model> \
+npm run accept:model:execute
+PRIME_RALPH_REAL_MODEL_ACCEPTANCE=1 \
+PRIME_RALPH_ACCEPT_PROVIDER=<provider> \
+PRIME_RALPH_ACCEPT_MODEL=<model> \
+npm run accept:model:blocked-recovery -- --variant all
 npm run package:check
 npm pack --dry-run
 ```
@@ -114,7 +125,8 @@ Then extract the produced tarball in a clean temporary directory, import `src/in
 - The specification lifecycle acceptance proves startup ordering, reload suppression, context retention, reset projection, and an unambiguous native extension-command catalog on Prime Agent `0.9.1`.
 - The planning lifecycle acceptance proves phase selection, ordered skill delivery, clean and current-context `/plan` paths, both planning reset branches, document protection, and no execution start.
 - The opt-in model matrices prove only the recorded provider/model outcomes under its restricted fixture tools; it covers new creation, the initial existing-spec menu, confirmed future creation, agreed active update, cancellation, and reset-existing behavior, and is not deterministic CI evidence.
-- The disk-backed acceptance proves provider context, JSONL, session identity, and REPL continuity on Prime Agent `0.9.1`.
+- The disk-backed execution acceptance proves provider context, JSONL, session identity, and REPL continuity on Prime Agent `0.9.1`.
+- The disk-backed blocked-recovery acceptance proves a real manually restored pair is verified and accepted without another move, the blocked context and current tool results remain visible through confirmation, execution does not restart automatically, and a later `/execute` creates a fresh run.
 - The busy acceptance proves ordering behind an active parent turn and existing follow-up.
 - The lifecycle acceptance proves durable custom-compaction resume, cancellation without partial prepare, provider-failure state, and safe retry.
 - The public extension API does not expose Prime Agent's strong descendant-RLM quiescence barrier. Slice 1 therefore does not claim that an idle parent with a running tracked RLM child is gated.

@@ -1,52 +1,171 @@
 # Safe execution lifecycle
 
-Slice 5 adds `/execute` as the explicit entry to one automatic Ralph lifecycle. The extension is the durable authority for lifecycle identity and the `inactive`, `running`, `waiting`, and `paused` states. Prime Agent's native thread goal is the sole continuation driver.
+`/execute` starts one automatic Ralph execution run. This guide first separates the different layers involved, then describes their transitions and recovery behavior.
 
-## Driver contract
+## Mental model and ownership
 
-`/execute` accepts only the exact regular files `.ralph/plans/SPECIFICATION.md` and `.ralph/plans/EXECUTION_PLAN.md`. It refuses blocked state, a duplicate lifecycle, and an unrelated active or paused native goal. The first injected `execute` skill creates the native goal through the public `goal` skill. Later goal continuations are projected into a clean `prepare`-then-`execute` boundary for the same lifecycle.
+```text
+Prime Agent session
+├── prime-ralph workflow phase
+│   ├── specification
+│   ├── planning
+│   ├── execution
+│   │   └── execution state: running, waiting, or paused
+│   └── blocked
+├── Prime Agent native goal (parallel continuation mechanism)
+└── agent turn
+    └── provider/tool loop
+        ├── provider response requests a tool
+        ├── tool result
+        ├── another provider call
+        └── first normal non-tool response ends the turn
+```
 
-This constrained mapping uses Prime Agent `0.9.1`'s native tracked-descendant RLM quiescence barrier. The extension does not run a second continuation loop. Plugin-owned versioned session markers remain authoritative because the public extension API cannot directly control or inspect the native goal.
+Prime Agent owns the session, native goal, agent turns, tool loop, JSONL history, and REPL. `prime-ralph` owns the workflow phase, one execution-run identity, its current cycle number, and the context presented to the model at Ralph boundaries.
 
-Every pass must call the sequential `ralph_lifecycle` tool with current lifecycle and cycle identifiers. `turn_end`, prose, errors, elapsed time, and issue counts never select a transition. Missing or stale signals fail closed to `paused`.
+The code and documentation use these terms:
 
-- `continue` requires the native goal to remain active. It advances one cycle only after normal pass closeout.
-- `wait` requires the skill to complete the native goal first and records bounded readiness evidence. It keeps the cycle and context open.
-- `ready` requires the current wait identifier and a newly created native goal. It resumes the same lifecycle and cycle once.
-- `block` requires the native goal to be complete and wakeups to be stopped.
-- `complete` requires the native goal to be complete. Archival is optional and explicit.
+- **Execution run:** everything started by one user `/execute`, until completion, blocking, or cancellation. The durable implementation field is `lifecycleId`.
+- **Cycle:** one durable logical work unit within that run. `continue` closes the current cycle and permits the next cycle. Waiting or pausing can make one cycle span more than one agent turn.
+- **Agent turn:** one provider/tool loop. Tool-request responses continue the loop. The first normal response without a tool call ends that turn.
+- **Provider call:** one request to the model. A single agent turn can contain several provider calls and tool results.
+- **Native goal continuation:** a new automatic agent turn started by Prime Agent while its built-in goal remains active.
 
-Native `/goal pause`, `/goal resume`, and `/goal clear` pause, resume, and cancel the mapped lifecycle. A resumed goal must match the lifecycle's recorded driver identity. `/execute` never creates another lifecycle while one is running, waiting, or paused.
+There is no separately persisted “execution pass” counter. In the usual path, one completed execution invocation closes one cycle. During waiting, pausing, or failure recovery, several turns can belong to the same cycle. Prefer the exact terms above when that distinction matters.
+
+## Workflow and execution states
+
+```text
+planning/inactive -- user /execute --> execution/running
+execution/running -- wait ---------> execution/waiting
+execution/waiting -- ready --------> execution/running   (same run and cycle)
+execution/running -- /goal pause --> execution/paused
+execution/paused  -- /goal resume -> execution/running   (same run)
+execution/*       -- block --------> blocked/inactive
+execution/*       -- cancel -------> planning/inactive
+execution/running -- complete -----> planning/inactive
+blocked/inactive  -- verified restore and confirmation -> planning/inactive
+planning/inactive -- later user /execute ----------------> new execution run
+```
+
+`waiting` is planned suspension for a stated external condition. The current native goal is completed so it cannot start another cycle. `ready` requires the current wait ID and a newly active native goal, but retains the same Ralph execution run and cycle.
+
+`paused` is a user pause or safety stop. Native `/goal pause`, `/goal resume`, and `/goal clear` pause, resume, and cancel the matching run. Goal replacement, stale continuation, missing lifecycle decisions, provider errors, and abnormal closeout also fail closed rather than silently continuing.
+
+## `/execute` and the native goal
+
+`/execute` accepts only the exact regular files:
+
+```text
+.ralph/plans/SPECIFICATION.md
+.ralph/plans/EXECUTION_PLAN.md
+```
+
+It refuses blocked work, a duplicate run, and an unrelated active or paused native goal. The first injected `execute` skill creates Prime Agent's native goal through the public `goal` skill. That goal is the only automatic continuation mechanism and supplies Prime Agent's tracked-RLM waiting behavior. The extension does not run a competing continuation loop.
+
+The extension records the goal ID assigned to the run. When Prime Agent later supplies a `goal_context` continuation, Ralph checks that:
+
+1. its goal ID equals the run's recorded goal ID;
+2. its continuation counter is a valid integer;
+3. that exact `goalId:continuationsUsed` combination has not already been admitted;
+4. the run and cycle are still current; and
+5. the previous explicit lifecycle decision permits another execution invocation.
+
+A mismatch pauses execution. Ralph never attaches unrelated goal work to the current run.
+
+## Explicit lifecycle decisions
+
+`ralph_lifecycle` is a sequential tool registered by the extension. The model must call it. Prose, `turn_end`, errors, elapsed time, and issue counts do not select transitions.
+
+- `continue`: keep the native goal active and request the next cycle.
+- `wait`: record why the current cycle cannot proceed and the exact evidence that will establish readiness.
+- `ready`: resume the same open cycle with the matching wait ID and a new native goal.
+- `block`: stop the native goal and move the exact planning pair into the blocked folder.
+- `complete`: stop the native goal and finish the execution run. Archival is separate and explicit.
+- `unblock`: restore a normally blocked pair together without overwrite.
+- `confirm-forward`: state that the original blocker is resolved. For files restored manually, this also performs the final mechanical verification described below.
+
+For `continue`, the current cycle is committed only when the matching next native continuation reaches provider-context admission after tracked RLM work settles. At that point Ralph logs the completed cycle, increments the cycle number, and creates the next clean execution context.
+
+## Clean context and repeated provider calls
+
+Every new eligible execution cycle begins with a model-visible context containing the host baseline, then the project `prepare` skill, then `execute`. The specification and plan are not copied into the prompt. The skills tell the model to read durable project state.
+
+Old conversation remains in the session JSONL but is excluded from that provider request. This is context projection, not session deletion or REPL reset.
+
+The continuation identity prevents repeated provider calls within one tool loop from processing the same boundary twice. For example:
+
+```text
+provider call 1: prepare + execute -> model requests tests
+provider call 2: prepare + execute + test call + test result -> model requests another tool
+provider call 3: prepare + execute + all current-cycle tool results -> final response
+```
+
+Calls 2 and 3 retain everything after the boundary. They do not increment the cycle, log the prior cycle again, or reintroduce stale conversation.
 
 ## Waiting and reset
 
-Tracked RLM work is held by the native goal driver until descendants settle. Work that the host cannot observe uses the explicit `wait`/`ready` protocol and, when needed, one agent-owned heartbeat or user response. A waiting check is not an execute pass and is not logged.
+Tracked RLM work is held by Prime Agent's native goal until descendants settle. Work Prime Agent cannot observe uses `wait` and `ready`, plus an agent-owned heartbeat or a later user response when needed. A waiting check is not a completed cycle and is not logged.
 
-`/reset` has state-specific behavior:
+`/reset` behaves by state:
 
-- running: record a request for the next eligible boundary;
-- waiting: preserve the open cycle and warn that reset is deferred;
-- paused: create a clean `prepare`-then-`execute` boundary with `triggerTurn:false`;
+- running: request a fresh execution invocation at the next eligible boundary;
+- waiting: keep the current cycle open and defer reset;
+- paused: create a clean `prepare`-then-`execute` boundary without automatically resuming;
 - blocked: create a clean `prepare`-then-`blocked` interaction.
 
-## Blocked transactions
+See [`reset.md`](reset.md) for compaction and projection details.
 
-Blocking and unblocking move the exact specification/plan pair without overwrite. Preflight rejects symlinks, non-regular files, unreal parents, partial pairs, stale provenance, and destination conflicts. The transaction uses no-replace moves, a versioned provenance marker, and rollback on second-move or marker failure. Unrelated blocked and archive files are preserved.
+## Blocked files and recovery
 
-Only a complete current provenance marker establishes blocked state. The first user reply after blocking receives a clean blocked boundary while preserving that reply. Unblock restores both active files but leaves execution inactive. The blocked skill must then confirm forward readiness. A new explicit `/execute` creates a fresh lifecycle.
+A normal block transaction moves the exact specification and plan together into `.ralph/plans/blocked/`. It records their paths, byte lengths, SHA-256 hashes, and execution-run ID in `.ralph/plans/blocked/.prime-ralph-lifecycle.json`. No-replace moves, symlink checks, and rollback protect partial operations and destination conflicts.
 
-Completion does not force archive. When the project skill requests archive, both active documents move to one safe named directory under `.ralph/plans/archive/<name>/`.
+The normal unblock path is:
+
+1. The model and user establish that the recorded blocker is resolved.
+2. `unblock` verifies and restores both files together.
+3. The model updates durable project state as required.
+4. `confirm-forward` records the semantic confirmation.
+5. Execution remains stopped until the user invokes `/execute`, which creates a new run.
+
+### Files moved manually
+
+A user or another process may move the exact blocked files back to their active paths before Ralph calls `unblock`. Ralph treats this as blocked work that needs verification, not as ordinary planning and not as automatic permission to execute.
+
+When the saved hashes match the active files, Ralph supplies the blocked skill in `blocked-restored` mode. The model must:
+
+1. call `ralph_lifecycle status`; its model-visible text includes the recorded blocker and the exact condition required before execution can restart;
+2. read the active documents and recover that original blocker and condition without inventing a replacement;
+3. avoid editing or moving the files while their saved hashes are being used;
+4. determine with the user whether the condition is satisfied; and
+5. call `confirm-forward` rather than `unblock`.
+
+`confirm-forward` rechecks both active files, verifies the saved execution-run ID, records an adoption intent, and removes only the saved blocked-work marker. It then returns to planning/inactive. The intent makes a crash or durable-state write failure after marker removal recoverable: restart rechecks the active files against the intent before completing the state transition.
+
+Modified, partial, unproven, stale, symlinked, or conflicting pairs remain blocked. Diagnostics name the observed condition and safe next action without requiring the user to understand internal state fields. `/execute`, `/plan`, and `/spec-it-out` remain unavailable while this check is outstanding. `/reset` restarts the clean recovery interaction.
+
+The blocked context remains projected through every provider call in the recovery turn, including the tool result after successful confirmation. This prevents old conversation from reappearing before the model gives its final user-facing response.
+
+Completion does not force archive. When the project skill explicitly requests archival, both active documents move to one safe named directory under `.ralph/plans/archive/<name>/`.
 
 ## Execution log
 
-Completed execute passes append to the fixed file:
+Completed cycles append to:
 
 ```text
 .ralph/logs/EXECUTION_LOG.md
 ```
 
-The writer safely creates a missing real `.ralph/logs` directory, rejects symlinks and incompatible path types, and never truncates the file. It writes one header at the start of each contiguous session section and deduplicated entries with UTC timestamp, phase, cycle, and quoted final assistant message. Waiting checks and interactive specification, planning, or blocked turns are not logged.
+The writer creates a missing real logs directory, rejects symlinks and incompatible paths, and never truncates the file. It writes one header for each contiguous session section and one entry containing UTC timestamp, phase, cycle, and final assistant response. Waiting checks and interactive specification, planning, or blocked turns are not logged.
 
 ## Evidence
 
-Deterministic tests cover lifecycle reduction and recovery, one-shot clean projection with retained tool tails, queued input, command gating, native goal reconciliation, stale signals, waiting/readiness, every reset branch, provider failure, block/unblock/archive transactions and rollback, content-hash provenance, and append-only logging. The disk-backed Prime Agent `0.9.1` acceptance proves three rounds, a held tracked-RLM boundary, clean skill ordering, tool-result retention, completed-pass logging, and stable session, JSONL, and REPL identity. Separate controlled-model acceptance proves the public `goal.create`/`goal.complete` path and semantic completion through `ralph_lifecycle`.
+`npm test` covers lifecycle transitions, goal correlation, repeated provider calls, waiting/readiness, reset branches, blocked and restored-file transactions, adoption failure recovery, stale signals, path conflicts, and logging.
+
+`npm run accept:execution` uses Prime Agent `0.9.1` with a deterministic provider. It proves three native-goal-driven cycles, tracked-RLM deferral, clean context, retained tool results, logging, and stable session, JSONL, and REPL identity.
+
+`npm run accept:blocked-recovery` physically leaves the saved marker in the blocked folder while moving the exact pair back to the active paths. It proves that the recorded blocker and unblock condition reach model-visible tool text, the recovery interaction stays clean through repeated tool results, marker adoption leaves the files unchanged, execution does not restart automatically, and only an explicit `/execute` creates a fresh run. Its direct context-transform connection is version-specific acceptance scaffolding; production code uses registered public extension hooks.
+
+`npm run accept:model:blocked-recovery -- --variant all` is an opt-in controlled-model check. It verifies both prompt variants cause the model to inspect status and restored documents, confirm only after synthetic evidence satisfies the recorded condition, avoid a second unblock, and explain that `/execute` is still required.
+
+Separate controlled-model acceptance proves the public `goal.create` and `goal.complete` path and semantic completion through `ralph_lifecycle`.

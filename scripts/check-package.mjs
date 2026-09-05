@@ -44,7 +44,7 @@ for (const file of ["README.md", "package.json"]) {
   if (found) throw new Error(`non-independent packaged text in ${file}`);
 }
 console.log("package independence scan OK");
-for (const artifactName of ["spec-it-out-model-acceptance.json", "plan-model-acceptance.json"]) {
+for (const artifactName of ["spec-it-out-model-acceptance.json", "plan-model-acceptance.json", "blocked-recovery-model-acceptance.json"]) {
   const artifactUrl = new URL(`../docs/acceptance/${artifactName}`, import.meta.url);
   try {
     const artifact = JSON.parse(await readFile(artifactUrl, "utf8"));

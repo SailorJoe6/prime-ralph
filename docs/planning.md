@@ -4,7 +4,7 @@ Slice 4 added the complete interactive planning path. Slice 5 adds automatic exe
 
 ## Command and startup behavior
 
-The production extension registers `/reset`, `/spec-it-out`, `/plan`, and `/execute`. Exact blocked planning documents take startup precedence and route interaction through the complete blocked workflow. `/plan` and `/execute` remain inactive there until safe restoration and forward confirmation.
+The production extension registers `/reset`, `/spec-it-out`, `/plan`, and `/execute`. Exact blocked planning documents take startup precedence and route interaction through the blocked workflow. If those documents were moved back manually, Ralph keeps that recovery in the blocked workflow while it verifies the active files and original unblock condition. `/plan` and `/execute` remain unavailable until that check succeeds. The user then starts a new execution run explicitly with `/execute`.
 
 A normal session with an exact active `.ralph/plans/SPECIFICATION.md` starts in planning. The extension validates `prepare`, the exact active-plan state, and the project `plan` skill before admitting one hidden message. That message contains `prepare` first and the plan invocation second. An absent active specification retains the specification startup behavior.
 

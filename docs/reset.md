@@ -25,6 +25,8 @@ Prime Agent reconstructs an empty compaction as a fixed summary wrapper. The `co
 
 When Prime Agent rejects manual compaction with `Session is too short to compact` or `Already compacted`, the extension sends the same prepare boundary in `projection-fallback` mode. Other compaction failures send no prepare and produce a sanitized terminal failure.
 
+The fallback is not a one-time filter. Prime Agent invokes the context hook again after every tool result, so filtering only the first provider call would let old conversation return on the second call. The first fallback request is forced to the new reset message. Every later request searches backward for the newest persisted reset message and returns that message plus the current tool-call/result tail. The search changes no state and starts no new compaction. It remains the correct boundary selection until a newer reset or compaction replaces that model-visible history.
+
 ## Queueing, cancellation, and recovery
 
 A `/reset` still waiting in Prime Agent's input queue follows normal host semantics. Escape/Ctrl+C currently aborts active work while preserving queued input, so the plugin does not remove a queued reset specially. No plugin reset state exists until the command handler begins. Once it begins, reset wins the race.

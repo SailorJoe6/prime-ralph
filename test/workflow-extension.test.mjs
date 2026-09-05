@@ -11,14 +11,14 @@ const specSkill = { path: "/project/.ralph/skills/spec-it-out/SKILL.md", text: "
 const planSkill = { path: "/project/.ralph/skills/plan/SKILL.md", text: "---\nname: plan\ndescription: test\nprime-ralph-invocation-version: 1\n---\nplan body" };
 const executeSkill = { path: "/project/.ralph/skills/execute/SKILL.md", text: "---\nname: execute\ndescription: test\nprime-ralph-invocation-version: 1\n---\nexecute body" };
 const blockedSkill = { path: "/project/.ralph/skills/blocked/SKILL.md", text: "---\nname: blocked\ndescription: test\nprime-ralph-invocation-version: 1\n---\nblocked body" };
-function harness({ specificationState = "absent", planState = "absent", branch = [], inspectSpecError, inspectPlanError, sendError, loadPrepareError, loadPlanError, blockedState = "absent", blockedProofState = "complete", sessionId = "session-1" } = {}) {
+function harness({ specificationState = "absent", planState = "absent", branch = [], inspectSpecError, inspectPlanError, sendError, loadPrepareError, loadPlanError, blockedState = "absent", blockedProofState = "complete", restoredProofState = "unproven", appendFailureAt, sessionId = "session-1" } = {}) {
   const commands = new Map(), tools = new Map(), handlers = new Map(), sent = [], userMessages = [], notices = [], compactions = [], entries = [], logs = [], transactions = [];
-  let spec = specificationState, plan = planState, blocked = blockedState, blockedLifecycle = "blocked-life", nextEntry = branch.length, pending = false, idle = true, aborted = 0;
+  let spec = specificationState, plan = planState, blocked = blockedState, restored = restoredProofState, blockedLifecycle = [...branch].reverse().find((entry) => entry?.data?.provenanceId)?.data.provenanceId ?? "blocked-life", nextEntry = branch.length, pending = false, idle = true, aborted = 0, appendCalls = 0;
   const pi = {
     registerCommand(name, command) { commands.set(name, command); },
     registerTool(tool) { tools.set(tool.name, tool); },
     on(name, handler) { const values = handlers.get(name) ?? []; values.push(handler); handlers.set(name, values); },
-    appendEntry(customType, data) { const entry = { type: "custom", id: `e${++nextEntry}`, customType, data }; entries.push(entry); branch.push(entry); },
+    appendEntry(customType, data) { appendCalls += 1; if (appendCalls === appendFailureAt) throw new Error("injected state append failure"); const entry = { type: "custom", id: `e${++nextEntry}`, customType, data }; entries.push(entry); branch.push(entry); },
     sendUserMessage(message, options) { userMessages.push({ message, options }); },
     sendMessage(message, options) {
       if (sendError) throw sendError;
@@ -35,8 +35,11 @@ function harness({ specificationState = "absent", planState = "absent", branch =
     inspectPlan: () => { if (inspectPlanError) throw inspectPlanError; return { state: plan, relativePath: ".ralph/plans/EXECUTION_PLAN.md" }; },
     inspectBlocked: () => ({ state: blocked, paths: blocked === "absent" ? [] : blocked === "complete" ? [".ralph/plans/blocked/SPECIFICATION.md", ".ralph/plans/blocked/EXECUTION_PLAN.md"] : [".ralph/plans/blocked/SPECIFICATION.md"] }),
     inspectBlockedProof: () => ({ state: blockedProofState, lifecycleId: blockedLifecycle }),
+    inspectRestoredProof: () => ({ state: restored, lifecycleId: blockedLifecycle, provenance: { lifecycleId: blockedLifecycle, documents: [{ bytes: 1, sha256: "a".repeat(64) }, { bytes: 1, sha256: "b".repeat(64) }] } }),
     blockDocuments: (options) => { const value = { operation: "block", lifecycleId: options.lifecycleId }; transactions.push(value); blockedLifecycle = options.lifecycleId; blocked = "complete"; spec = "absent"; plan = "absent"; return value; },
     unblockDocuments: (options) => { const value = { operation: "unblock", lifecycleId: options.lifecycleId }; transactions.push(value); blocked = "absent"; spec = "existing"; plan = "existing"; return value; },
+    adoptRestoredDocuments: (options) => { const value = { operation: "adopt-restored", lifecycleId: options.lifecycleId }; transactions.push(value); restored = "unproven"; return value; },
+    verifyAdoptedDocuments: (options) => { const value = { operation: "verify-adopted", lifecycleId: options.lifecycleId }; transactions.push(value); return value; },
     archiveDocuments: (options) => { const value = { operation: "archive", lifecycleId: options.lifecycleId, archiveName: options.archiveName }; transactions.push(value); spec = "absent"; plan = "absent"; return value; },
     appendLog: (value) => { logs.push(value); return { written: true }; },
     now: () => new Date("2026-09-04T00:00:00.000Z"),
@@ -56,7 +59,7 @@ function harness({ specificationState = "absent", planState = "absent", branch =
     await emit("message_start", { message: { role: "custom", ...message } });
     await emit("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] });
   };
-  return { commands, tools, handlers, sent, userMessages, notices, branch, entries, compactions, logs, transactions, ctx, emit, fallback, settle, state: () => latestExecutionState(branch, sessionId), addGoal: (data) => branch.push({ type: "custom", customType: "thread_goal_state", data }), setPending: (value) => { pending = value; }, setIdle: (value) => { idle = value; }, aborted: () => aborted, setSpecification: (value) => { spec = value; }, setPlan: (value) => { plan = value; } };
+  return { commands, tools, handlers, sent, userMessages, notices, branch, entries, compactions, logs, transactions, ctx, emit, fallback, settle, state: () => latestExecutionState(branch, sessionId), addGoal: (data) => branch.push({ type: "custom", customType: "thread_goal_state", data }), setPending: (value) => { pending = value; }, setIdle: (value) => { idle = value; }, aborted: () => aborted, setSpecification: (value) => { spec = value; }, setPlan: (value) => { plan = value; }, setRestored: (value) => { restored = value; }, setBlocked: (value) => { blocked = value; } };
 }
 
 test("registers the complete Slice 5 command and lifecycle-control surface", () => {
@@ -194,7 +197,7 @@ test("complete proven blocked documents take startup precedence and partial stat
   await blocked.commands.get("plan").handler("", blocked.ctx); assert.match(blocked.notices.at(-1)[0], /Resolve the blocked/);
   await blocked.commands.get("execute").handler("", blocked.ctx); assert.match(blocked.notices.at(-1)[0], /unavailable while blocked/);
   const partial = harness({ blockedState: "partial" }); await partial.emit("session_start", { reason: "startup" });
-  assert.equal(partial.sent.length, 0); assert.match(partial.notices[0][0], /pair is partial/);
+  assert.equal(partial.sent.length, 0); assert.match(partial.notices[0][0], /Only one planning file/);
   const unproven = harness({ blockedState: "complete", blockedProofState: "unproven" }); await unproven.emit("session_start", { reason: "startup" });
   assert.equal(unproven.sent.length, 0); assert.match(unproven.notices[0][0], /transaction is unproven/);
 });
@@ -324,7 +327,7 @@ test("unblock requires provenance and forward confirmation before a fresh explic
   const h = harness({ branch, blockedState: "complete", specificationState: "absent", planState: "absent" });
   await control(h, { action: "unblock", provenanceId: "blocked-life" }); h.setSpecification("existing"); h.setPlan("existing");
   assert.equal(h.state().phase, "planning"); assert.equal(h.state().forwardConfirmed, false); assert.equal(h.transactions[0].operation, "unblock");
-  await h.commands.get("execute").handler("", h.ctx); assert.match(h.notices.at(-1)[0], /not been confirmed/);
+  await h.commands.get("execute").handler("", h.ctx); assert.match(h.notices.at(-1)[0], /original blocker is resolved/);
   await control(h, { action: "confirm-forward", provenanceId: "blocked-life" });
   await h.commands.get("execute").handler("", h.ctx); h.fallback(); assert.equal(h.state().status, "running"); assert.notEqual(h.state().lifecycleId, "blocked-life");
 });
@@ -405,10 +408,93 @@ test("waiting interactive commands describe readiness or cancellation, not impos
 });
 
 
-test("startup recovers an already-restored proven lifecycle without automatic resume", async () => {
-  const branch = [{ type: "custom", customType: EXECUTION_STATE_ENTRY_TYPE, data: { protocolVersion: 1, source: "prime-ralph", sessionId: "session-1", transition: 4, phase: "blocked", status: "inactive", lifecycleId: "life", cycle: 1, driverGoalId: "goal", pendingDecision: null, wait: null, provenanceId: "life", forwardConfirmed: false, blockedContextEstablished: true } }];
-  const h = harness({ branch, specificationState: "existing", planState: "existing", blockedState: "absent" }); await h.emit("session_start", { reason: "startup" });
-  assert.equal(h.state().phase, "planning"); assert.equal(h.state().status, "inactive"); assert.equal(h.state().forwardConfirmed, false); assert.equal(h.sent[0].message.customType, PLANNING_STARTUP_MESSAGE_TYPE);
+test("startup keeps an exact manually restored pair blocked and delivers one recovery interaction", async () => {
+  const branch = [{ type: "custom", customType: EXECUTION_STATE_ENTRY_TYPE, data: { protocolVersion: 1, source: "prime-ralph", sessionId: "session-1", transition: 4, phase: "blocked", status: "inactive", lifecycleId: "life", cycle: 1, driverGoalId: "goal", pendingDecision: null, wait: null, provenanceId: "life", forwardConfirmed: false, blockedContextEstablished: true, block: { reason: "credential missing", unblockCondition: "operator authenticates" } } }];
+  const h = harness({ branch, specificationState: "existing", planState: "existing", blockedState: "absent", restoredProofState: "complete" }); await h.emit("session_start", { reason: "startup" });
+  assert.equal(h.state().phase, "blocked"); assert.equal(h.state().status, "inactive"); assert.equal(h.state().forwardConfirmed, false); assert.equal(h.state().recovery, "active-pair-restored");
+  assert.equal(h.sent[0].message.customType, BLOCKED_MESSAGE_TYPE); assert.equal(h.sent[0].message.details.invocationMode, "blocked-restored");
+  assert.match(h.sent[0].message.content, /Do not move the files again/); assert.doesNotMatch(h.sent[0].message.content, /forwardConfirmed/);
+});
+
+
+test("same-session commands notice when the user has already moved the blocked pair", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" }); const initial = await startExecution(h);
+  h.addGoal({ goalId: "goal", status: "complete", active: false }); await control(h, { action: "block", lifecycleId: initial.lifecycleId, cycle: 1, reason: "credential missing", unblockCondition: "operator authenticates", wakeupsStopped: true });
+  h.setBlocked("absent"); h.setSpecification("existing"); h.setPlan("existing"); h.setRestored("complete");
+  await h.commands.get("execute").handler("", h.ctx);
+  assert.equal(h.state().phase, "blocked"); assert.equal(h.state().recovery, "active-pair-restored"); assert.match(h.notices.at(-1)[0], /moved back to their active folder/);
+});
+
+test("confirm-forward rejects a pair that is still in the blocked folder", async () => {
+  const branch = [{ type: "custom", customType: EXECUTION_STATE_ENTRY_TYPE, data: { protocolVersion: 1, source: "prime-ralph", sessionId: "session-1", transition: 4, phase: "blocked", status: "inactive", lifecycleId: null, cycle: 0, driverGoalId: null, pendingDecision: null, wait: null, provenanceId: "life", forwardConfirmed: false, blockedContextEstablished: true, blockedContextMode: "blocked" } }];
+  const h = harness({ branch, blockedState: "complete", specificationState: "absent", planState: "absent" });
+  await assert.rejects(control(h, { action: "confirm-forward", provenanceId: "life" }), /still in the blocked folder/); assert.equal(h.transactions.length, 0);
+});
+
+test("restored recovery gates commands with plain guidance and /reset restarts the recovery interaction", async () => {
+  const branch = [{ type: "custom", customType: EXECUTION_STATE_ENTRY_TYPE, data: { protocolVersion: 1, source: "prime-ralph", sessionId: "session-1", transition: 4, phase: "blocked", status: "inactive", lifecycleId: null, cycle: 0, driverGoalId: null, pendingDecision: null, wait: null, provenanceId: "life", forwardConfirmed: false, recovery: "active-pair-restored", blockedContextEstablished: true, blockedContextMode: "restored" } }];
+  const h = harness({ branch, specificationState: "existing", planState: "existing", restoredProofState: "complete" });
+  for (const command of ["execute", "plan", "spec-it-out"]) await h.commands.get(command).handler("", h.ctx);
+  assert.equal(h.notices.length, 3); for (const [message] of h.notices) { assert.match(message, /original blocker/); assert.doesNotMatch(message, /provenance|forwardConfirmed/); }
+  await h.commands.get("reset").handler("", h.ctx); h.fallback();
+  const reset = h.sent.at(-1).message; assert.equal(reset.customType, RESET_MESSAGE_TYPE); assert.equal(reset.details.invocationMode, "blocked-restored"); assert.match(reset.content, /Do not move the files again/);
+});
+
+test("blocked status makes the recorded blocker and condition visible to the model", async () => {
+  const branch = [{ type: "custom", customType: EXECUTION_STATE_ENTRY_TYPE, data: { protocolVersion: 1, source: "prime-ralph", sessionId: "session-1", transition: 4, phase: "blocked", status: "inactive", lifecycleId: null, cycle: 0, driverGoalId: null, pendingDecision: null, wait: null, provenanceId: "life", forwardConfirmed: false, recovery: "active-pair-restored", blockedContextEstablished: true, blockedContextMode: "restored", block: { reason: "provider login is missing", unblockCondition: "provider login is restored" } } }];
+  const h = harness({ branch, specificationState: "existing", planState: "existing", restoredProofState: "complete" });
+  const status = await control(h, { action: "status" }), text = status.content[0].text;
+  assert.match(text, /Recorded blocker: provider login is missing/); assert.match(text, /Condition required.*provider login is restored/);
+});
+
+test("confirming a manually restored pair journals adoption, removes its marker, and preserves the tool tail", async () => {
+  const branch = [{ type: "custom", customType: EXECUTION_STATE_ENTRY_TYPE, data: { protocolVersion: 1, source: "prime-ralph", sessionId: "session-1", transition: 4, phase: "blocked", status: "inactive", lifecycleId: null, cycle: 0, driverGoalId: null, pendingDecision: null, wait: null, provenanceId: "life", forwardConfirmed: false, recovery: "active-pair-restored", blockedContextEstablished: true, blockedContextMode: "restored" } }];
+  const h = harness({ branch, specificationState: "existing", planState: "existing", restoredProofState: "complete" });
+  const boundary = { role: "custom", customType: BLOCKED_MESSAGE_TYPE, content: "restored", details: { source: "prime-ralph", protocolVersion: 1, sessionId: "session-1", invocationMode: "blocked-restored", provenanceId: "life" } };
+  const accepted = await control(h, { action: "confirm-forward", provenanceId: "life" });
+  assert.equal(h.transactions[0].operation, "adopt-restored"); assert.equal(h.state().phase, "planning"); assert.equal(h.state().forwardConfirmed, true); assert.equal(h.state().recovery, null);
+  assert.match(accepted.content[0].text, /planning files are verified/); assert.doesNotMatch(accepted.content[0].text, /provenance|forward/);
+  const call = { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "x", name: "ralph_lifecycle", arguments: {} }] }, result = { role: "toolResult", toolCallId: "x", content: [{ type: "text", text: "verified" }] };
+  const projected = await h.handlers.get("context").at(-1)({ messages: [{ role: "user", content: "stale" }, boundary, call, result] }, h.ctx);
+  assert.deepEqual(projected.messages, [boundary, call, result]);
+  await h.emit("turn_end", finalEvent("Run /execute when ready."));
+  assert.equal(await h.handlers.get("context").at(-1)({ messages: [boundary, call, result] }, h.ctx), undefined);
+});
+
+test("restored adoption never removes the marker when its durable intent cannot be recorded", async () => {
+  const branch = [{ type: "custom", customType: EXECUTION_STATE_ENTRY_TYPE, data: { protocolVersion: 1, source: "prime-ralph", sessionId: "session-1", transition: 4, phase: "blocked", status: "inactive", lifecycleId: null, cycle: 0, driverGoalId: null, pendingDecision: null, wait: null, provenanceId: "life", forwardConfirmed: false, recovery: "active-pair-restored", blockedContextEstablished: true, blockedContextMode: "restored" } }];
+  const h = harness({ branch, specificationState: "existing", planState: "existing", restoredProofState: "complete", appendFailureAt: 1 });
+  await assert.rejects(control(h, { action: "confirm-forward", provenanceId: "life" }), /injected state append failure/);
+  assert.equal(h.transactions.length, 0); assert.equal(h.state().recovery, "active-pair-restored"); assert.equal(h.state().forwardConfirmed, false);
+});
+
+test("restored adoption recovers when final durable state append fails after marker removal", async () => {
+  const branch = [{ type: "custom", customType: EXECUTION_STATE_ENTRY_TYPE, data: { protocolVersion: 1, source: "prime-ralph", sessionId: "session-1", transition: 4, phase: "blocked", status: "inactive", lifecycleId: null, cycle: 0, driverGoalId: null, pendingDecision: null, wait: null, provenanceId: "life", forwardConfirmed: false, recovery: "active-pair-restored", blockedContextEstablished: true, blockedContextMode: "restored" } }];
+  const h = harness({ branch, specificationState: "existing", planState: "existing", restoredProofState: "complete", appendFailureAt: 2 });
+  await assert.rejects(control(h, { action: "confirm-forward", provenanceId: "life" }), /injected state append failure/);
+  assert.equal(h.state().phase, "blocked"); assert.equal(h.state().recovery, "active-pair-adoption-pending"); assert.equal(h.transactions[0].operation, "adopt-restored");
+  const accepted = await control(h, { action: "confirm-forward", provenanceId: "life" });
+  assert.equal(h.transactions[1].operation, "verify-adopted"); assert.equal(accepted.details.state.phase, "planning"); assert.equal(h.state().forwardConfirmed, true);
+});
+
+test("startup completes an adoption whose marker was removed before final state persistence", async () => {
+  const provenance = { lifecycleId: "life", documents: [{ bytes: 1, sha256: "a".repeat(64) }, { bytes: 1, sha256: "b".repeat(64) }] };
+  const branch = [{ type: "custom", customType: EXECUTION_STATE_ENTRY_TYPE, data: { protocolVersion: 1, source: "prime-ralph", sessionId: "session-1", transition: 5, phase: "blocked", status: "inactive", lifecycleId: null, cycle: 0, driverGoalId: null, pendingDecision: null, wait: null, provenanceId: "life", forwardConfirmed: false, recovery: "active-pair-adoption-pending", adoption: { lifecycleId: "life", provenance }, blockedContextEstablished: true, blockedContextMode: "restored" } }];
+  const h = harness({ branch, specificationState: "existing", planState: "existing", restoredProofState: "unproven" });
+  await h.emit("session_start", { reason: "startup" }); assert.equal(h.transactions[0].operation, "verify-adopted"); assert.equal(h.state().phase, "planning"); assert.equal(h.state().forwardConfirmed, true); assert.equal(h.sent[0].message.customType, PLANNING_STARTUP_MESSAGE_TYPE);
+});
+
+test("reload notices a blocked pair moved to active paths and does not replay an established recovery boundary", async () => {
+  const branch = [{ type: "custom", customType: EXECUTION_STATE_ENTRY_TYPE, data: { protocolVersion: 1, source: "prime-ralph", sessionId: "session-1", transition: 4, phase: "blocked", status: "inactive", lifecycleId: null, cycle: 0, driverGoalId: null, pendingDecision: null, wait: null, provenanceId: "life", forwardConfirmed: false, recovery: null, blockedContextEstablished: true, blockedContextMode: "blocked" } }];
+  const h = harness({ branch, specificationState: "existing", planState: "existing", restoredProofState: "complete" });
+  await h.emit("session_start", { reason: "reload" }); assert.equal(h.sent.length, 1); assert.equal(h.sent[0].message.details.invocationMode, "blocked-restored");
+  await h.emit("session_start", { reason: "reload" }); assert.equal(h.sent.length, 1);
+});
+
+test("modified manually restored files fail closed with a concrete startup explanation", async () => {
+  const branch = [{ type: "custom", customType: EXECUTION_STATE_ENTRY_TYPE, data: { protocolVersion: 1, source: "prime-ralph", sessionId: "session-1", transition: 4, phase: "blocked", status: "inactive", lifecycleId: null, cycle: 0, driverGoalId: null, pendingDecision: null, wait: null, provenanceId: "life", forwardConfirmed: false } }];
+  const h = harness({ branch, specificationState: "existing", planState: "existing", restoredProofState: "modified" });
+  await h.emit("session_start", { reason: "startup" }); assert.equal(h.sent.length, 0); assert.match(h.notices[0][0], /differ from the saved blocked versions/);
 });
 
 test("startup cancels an outstanding execution whose exact active pair disappeared", async () => {

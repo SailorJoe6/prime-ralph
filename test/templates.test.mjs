@@ -59,7 +59,7 @@ test("execute templates define continue, wait, block, and complete semantics", (
 test("blocked templates require conflict-safe paired restore and explicit user restart", () => {
   for (const variant of ["default", "beads"]) {
     const text = load(variant, "blocked");
-    for (const pattern of [/matching current-lifecycle pair/i, /restore both documents together/i, /without overwrite/i, /partial restore.*not success/i, /Do not.*resume automatically/i, /invoke `\/execute`/i]) assert.match(text, pattern);
+    for (const pattern of [/blocked-start.*blocked-reset/i, /restore both documents together/i, /without overwrit/i, /partial pair.*not success/i, /blocked-restored/i, /Do not edit or move them before confirmation/i, /Do not call `unblock`/i, /call `confirm-forward`/i, /`\/execute` starts a fresh execution run/i]) assert.match(text, pattern);
   }
 });
 

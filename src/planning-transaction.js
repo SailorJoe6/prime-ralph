@@ -18,6 +18,7 @@ export const ARCHIVE_ROOT_PATH = ".ralph/plans/archive";
 export const BLOCKED_PROVENANCE_PATH = ".ralph/plans/blocked/.prime-ralph-lifecycle.json";
 export const PLANNING_TRANSACTION_VERSION = 1;
 export const MAX_TRANSACTION_DOCUMENT_BYTES = 1024 * 1024;
+export const MAX_TRANSACTION_MARKER_BYTES = 64 * 1024;
 
 const PAIRS = Object.freeze({
   active: Object.freeze([ACTIVE_SPECIFICATION_PATH, ACTIVE_EXECUTION_PLAN_PATH]),
@@ -65,6 +66,13 @@ function inspectPair(root, name, lstat, explicitPaths) {
   const stats = paths.map((path) => inspectDocument(root, path, lstat));
   const present = stats.filter(Boolean).length;
   return { paths, stats, state: present === 0 ? "absent" : present === 2 ? "complete" : "partial" };
+}
+function inspectPairForRecovery(root, name, lstat) {
+  try { return inspectPair(root, name, lstat); }
+  catch (error) {
+    if (!(error instanceof PlanningTransactionError) || !/parent is absent/.test(error.message)) throw error;
+    return { paths: PAIRS[name], stats: PAIRS[name].map(() => undefined), state: "absent" };
+  }
 }
 
 function documentEvidence(root, pair, readFile, maxBytes = MAX_TRANSACTION_DOCUMENT_BYTES) {
@@ -140,7 +148,8 @@ function readMarker(root, relativePath, { lstat, readFile }) {
   if (!stat) throw new PlanningTransactionError(`blocked planning provenance is absent: ${relativePath}`);
   if (stat.isSymbolicLink()) throw new PlanningTransactionError(`planning provenance must not be a symlink: ${relativePath}`);
   if (!stat.isFile()) throw new PlanningTransactionError(`planning provenance is not a regular file: ${relativePath}`);
-  try { return JSON.parse(readFile(absolute, "utf8")); }
+  if (stat.size > MAX_TRANSACTION_MARKER_BYTES) throw new PlanningTransactionError(`planning provenance exceeds ${MAX_TRANSACTION_MARKER_BYTES} bytes: ${relativePath}`);
+  try { const value = readFile(absolute, "utf8"); if (Buffer.byteLength(value) > MAX_TRANSACTION_MARKER_BYTES) throw new PlanningTransactionError(`planning provenance exceeds ${MAX_TRANSACTION_MARKER_BYTES} bytes: ${relativePath}`); return JSON.parse(value); }
   catch (error) { throw new PlanningTransactionError(`planning provenance is invalid: ${relativePath}`, { cause: error }); }
 }
 
@@ -177,8 +186,9 @@ export function inspectBlockedPlanningTransaction({ cwd = process.cwd(), lstat =
   if (!markerStat) return Object.freeze({ state: pair.state === "complete" ? "unproven" : pair.state, paths: [...pair.paths] });
   if (markerStat.isSymbolicLink()) throw new PlanningTransactionError(`planning provenance must not be a symlink: ${BLOCKED_PROVENANCE_PATH}`);
   if (!markerStat.isFile()) throw new PlanningTransactionError(`planning provenance is not a regular file: ${BLOCKED_PROVENANCE_PATH}`);
+  if (markerStat.size > MAX_TRANSACTION_MARKER_BYTES) return Object.freeze({ state: "stale", paths: [...pair.paths] });
   let provenance;
-  try { provenance = JSON.parse(readFile(markerPath, "utf8")); }
+  try { const value = readFile(markerPath, "utf8"); if (Buffer.byteLength(value) > MAX_TRANSACTION_MARKER_BYTES) return Object.freeze({ state: "stale", paths: [...pair.paths] }); provenance = JSON.parse(value); }
   catch (error) {
     if (!(error instanceof SyntaxError)) throw new PlanningTransactionError(`planning provenance is unreadable: ${BLOCKED_PROVENANCE_PATH}`, { cause: error });
     return Object.freeze({ state: "stale", paths: [...pair.paths] });
@@ -191,6 +201,77 @@ export function inspectBlockedPlanningTransaction({ cwd = process.cwd(), lstat =
     throw error;
   }
   return Object.freeze({ state: "complete", paths: [...pair.paths], lifecycleId: provenance.lifecycleId, provenance: Object.freeze(provenance) });
+}
+
+
+/** Verify exact active files against one valid saved blocked-work record without changing the filesystem. */
+export function inspectRestoredPlanningEvidence({ cwd = process.cwd(), provenance, lstat = lstatSync, readFile = readFileSync } = {}) {
+  const root = resolve(cwd);
+  const active = inspectPairForRecovery(root, "active", lstat);
+  const blocked = inspectPairForRecovery(root, "blocked", lstat);
+  if (blocked.state !== "absent") return Object.freeze({ state: "conflict", paths: [...active.paths], blockedPaths: [...blocked.paths] });
+  if (!isBlockedMarker(provenance)) return Object.freeze({ state: "stale", paths: [...active.paths] });
+  if (active.state !== "complete") return Object.freeze({ state: active.state, paths: [...active.paths], lifecycleId: provenance.lifecycleId, provenance: Object.freeze(provenance) });
+  try {
+    if (!markerMatchesContents(root, active, provenance, readFile)) return Object.freeze({ state: "modified", paths: [...active.paths], lifecycleId: provenance.lifecycleId, provenance: Object.freeze(provenance) });
+  } catch (error) {
+    if (error instanceof PlanningTransactionError && /exceeds/.test(error.message)) return Object.freeze({ state: "modified", paths: [...active.paths], lifecycleId: provenance.lifecycleId, provenance: Object.freeze(provenance) });
+    throw error;
+  }
+  return Object.freeze({ state: "complete", paths: [...active.paths], lifecycleId: provenance.lifecycleId, provenance: Object.freeze(provenance) });
+}
+
+/** Classify a blocked pair that was moved back to the exact active paths outside the control transaction. */
+export function inspectRestoredPlanningTransaction({ cwd = process.cwd(), lstat = lstatSync, readFile = readFileSync } = {}) {
+  const root = resolve(cwd);
+  const active = inspectPairForRecovery(root, "active", lstat);
+  const blocked = inspectPairForRecovery(root, "blocked", lstat);
+  if (blocked.state !== "absent") return Object.freeze({ state: "conflict", paths: [...active.paths], blockedPaths: [...blocked.paths] });
+  const markerPath = resolve(root, BLOCKED_PROVENANCE_PATH);
+  const markerStat = inspect(markerPath, BLOCKED_PROVENANCE_PATH, lstat);
+  if (!markerStat) return Object.freeze({ state: active.state === "absent" ? "absent" : "unproven", paths: [...active.paths] });
+  if (markerStat.isSymbolicLink()) throw new PlanningTransactionError(`saved blocked-work record must not be a symlink: ${BLOCKED_PROVENANCE_PATH}`);
+  if (!markerStat.isFile()) throw new PlanningTransactionError(`saved blocked-work record is not a regular file: ${BLOCKED_PROVENANCE_PATH}`);
+  if (markerStat.size > MAX_TRANSACTION_MARKER_BYTES) return Object.freeze({ state: "stale", paths: [...active.paths] });
+  let provenance;
+  try { const value = readFile(markerPath, "utf8"); if (Buffer.byteLength(value) > MAX_TRANSACTION_MARKER_BYTES) return Object.freeze({ state: "stale", paths: [...active.paths] }); provenance = JSON.parse(value); }
+  catch (error) {
+    if (!(error instanceof SyntaxError)) throw new PlanningTransactionError(`saved blocked-work record is unreadable: ${BLOCKED_PROVENANCE_PATH}`, { cause: error });
+    return Object.freeze({ state: "stale", paths: [...active.paths] });
+  }
+  return inspectRestoredPlanningEvidence({ cwd, provenance, lstat, readFile });
+}
+
+function restoredFailure(state) {
+  const reasons = {
+    absent: "the exact active planning document pair is absent",
+    partial: "the active planning document pair is partial; restore both exact files",
+    unproven: "the saved blocked-work record is absent",
+    stale: "the saved blocked-work record is invalid",
+    modified: "the restored active planning documents do not match the saved blocked-work record",
+    conflict: "blocked planning documents still exist and conflict with the active pair",
+  };
+  return reasons[state] ?? `their state is ${state}`;
+}
+
+/** Accept an exact manually restored pair and remove only its verified saved blocked-work marker. */
+export function adoptRestoredPlanningDocuments({ cwd = process.cwd(), lifecycleId, lstat = lstatSync, readFile = readFileSync, unlink = unlinkSync } = {}) {
+  requireLifecycleId(lifecycleId);
+  const inspected = inspectRestoredPlanningTransaction({ cwd, lstat, readFile });
+  if (inspected.state !== "complete") throw new PlanningTransactionError(`cannot accept the restored planning documents because ${restoredFailure(inspected.state)}`);
+  if (inspected.lifecycleId !== lifecycleId) throw new PlanningTransactionError("the saved blocked-work record belongs to a different Ralph execution");
+  try { unlink(resolve(cwd, BLOCKED_PROVENANCE_PATH)); }
+  catch (error) { throw new PlanningTransactionError(`verified the restored planning documents but could not remove the saved blocked-work record: ${BLOCKED_PROVENANCE_PATH}`, { cause: error }); }
+  return Object.freeze({ operation: "adopt-restored", lifecycleId, paths: [...inspected.paths], removedRecord: BLOCKED_PROVENANCE_PATH, provenance: inspected.provenance });
+}
+
+/** Finish an interrupted adoption after the marker was removed but before durable state was finalized. */
+export function verifyAdoptedPlanningDocuments({ cwd = process.cwd(), lifecycleId, provenance, lstat = lstatSync, readFile = readFileSync } = {}) {
+  requireLifecycleId(lifecycleId);
+  if (!isBlockedMarker(provenance) || provenance.lifecycleId !== lifecycleId) throw new PlanningTransactionError("the saved adoption intent is invalid or belongs to different blocked work");
+  const inspected = inspectRestoredPlanningEvidence({ cwd, provenance, lstat, readFile });
+  if (inspected.state !== "complete") throw new PlanningTransactionError(`cannot finish the restored planning recovery because ${restoredFailure(inspected.state)}`);
+  return Object.freeze({ operation: "verify-adopted", lifecycleId, paths: [...inspected.paths] });
 }
 
 function rollbackMoves(completed, move, operationError) {

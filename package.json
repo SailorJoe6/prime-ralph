@@ -71,7 +71,9 @@
     "accept:planning": "node scripts/run-planning-acceptance.mjs",
     "accept:model:plan": "node scripts/run-plan-model-acceptance.mjs",
     "accept:execution": "node scripts/run-execution-acceptance.mjs",
-    "accept:model:execute": "node scripts/run-execute-model-acceptance.mjs"
+    "accept:blocked-recovery": "node scripts/run-blocked-recovery-acceptance.mjs",
+    "accept:model:execute": "node scripts/run-execute-model-acceptance.mjs",
+    "accept:model:blocked-recovery": "node scripts/run-blocked-recovery-model-acceptance.mjs"
   },
   "engines": {
     "node": ">=20"
