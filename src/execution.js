@@ -213,6 +213,7 @@ export function reconcileGoalState(current, goal) {
   if (goal.status === "idle" && current.driverGoalId) return nextExecutionState(current, { phase: "planning", status: "inactive", pendingDecision: null, wait: null, cancellation: "native goal cleared" });
   if (goal.status === "error") return nextExecutionState(current, { status: "paused", pendingDecision: null, wait: null, pausedWait: current.status === "waiting" ? current.wait : null, pauseReason: "native goal error" });
   if (current.driverGoalId && goal.goalId && current.driverGoalId !== goal.goalId && ["active", "paused", "budget_limited"].includes(goal.status)) {
+    if (current.status === "paused" && current.pauseReason === "native goal identity changed" && current.pendingDecision == null) return current;
     return nextExecutionState(current, { status: "paused", pendingDecision: null, pauseReason: "native goal identity changed" });
   }
   if (goal.status === "paused" || goal.status === "budget_limited") {

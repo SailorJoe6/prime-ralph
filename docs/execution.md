@@ -58,6 +58,7 @@ execution/running -- wait ---------> execution/waiting
 execution/waiting -- ready --------> execution/running   (same run and cycle)
 execution/running -- /goal pause --> execution/paused
 execution/paused  -- /goal resume -> execution/running   (same run)
+execution/paused  -- exact recover-driver -> execution/running (same open cycle)
 execution/*       -- block --------> blocked/inactive
 execution/*       -- cancel -------> planning/inactive
 execution/running -- complete -----> planning/inactive
@@ -65,7 +66,9 @@ blocked/inactive  -- verified restore and confirmation -> planning/inactive
 planning/inactive -- later user /execute ----------------> new execution run
 ```
 
-`waiting` is planned suspension for a stated external condition. The current native goal is completed so it cannot start another cycle. `ready` requires the current wait ID and a newly active native goal, but retains the same Ralph execution run and cycle.
+`waiting` is planned suspension for a stated external condition. The current native goal is completed so it cannot start another cycle. `ready` requires the current wait ID and a newly active native goal, but retains the same Ralph execution run and cycle. A successful `ready` is the only semantic decision in its readiness turn, so the agent ends that turn immediately and leaves all further work to the clean native-goal continuation.
+
+If the just-readied goal nevertheless becomes terminal before that continuation and goal-identity reconciliation pauses Ralph, `recover-driver` provides one narrow recovery behavior. It may adopt the current active replacement goal only when the retained session branch proves the exact sequence: matching `ready`, terminal prior driver, ready-decision closeout, one replacement goal, and the resulting identity-mismatch pause. The action only rebinds the driver and resumes the same execution run and open cycle; it does not log or increment the cycle. A duplicate call is rejected without a second adoption. An incomplete sequence, a later unrelated goal, or a failed durable state append leaves Ralph paused and explicitly recoverable through `/execute`.
 
 `paused` is a user pause or safety stop. Native `/goal pause`, `/goal resume`, and `/goal clear` pause, resume, and cancel the matching run. Goal replacement, stale continuation, missing lifecycle decisions, provider errors, and abnormal closeout also fail closed rather than silently continuing.
 
@@ -97,6 +100,7 @@ A mismatch pauses execution. Ralph never attaches unrelated goal work to the cur
 - `continue`: keep the native goal active and request the next cycle.
 - `wait`: record why the current cycle cannot proceed and the exact evidence that will establish readiness.
 - `ready`: resume the same open cycle with the matching wait ID and a new native goal.
+- `recover-driver`: rebind one exact post-ready terminal replacement driver without closing the open cycle.
 - `block`: stop the native goal and move the exact planning pair into the blocked folder.
 - `complete`: stop the native goal and finish the execution run. Archival is separate and explicit.
 - `unblock`: restore a normally blocked pair together without overwrite.

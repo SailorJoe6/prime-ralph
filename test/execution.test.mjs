@@ -80,6 +80,7 @@ test("native goal reconciliation pauses, resumes same identity, and rejects repl
   const paused = reconcileGoalState(decided, { goalId: "goal", status: "paused" }); assert.equal(paused.status, "paused"); assert.equal(paused.pendingDecision.action, "continue");
   const resumed = reconcileGoalState(paused, { goalId: "goal", status: "active" }); assert.equal(resumed.status, "running");
   const replaced = reconcileGoalState(running, { goalId: "other", status: "active" }); assert.equal(replaced.status, "paused"); assert.match(replaced.pauseReason, /identity changed/);
+  assert.equal(reconcileGoalState(replaced, { goalId: "other", status: "active" }), replaced);
 });
 
 test("reads latest native goal marker", () => {

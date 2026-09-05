@@ -247,6 +247,26 @@ function finalEvent(text = "round finished") {
 async function control(h, params) {
   return h.tools.get("ralph_lifecycle").execute("tool", params, undefined, undefined, h.ctx);
 }
+async function reachReadyDriverMismatch(h) {
+  const initial = await startExecution(h);
+  h.addGoal({ goalId: "goal-before-wait", status: "complete", active: false });
+  const waited = await control(h, { action: "wait", lifecycleId: initial.lifecycleId, cycle: 1, reason: "review", readiness: "review finishes" });
+  await h.emit("turn_end", finalEvent("waiting for review"));
+  await h.emit("before_agent_start", { prompt: "review is ready" });
+  h.addGoal({ goalId: "ready-driver", status: "active", active: true });
+  await control(h, { action: "ready", lifecycleId: initial.lifecycleId, cycle: 1, waitId: waited.details.waitId });
+  h.addGoal({ goalId: "ready-driver", status: "complete", active: false });
+  await assert.rejects(control(h, { action: "wait", lifecycleId: initial.lifecycleId, cycle: 1, reason: "second review", readiness: "second review finishes" }), /already has a semantic decision/);
+  await h.emit("turn_end", finalEvent("readiness accepted"));
+  await h.emit("before_agent_start", { prompt: "recover the terminal ready driver" });
+  h.addGoal({ goalId: "replacement-driver", status: "active", active: true });
+  await h.handlers.get("context").at(-1)({ messages: [] }, h.ctx);
+  assert.equal(h.state().status, "paused");
+  assert.equal(h.state().pauseReason, "native goal identity changed");
+  const status = await control(h, { action: "status" });
+  assert.equal(status.details.readyDriverRecoveryAvailable, true);
+  return initial;
+}
 
 test("/execute has exact missing-document fallbacks and admits one lifecycle", async () => {
   const missingSpec = harness(); await missingSpec.commands.get("execute").handler("", missingSpec.ctx);
@@ -473,6 +493,134 @@ test("waiting completes the native driver, preserves the open cycle, and resumes
   const goalMessage = { role: "custom", customType: "goal_context", content: "resume", details: { kind: "continuation", goalId: "goal-2", continuationsUsed: 1 } };
   const projected = await h.handlers.get("context").at(-1)({ messages: [goalMessage] }, h.ctx);
   assert.equal(projected.messages[0].customType, EXECUTION_MESSAGE_TYPE); assert.match(projected.messages[0].content, /"cycle":1/);
+});
+
+test("recover-driver resumes one exact post-ready terminal-driver mismatch without closing the cycle", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" });
+  const initial = await reachReadyDriverMismatch(h);
+  const recovered = await control(h, { action: "recover-driver", lifecycleId: initial.lifecycleId, cycle: 1 });
+  assert.equal(recovered.details.action, "recover-driver");
+  assert.equal(h.state().status, "running");
+  assert.equal(h.state().cycle, 1);
+  assert.equal(h.state().lifecycleId, initial.lifecycleId);
+  assert.equal(h.state().driverGoalId, "replacement-driver");
+  assert.equal(h.state().resumed, true);
+  assert.equal(h.state().pendingDecision.action, "recover-driver");
+  await assert.rejects(control(h, { action: "recover-driver", lifecycleId: initial.lifecycleId, cycle: 1 }), /already has a semantic decision/);
+  const completed = finalEvent("driver recovery complete");
+  const goalMessage = { role: "custom", customType: "goal_context", content: "resume", details: { kind: "continuation", goalId: "replacement-driver", continuationsUsed: 1 } };
+  const projection = h.handlers.get("context").at(-1)({ messages: [completed.message, goalMessage] }, h.ctx);
+  await h.emit("turn_end", completed);
+  const projected = await projection;
+  assert.equal(h.state().cycle, 1);
+  assert.equal(h.logs.length, 0);
+  assert.equal(h.state().pendingDecision, null);
+  assert.equal(projected.messages[0].customType, EXECUTION_MESSAGE_TYPE);
+  assert.match(projected.messages[0].content, /"invocationMode":"execution-resume"/);
+  assert.match(projected.messages[0].content, /"cycle":1/);
+});
+
+test("post-ready terminal-driver recovery survives reload and state-append retry", async () => {
+  const branch = [];
+  const first = harness({ branch, specificationState: "existing", planState: "existing", sessionId: "ready-recovery-reload" });
+  const initial = await reachReadyDriverMismatch(first);
+  const rebuilt = harness({ branch, specificationState: "existing", planState: "existing", sessionId: "ready-recovery-reload" });
+  await rebuilt.emit("before_agent_start", { prompt: "retry recovery after reload" });
+  assert.equal(rebuilt.state().transition, first.state().transition);
+  rebuilt.failStateAppendIn(1);
+  await assert.rejects(control(rebuilt, { action: "recover-driver", lifecycleId: initial.lifecycleId, cycle: 1 }), /injected state append failure/);
+  assert.equal(rebuilt.state().status, "paused");
+  assert.equal(rebuilt.state().driverGoalId, "ready-driver");
+  const recovered = await control(rebuilt, { action: "recover-driver", lifecycleId: initial.lifecycleId, cycle: 1 });
+  assert.equal(recovered.details.action, "recover-driver");
+  assert.equal(rebuilt.state().status, "running");
+  assert.equal(rebuilt.state().driverGoalId, "replacement-driver");
+  assert.equal(rebuilt.state().cycle, 1);
+  await rebuilt.emit("turn_end", finalEvent("recovered after reload"));
+  assert.equal(rebuilt.state().status, "running");
+  assert.equal(rebuilt.state().pendingDecision, null);
+  assert.equal(rebuilt.state().cycle, 1);
+});
+
+test("post-ready recovery rejects a later unrelated goal and incomplete durable proof", async () => {
+  const unrelated = harness({ specificationState: "existing", planState: "existing" });
+  const initial = await reachReadyDriverMismatch(unrelated);
+  await assert.rejects(control(unrelated, { action: "recover-driver", lifecycleId: "stale-life", cycle: 1 }), /identifier is stale or missing/);
+  await assert.rejects(control(unrelated, { action: "recover-driver", lifecycleId: initial.lifecycleId, cycle: 2 }), /identifier is stale or missing/);
+  unrelated.addGoal({ goalId: "unrelated-after-pause", status: "active", active: true });
+  await assert.rejects(control(unrelated, { action: "recover-driver", lifecycleId: initial.lifecycleId, cycle: 1 }), /exact durable post-ready/);
+  assert.equal(unrelated.state().status, "paused");
+  assert.equal(unrelated.state().driverGoalId, "ready-driver");
+
+  const branch = unrelated.branch.filter((entry) => entry?.data?.pendingDecision?.action !== "ready" && entry?.data?.goalId !== "unrelated-after-pause");
+  const incomplete = harness({ branch, specificationState: "existing", planState: "existing" });
+  await assert.rejects(control(incomplete, { action: "recover-driver", lifecycleId: initial.lifecycleId, cycle: 1 }), /exact durable post-ready/);
+  assert.equal(incomplete.state().status, "paused");
+
+  const nonterminalBranch = unrelated.branch.filter((entry) => entry?.data?.goalId !== "unrelated-after-pause").map((entry) =>
+    entry?.customType === "thread_goal_state" && entry.data?.goalId === "ready-driver" && entry.data.status === "complete"
+      ? { ...entry, data: { ...entry.data, status: "error" } }
+      : entry);
+  const nonterminal = harness({ branch: nonterminalBranch, specificationState: "existing", planState: "existing" });
+  await assert.rejects(control(nonterminal, { action: "recover-driver", lifecycleId: initial.lifecycleId, cycle: 1 }), /exact durable post-ready/);
+  assert.equal(nonterminal.state().status, "paused");
+});
+
+test("post-ready recovery rejects multiple replacement goals before the mismatch pause", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" });
+  const initial = await reachReadyDriverMismatch(h);
+  const replacementIndex = h.branch.findIndex((entry) => entry?.customType === "thread_goal_state" && entry.data?.goalId === "replacement-driver");
+  h.branch.splice(replacementIndex, 0,
+    { type: "custom", customType: "thread_goal_state", data: { goalId: "replacement-a", status: "active", active: true } },
+    { type: "custom", customType: "thread_goal_state", data: { goalId: "replacement-a", status: "complete", active: false } });
+  await assert.rejects(control(h, { action: "recover-driver", lifecycleId: initial.lifecycleId, cycle: 1 }), /exact durable post-ready/);
+  assert.equal(h.state().status, "paused");
+  assert.equal((await control(h, { action: "status" })).details.readyDriverRecoveryAvailable, false);
+});
+
+test("explicit /execute resumes the same lifecycle after failed recovery and terminal replacement", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" });
+  const initial = await reachReadyDriverMismatch(h);
+  h.failStateAppendIn(1);
+  await assert.rejects(control(h, { action: "recover-driver", lifecycleId: initial.lifecycleId, cycle: 1 }), /injected state append failure/);
+  await h.emit("turn_end", finalEvent("recovery failed safely"));
+  await h.emit("agent_end", { messages: [finalEvent("recovery failed safely").message] });
+  h.addGoal({ goalId: "replacement-driver", status: "complete", active: false });
+  await h.commands.get("execute").handler("", h.ctx);
+  assert.equal(h.compactions.length, 2);
+  h.fallback();
+  assert.equal(h.state().status, "running");
+  assert.equal(h.state().lifecycleId, initial.lifecycleId);
+  assert.equal(h.state().cycle, 1);
+  assert.equal(h.state().driverGoalId, null);
+  assert.match(h.sent.at(-1).message.content, /"invocationMode":"execution-resume"/);
+});
+
+test("reload after recovery adoption closes once and admits one unchanged-cycle resume boundary", async () => {
+  const branch = [];
+  const first = harness({ branch, specificationState: "existing", planState: "existing", sessionId: "adopted-reload" });
+  const initial = await reachReadyDriverMismatch(first);
+  await control(first, { action: "recover-driver", lifecycleId: initial.lifecycleId, cycle: 1 });
+  assert.equal(first.state().pendingDecision.action, "recover-driver");
+
+  const rebuilt = harness({ branch, specificationState: "existing", planState: "existing", sessionId: "adopted-reload" });
+  await rebuilt.emit("before_agent_start", { prompt: "replacement goal continuation after reload" });
+  await assert.rejects(control(rebuilt, { action: "recover-driver", lifecycleId: initial.lifecycleId, cycle: 1 }), /already has a semantic decision/);
+  const completed = finalEvent("recovery turn closed after reload");
+  const goalMessage = { role: "custom", customType: "goal_context", content: "resume", details: { kind: "continuation", goalId: "replacement-driver", continuationsUsed: 1 } };
+  const projection = rebuilt.handlers.get("context").at(-1)({ messages: [completed.message, goalMessage] }, rebuilt.ctx);
+  await rebuilt.emit("turn_end", completed);
+  const projected = await projection;
+  assert.equal(projected.messages.length, 1);
+  assert.equal(projected.messages[0].customType, EXECUTION_MESSAGE_TYPE);
+  assert.match(projected.messages[0].content, /"invocationMode":"execution-resume"/);
+  assert.match(projected.messages[0].content, /"cycle":1/);
+  assert.equal(rebuilt.state().cycle, 1);
+  assert.equal(rebuilt.logs.length, 0);
+  const transition = rebuilt.state().transition;
+  const repeated = await rebuilt.handlers.get("context").at(-1)({ messages: [completed.message, goalMessage] }, rebuilt.ctx);
+  assert.equal(repeated.messages.length, 1);
+  assert.equal(rebuilt.state().transition, transition);
 });
 
 test("running and waiting gate interactive commands until pause", async () => {

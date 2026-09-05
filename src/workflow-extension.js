@@ -48,7 +48,7 @@ function latestSessionPhase(entries, sessionId) {
 }
 
 const lifecycleParameters = Type.Object({
-  action: Type.Union(["status", "continue", "wait", "ready", "block", "complete", "unblock", "confirm-forward"].map((value) => Type.Literal(value))),
+  action: Type.Union(["status", "continue", "wait", "ready", "recover-driver", "block", "complete", "unblock", "confirm-forward"].map((value) => Type.Literal(value))),
   lifecycleId: Type.Optional(Type.String({ maxLength: 200 })),
   cycle: Type.Optional(Type.Integer({ minimum: 0 })),
   waitId: Type.Optional(Type.String({ maxLength: 200 })),
@@ -109,6 +109,32 @@ export function createWorkflowExtension({
       completedLifecycleCloseouts.delete(id); clearTimeout(waiter.timeout); lifecycleCloseoutWaiters.delete(id); waiter.resolve(true);
     };
     const branch = (ctx) => ctx.sessionManager.getBranch();
+    const isExactReadyDriverRecovery = (ctx, state, nativeGoal) => {
+      if (state.phase !== "execution" || state.status !== "paused" || state.pauseReason !== "native goal identity changed" || state.pendingDecision != null ||
+        typeof state.driverGoalId !== "string" || !state.driverGoalId || nativeGoal?.status !== "active" || typeof nativeGoal.goalId !== "string" ||
+        !nativeGoal.goalId || nativeGoal.goalId === state.driverGoalId) return false;
+      const entries = branch(ctx);
+      const stateRecords = entries.map((entry, index) => ({ entry, index })).filter(({ entry }) => entry?.type === "custom" &&
+        entry.customType === EXECUTION_STATE_ENTRY_TYPE && entry.data?.sessionId === state.sessionId);
+      if (stateRecords.length < 3) return false;
+      const paused = stateRecords.at(-1), closed = stateRecords.at(-2), ready = stateRecords.at(-3);
+      const sameEpoch = ({ data }) => data.lifecycleId === state.lifecycleId && data.cycle === state.cycle && data.driverGoalId === state.driverGoalId;
+      if (paused.entry.data.transition !== state.transition || !sameEpoch(paused.entry) || paused.entry.data.status !== "paused" || paused.entry.data.pauseReason !== state.pauseReason ||
+        !sameEpoch(closed.entry) || closed.entry.data.status !== "running" || closed.entry.data.pendingDecision != null ||
+        !sameEpoch(ready.entry) || ready.entry.data.status !== "running" || ready.entry.data.pendingDecision?.action !== "ready" ||
+        ready.entry.data.pendingDecision.cycle !== state.cycle || typeof ready.entry.data.pendingDecision.waitId !== "string" ||
+        ready.entry.data.transition + 1 !== closed.entry.data.transition || closed.entry.data.transition + 1 !== paused.entry.data.transition) return false;
+      const goalRecords = entries.map((entry, index) => ({ entry, index })).filter(({ entry }) =>
+        entry?.type === "custom" && entry.customType === "thread_goal_state");
+      const beforeReady = goalRecords.filter(({ index }) => index < ready.index).at(-1);
+      const readyToClosed = goalRecords.filter(({ index }) => ready.index < index && index < closed.index);
+      const closedToPaused = goalRecords.filter(({ index }) => closed.index < index && index < paused.index);
+      const afterPaused = goalRecords.filter(({ index }) => index > paused.index);
+      return beforeReady?.entry.data?.goalId === state.driverGoalId && beforeReady.entry.data.status === "active" &&
+        readyToClosed.length === 1 && readyToClosed[0].entry.data?.goalId === state.driverGoalId && readyToClosed[0].entry.data.status === "complete" &&
+        closedToPaused.length === 1 && closedToPaused[0].entry.data?.goalId === nativeGoal.goalId && closedToPaused[0].entry.data.status === "active" &&
+        afterPaused.length === 0;
+    };
     const rawExecution = (ctx) => {
       const id = sessionId(ctx);
       const state = executionStates.get(id) ?? latestExecutionState(branch(ctx), id);
@@ -283,7 +309,10 @@ export function createWorkflowExtension({
 Recorded blocker: ${reason}
 Condition required before execution can restart: ${condition}`, { state });
           }
-          return result(`Ralph is ${state.status} in the ${state.phase} workflow.`, { state });
+          const readyDriverRecoveryAvailable = isExactReadyDriverRecovery(ctx, state, goal(ctx));
+          return result(readyDriverRecoveryAvailable
+            ? `Ralph is ${state.status} in the ${state.phase} workflow. Exact post-ready driver recovery is available for the current replacement goal.`
+            : `Ralph is ${state.status} in the ${state.phase} workflow.`, { readyDriverRecoveryAvailable, state });
         }
         requireTerminalLogReady(state);
         if (["unblock", "confirm-forward"].includes(params.action)) {
@@ -315,6 +344,15 @@ Condition required before execution can restart: ${condition}`, { state });
         if (!params.lifecycleId || params.lifecycleId !== state.lifecycleId || params.cycle !== state.cycle) throw new Error("Ralph lifecycle or cycle identifier is stale or missing");
         if (state.pendingDecision) throw new Error("this lifecycle turn already has a semantic decision");
         const nativeGoal = goal(ctx), goalActive = nativeGoal?.status === "active";
+        if (params.action === "recover-driver") {
+          if (!isExactReadyDriverRecovery(ctx, state, nativeGoal)) throw new Error("recover-driver requires the exact durable post-ready terminal-driver failure window");
+          state = persistExecution(ctx, nextExecutionState(state, {
+            status: "running", driverGoalId: nativeGoal.goalId, pauseReason: null, resumed: true,
+            pendingDecision: { action: "recover-driver", cycle: state.cycle },
+          }));
+          activeLifecycleTurns.set(sessionId(ctx), { kind: "execute" });
+          return result("The exact terminal ready-driver failure was recovered. The same lifecycle and open cycle may resume once this recovery turn closes.", { action: "recover-driver", state });
+        }
         if (params.action === "continue") {
           if (state.status !== "running") throw new Error("continue requires a running lifecycle");
           if (!goalActive) throw new Error("continue requires the native Prime Agent goal driver to remain active");
@@ -427,10 +465,10 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
         if (starting && ["active", "paused", "budget_limited"].includes(nativeGoal?.status)) {
           ctx.ui.notify("Ralph execution cannot start while an unrelated native Prime Agent goal is active or paused; complete or clear that goal first.", "warning"); return;
         }
-        if (!starting && live.driverGoalId && nativeGoal?.goalId && nativeGoal.goalId !== live.driverGoalId) {
-          ctx.ui.notify("Ralph execution cannot resume through a different native Prime Agent goal; clear the conflicting goal first.", "warning"); return;
-        }
         const replaceTerminalDriver = !starting && ["idle", "complete", "error"].includes(nativeGoal?.status);
+        if (!starting && !replaceTerminalDriver && live.driverGoalId && nativeGoal?.goalId && nativeGoal.goalId !== live.driverGoalId) {
+          ctx.ui.notify("Ralph execution cannot resume through a different active or paused native Prime Agent goal; clear the conflicting goal first.", "warning"); return;
+        }
         const proposed = starting ? beginExecution(live, { lifecycleId: createRequestId(), driverGoalId: null }) : nextExecutionState(live, { status: "running", driverGoalId: replaceTerminalDriver ? null : live.driverGoalId, pendingDecision: null, pauseReason: null });
         const mode = starting ? "execution-start" : "execution-resume";
         await resetRuntime.requestBoundary({ ctx, command: "execute", resolveInjection: ({ ctx: boundaryCtx }) => ({ content: executeContent(boundaryCtx, proposed, mode), details: { workflowPhase: "execution", invocationMode: mode, lifecycleId: proposed.lifecycleId, cycle: proposed.cycle, sessionId: sessionId(boundaryCtx) } }), onAdmitted: () => { persistExecution(ctx, proposed); setPhase(ctx, "execution"); } });
@@ -483,7 +521,8 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
           return { messages: [message, ...event.messages.slice(goalIndex + 1)] };
         }
         const resetForBoundary = live.resetRequested === true, resumedForBoundary = live.resumed === true;
-        if (live.pendingDecision?.action === "continue" && typeof live.pendingDecision.finalAssistantMessage !== "string") {
+        const closeoutAction = live.pendingDecision?.action;
+        if ((closeoutAction === "continue" && typeof live.pendingDecision.finalAssistantMessage !== "string") || closeoutAction === "recover-driver") {
           const finalAssistantMessage = finalAssistantImmediatelyBefore(event.messages, goalIndex);
           if (!finalAssistantMessage) {
             ctx.abort(); persistExecution(ctx, nextExecutionState(live, { status: "paused", pendingDecision: null, wait: null, pauseReason: "native continuation arrived before lifecycle closeout" }));
@@ -491,7 +530,10 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
           }
           const closeoutCommitted = await waitForLifecycleCloseout(id, finalAssistantMessage);
           live = execution(ctx, { reconcile: false });
-          if ((!closeoutCommitted || (live.pendingDecision?.action === "continue" && typeof live.pendingDecision.finalAssistantMessage !== "string")) && live.status === "running") {
+          const closeoutIncomplete = closeoutAction === "recover-driver"
+            ? live.pendingDecision?.action === "recover-driver"
+            : live.pendingDecision?.action === "continue" && typeof live.pendingDecision.finalAssistantMessage !== "string";
+          if ((!closeoutCommitted || closeoutIncomplete) && live.status === "running") {
             ctx.abort(); persistExecution(ctx, nextExecutionState(live, { status: "paused", pendingDecision: null, wait: null, pauseReason: "native continuation arrived before lifecycle closeout" }));
             ctx.ui.notify("Ralph rejected a native continuation whose lifecycle closeout did not commit.", "error"); return { messages: [] };
           }
@@ -538,7 +580,7 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
       try {
         if (decision === "continue") {
           live = persistExecution(ctx, nextExecutionState(live, { pendingDecision: { ...live.pendingDecision, finalAssistantMessage: text, timestamp: now().toISOString() } }));
-        } else if (decision === "ready" || decision === "wait") {
+        } else if (decision === "ready" || decision === "wait" || decision === "recover-driver") {
           live = persistExecution(ctx, nextExecutionState(live, { pendingDecision: null }));
         } else if (decision === "block" || decision === "complete") {
           live = persistExecution(ctx, nextExecutionState(live, { pendingDecision: { ...live.pendingDecision, finalAssistantMessage: text, timestamp: now().toISOString() } }));

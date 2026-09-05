@@ -31,6 +31,14 @@ Tracked RLM work can end one Agent run and deliver its terminal message in anoth
 
 This removes any dependency on `turn_end` winning an asynchronous scheduling race while retaining the established closeout and failure-injection path. It also prevents an already-consumed continuation from leaving an active native goal parked until unrelated user or child traffic wakes the session.
 
+## Post-ready terminal-driver recovery
+
+The canonical execute skill ends a readiness turn immediately after `ready` succeeds. It does not complete that newly created goal or attempt a second lifecycle decision before `turn_end` clears the ready decision. This ordering prevents the ordinary agent path from stranding a terminal ready driver.
+
+Provider or control failure can still produce the historical failure window. For that one case, the narrow `recover-driver` action can recover from the exact `native goal identity changed` pause without changing ordinary `continue` semantics. Recovery requires the latest three execution records to be the matching ready decision, its normal same-cycle closeout, and the identity-mismatch pause. The retained branch must also place the recorded driver's terminal goal state between ready and closeout, followed by exactly one latest active replacement goal before the pause. The action changes only the driver binding, running status, recovery-turn decision, and resume marker. It does not log or increment the cycle.
+
+The replacement adoption and recovery decision are one durable state append. An append failure leaves the paused record authoritative and retryable. A successful append makes a duplicate call fail under the normal one-decision rule. Recovery-turn closeout clears that decision, and the matching native continuation then supplies one clean `execution-resume` boundary for the unchanged cycle. Missing history, changed ordering, a nonterminal old driver, or a newer unrelated goal cannot use the recovery and remains paused for explicit `/execute`.
+
 ## Durable execution-boundary projection
 
 Once a matching native continuation is admitted, its persisted `goalId:continuationsUsed`, lifecycle, and cycle record owns the provider boundary for the whole round. Projection no longer depends on the continuation being newer than the latest user message. Every later provider call reconstructs the same `prepare`-then-`execute` boundary, removes all earlier conversation, and retains every message after the matching `goal_context`, including ordinary steering, `/btw`, queued user input, tracked-child notices, and tool-call/result tails.
