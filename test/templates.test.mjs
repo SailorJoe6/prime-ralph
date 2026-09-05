@@ -48,6 +48,17 @@ test("planning templates protect plans and never start execution", () => {
   }
 });
 
+test("execute templates enforce the same cycle-sized work-unit gate", () => {
+  const sections = ["default", "beads"].map((variant) => {
+    const text = load(variant, "execute");
+    const section = text.match(/## Cycle-sized work-unit gate\n([\s\S]*?)(?=\n## Native execution driver)/)?.[1];
+    assert.ok(section, `${variant} cycle-sized gate is missing`);
+    for (const pattern of [/independently testable behavior, transition, or failure window/i, /exact exit condition/i, /major affected surface groups/i, /not included this cycle/i, /more than about three major surface groups/i, /25[–-]35%/, /near 25% context use/i, /35[–-]40%/, /final 20%/, /safety-invalidating/i, /required acceptance/i, /adjacent hardening/i, /minimum tests and documentation/i, /leave the affected behavior unpublished/i, /only this cycle's affected behavior/i, /normal lifecycle decisions/i, /does not authorize an invented transition/i, /incomplete publication/i, /loss of unrelated work/i]) assert.match(section, pattern);
+    return section;
+  });
+  assert.equal(sections[0], sections[1]);
+});
+
 test("execute templates define continue, wait, block, and complete semantics", () => {
   for (const variant of ["default", "beads"]) {
     const text = load(variant, "execute");

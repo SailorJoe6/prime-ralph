@@ -21,6 +21,10 @@ const commandNames = [...extension.commands.keys()];
 if (JSON.stringify(commandNames) !== JSON.stringify(["reset", "spec-it-out", "plan", "execute"]) || extension.commands.has("clear")) throw new Error("initialized extension command contract failed");
 if (!extension.path.endsWith("/.prime/agent/extensions/prime-ralph/index.js")) throw new Error(`unexpected discovered path: ${extension.path}`);
 if (existsSync(join(cwd, ".agents"))) throw new Error("clean initialization exposed internal Ralph prompts under .agents");
+const initializedExecute = readFileSync(join(cwd, ".ralph/skills/execute/SKILL.md"), "utf8");
+for (const required of ["## Cycle-sized work-unit gate", "exact exit condition", "not included this cycle", "25–35%", "final 20%", "safety-invalidating"]) {
+  if (!initializedExecute.includes(required)) throw new Error(`initialized execute skill is missing cycle-sized policy: ${required}`);
+}
 
 // Inspect the real Prime Agent command catalog, not only the loaded extension map.
 writeFileSync(join(cwd, ".ralph/plans/SPECIFICATION.md"), "# Acceptance fixture\n");
@@ -68,4 +72,4 @@ if (spawnSync("bd", ["--version"], { encoding: "utf8" }).status === 0) {
   }
   realBeadsStealth = true;
 }
-console.log(JSON.stringify({ created: createdCount, warnings: cli.stderr ? 1 : 0, extensions: loaded.extensions.length, registeredCommands: commandNames, nativeRalphCatalog: catalogSummary, directFileSymlinkRejected: true, realBeadsStealth }, null, 2));
+console.log(JSON.stringify({ created: createdCount, warnings: cli.stderr ? 1 : 0, extensions: loaded.extensions.length, registeredCommands: commandNames, nativeRalphCatalog: catalogSummary, cycleSizedExecuteGate: true, directFileSymlinkRejected: true, realBeadsStealth }, null, 2));

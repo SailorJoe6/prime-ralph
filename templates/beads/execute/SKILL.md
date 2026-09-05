@@ -13,6 +13,27 @@ Treat durable project state as authority. Audit existing implementation, documen
 
 The `<prime-ralph-invocation>` metadata identifies the current Ralph lifecycle and cycle. Use the `ralph_lifecycle` tool with exactly those identifiers. Never guess or reuse identifiers from an older prompt.
 
+## Cycle-sized work-unit gate
+
+Before editing, define one small, safely publishable increment. Record all of the following in the plan or its durable task tracker:
+
+1. one independently testable behavior, transition, or failure window;
+2. the exact exit condition for this cycle;
+3. the major affected surface groups and the evidence each one requires; and
+4. an explicit “not included this cycle” list.
+
+Split work that spans more than about three major surface groups unless a short written safety rationale shows that the combined unit is still bounded. Surface groups include runtime behavior, persisted schema, recovery, unit tests, native acceptance, documentation, and publication. When a complete feature is too large, prefer an inactive protocol or helper increment, a conservative fail-closed vertical slice, or another independently safe boundary.
+
+Budget the cycle as follows:
+
+- Target implementation plus focused proof that normally fits within roughly 25–35% of one context window.
+- Reassess scope near 25% context use. If the selected increment is not nearing code-complete by roughly 35–40%, stop expanding it. Narrow to a safely completed publishable checkpoint, disable or roll back only this cycle's affected behavior as project policy permits, or record a durable handoff after making the worktree safe.
+- Reserve the final 20% for regression, independent review, durable tracking, documentation, commit, backup, push, verification, and the one lifecycle decision.
+
+A checkpoint or handoff must still satisfy one of the normal lifecycle decisions below. It does not authorize an invented transition, incomplete publication, destructive rollback, loss of unrelated work, or omission of required evidence.
+
+Classify review findings as **safety-invalidating**, **required acceptance**, **adjacent hardening**, or **optional**. Fix safety-invalidating findings within the remaining budget or disable, roll back, or leave the affected behavior unpublished. Complete required acceptance in this cycle. Track adjacent hardening for a later cycle unless it blocks safe publication. Do not defer the minimum tests and documentation for active runtime behavior to a later proof-only cleanup cycle.
+
 ## Native execution driver
 
 Prime Agent's native thread goal is the sole automatic driver. Ralph's lifecycle identity remains separately owned by the plugin.

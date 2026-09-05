@@ -58,6 +58,21 @@ test("default mode never infers Beads and explicit Beads fills only missing skil
   assert.equal(readFileSync(join(cwd, ".ralph/skills/execute/SKILL.md"), "utf8"), readFileSync(join(templateRoot, "beads/execute/SKILL.md"), "utf8"));
 });
 
+test("default and Beads initialization carry the cycle-sized execute gate", () => {
+  for (const beads of [false, true]) {
+    const cwd = project();
+    if (beads) mkdirSync(join(cwd, ".beads"));
+    init(cwd, { beads });
+    const execute = readFileSync(join(cwd, ".ralph/skills/execute/SKILL.md"), "utf8");
+    assert.match(execute, /## Cycle-sized work-unit gate/);
+    assert.match(execute, /exact exit condition/);
+    assert.match(execute, /not included this cycle/i);
+    assert.match(execute, /25[–-]35%/);
+    assert.match(execute, /final 20%/);
+    assert.match(execute, /safety-invalidating/);
+  }
+});
+
 test("explicit Beads preflights and initializes before creating Ralph files", () => {
   const cwd = project(); const calls = [];
   const result = init(cwd, { beads: true }, { runCommand(command, args, commandCwd) {

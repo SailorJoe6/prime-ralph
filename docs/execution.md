@@ -33,6 +33,23 @@ The code and documentation use these terms:
 
 There is no separately persisted “execution pass” counter. In the usual path, one completed execution invocation closes one cycle. During waiting, pausing, or failure recovery, several turns can belong to the same cycle. Prefer the exact terms above when that distinction matters.
 
+## Cycle-sized work units
+
+One Ralph cycle is a small publishable evidence increment, not every change that belongs to one broad feature. Before editing, the execute skill requires the agent to record one independently testable behavior, transition, or failure window; its exact exit condition; its major affected surface groups and required evidence; and a clear “not included this cycle” list.
+
+The sizing heuristic targets implementation and focused proof within roughly 25–35% of a context window. The agent reassesses near 25%. If the increment is not nearing code-complete by roughly 35–40%, it stops expanding. It then narrows to a safely completed publishable checkpoint, disables or rolls back only that cycle's affected behavior as project policy permits, or records a durable handoff after making the worktree safe. The final 20% stays reserved for regression, independent review, durable tracking, documentation, commit, backup, push, verification, and the lifecycle decision. A checkpoint or handoff still has to satisfy a normal lifecycle decision; it never permits an invented transition, incomplete publication, destructive rollback, loss of unrelated work, or omitted evidence.
+
+Work across more than about three major surface groups is split unless a written safety rationale shows the combined unit remains bounded. A major surface can be runtime behavior, persisted schema, recovery, unit tests, native acceptance, documentation, or publication. Minimum tests and documentation stay with any active runtime increment; they are not deferred to a later proof-only cleanup cycle.
+
+Review findings are classified before more work is admitted:
+
+- **Safety-invalidating:** fix within the cycle budget or disable, roll back, or leave the behavior unpublished.
+- **Required acceptance:** complete before the increment can be published.
+- **Adjacent hardening:** track for a later cycle unless it blocks safe publication.
+- **Optional:** defer unless it fits without risking closeout.
+
+When the complete feature does not fit, select an inactive helper or protocol increment, a conservative fail-closed vertical slice, or another independently safe boundary.
+
 ## Workflow and execution states
 
 ```text
