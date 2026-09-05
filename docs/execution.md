@@ -103,6 +103,12 @@ provider call 3: prepare + execute + all current-cycle tool results -> final res
 
 Calls 2 and 3 retain everything after the boundary. They do not increment the cycle, log the prior cycle again, or reintroduce stale conversation. The persisted admitted-continuation identity keeps this projection active even when a later user message, `/btw`, custom child notice, or tool tail is newer than `goal_context`, and the same boundary is reconstructed after extension reload.
 
+At the first matching continuation provider boundary, Ralph also appends a dedicated real marker and requests one public `ctx.compact()` operation. The `session_before_compact` handler recognizes only the opaque execution request and exact marker/lifecycle/cycle/goal correlation. It returns an empty custom summary retaining from that marker. Manual `/reset` and ordinary user or host compactions use different namespaces and are not intercepted.
+
+Prime Agent aborts the active Agent run to perform this compaction. The clean projection is therefore the admission-race guard, not a parallel execution path. Ralph defers the optional request if input is already queued. Otherwise it queues one higher-priority hidden execution boundary immediately after the aborting request, before JavaScript can admit later input. The callback verifies and records the durable result. Too-short, already-compacted, cancelled, or failed requests use that same boundary through projection fallback. If host ordering nevertheless selects retained steering first, durable compaction state synthesizes the execution boundary around that turn and aborts the later duplicate boundary turn. A later distinct continuation can attempt compaction again.
+
+The request, marker, outcome, and re-admission stage live inside the admitted-continuation state record. Reload recovery checks the branch before sending: a persisted boundary is marked admitted without replay; a compaction without its boundary is resumed once; and a pending request without a compaction is recorded as interrupted before projection fallback. No recovery path increments the cycle or writes the previous execution log again.
+
 ## Waiting and reset
 
 Tracked RLM work is held by Prime Agent's native goal until descendants settle. Work Prime Agent cannot observe uses `wait` and `ready`, plus an agent-owned heartbeat or a later user response when needed. A waiting check is not a completed cycle and is not logged.
@@ -160,9 +166,9 @@ The writer creates a missing real logs directory, rejects symlinks and incompati
 
 ## Evidence
 
-`npm test` covers lifecycle transitions, goal correlation, repeated provider calls, waiting/readiness, reset branches, blocked and restored-file transactions, adoption failure recovery, stale signals, path conflicts, and logging.
+`npm test` covers lifecycle transitions, goal correlation, repeated provider calls, execution-compaction success and fallback, exact marker matching, same-session and reload re-admission, waiting/readiness, reset branches, blocked and restored-file transactions, adoption failure recovery, stale signals, path conflicts, and logging.
 
-`npm run accept:execution` uses Prime Agent `0.9.1` with a deterministic provider. It proves three native-goal-driven cycles, tracked-RLM deferral, clean context, retained tool results, logging, and stable session, JSONL, and REPL identity.
+`npm run accept:execution` uses Prime Agent `0.9.1` with a deterministic provider. It proves three native-goal-driven cycles, two real custom compactions, exact-once correlated re-admission, tracked-RLM deferral, clean context, retained tool results, logging, and stable session, JSONL, and REPL identity.
 
 `npm run accept:blocked-recovery` physically leaves the saved marker in the blocked folder while moving the exact pair back to the active paths. It proves that the recorded blocker and unblock condition reach model-visible tool text, the recovery interaction stays clean through repeated tool results, marker adoption leaves the files unchanged, execution does not restart automatically, and only an explicit `/execute` creates a fresh run. Its direct context-transform connection is version-specific acceptance scaffolding; production code uses registered public extension hooks.
 

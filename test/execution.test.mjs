@@ -112,3 +112,21 @@ test("native goal clear cancels a recorded driver and error pauses it", () => {
   const cleared = reconcileGoalState(running, { status: "idle", active: false }); assert.equal(cleared.status, "inactive"); assert.match(cleared.cancellation, /cleared/);
   const failed = reconcileGoalState(running, { status: "error", active: false }); assert.equal(failed.status, "paused");
 });
+
+
+test("recovery validates admitted continuation and automatic compaction records", () => {
+  const running = beginExecution(inactiveExecutionState("s"), { lifecycleId: "life", driverGoalId: "goal" });
+  const admitted = nextExecutionState(running, { cycle: 2, admittedContinuation: { identity: "goal:1", goalId: "goal", continuationsUsed: 1, cycle: 2, mode: "execution-continue", compaction: { requestId: "request", markerId: "marker", status: "pending" } } });
+  const record = (data) => [{ type: "custom", customType: EXECUTION_STATE_ENTRY_TYPE, data }];
+  assert.equal(latestExecutionState(record(admitted), "s").admittedContinuation.compaction.status, "pending");
+  for (const invalid of [
+    { ...admitted.admittedContinuation, identity: "other:1" },
+    { ...admitted.admittedContinuation, mode: "unknown" },
+    { ...admitted.admittedContinuation, compaction: { ...admitted.admittedContinuation.compaction, markerId: "" } },
+    { ...admitted.admittedContinuation, compaction: { ...admitted.admittedContinuation.compaction, status: "unknown" } },
+    { ...admitted.admittedContinuation, compaction: { ...admitted.admittedContinuation.compaction, status: "succeeded", outcome: "reload-interrupted" } },
+    { ...admitted.admittedContinuation, compaction: { ...admitted.admittedContinuation.compaction, status: "pending", outcome: "compacted" } },
+  ]) {
+    assert.throws(() => latestExecutionState(record({ ...admitted, admittedContinuation: invalid }), "s"), /invalid state record/);
+  }
+});

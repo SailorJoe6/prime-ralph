@@ -82,14 +82,36 @@ export function latestGoalState(entries) {
   return null;
 }
 
+const EXECUTION_COMPACTION_STATUSES = new Set(["pending", "succeeded", "short-session", "already-compacted", "failed", "interrupted", "resume-requested", "admitted"]);
+const EXECUTION_COMPACTION_OUTCOMES = new Set(["compacted", "recovered-compaction", "short-session", "already-compacted", "failed", "unexpected-result", "reload-interrupted", "projected-before-boundary", "request-threw"]);
+
+function validAdmittedContinuation(value) {
+  if (value == null) return true;
+  if (!(typeof value.identity === "string" && value.identity && typeof value.goalId === "string" && value.goalId &&
+    Number.isInteger(value.continuationsUsed) && value.continuationsUsed >= 0 && value.identity === `${value.goalId}:${value.continuationsUsed}` &&
+    Number.isInteger(value.cycle) && value.cycle >= 1 && EXECUTION_MODES.includes(value.mode))) return false;
+  const compaction = value.compaction;
+  if (compaction == null) return true;
+  if (!(typeof compaction.requestId === "string" && Boolean(compaction.requestId) &&
+    typeof compaction.markerId === "string" && Boolean(compaction.markerId) && EXECUTION_COMPACTION_STATUSES.has(compaction.status) &&
+    (compaction.outcome == null || EXECUTION_COMPACTION_OUTCOMES.has(compaction.outcome)))) return false;
+  if (compaction.status === "pending") return compaction.outcome == null;
+  if (compaction.status === "succeeded") return new Set(["compacted", "recovered-compaction"]).has(compaction.outcome);
+  if (["short-session", "already-compacted"].includes(compaction.status)) return compaction.outcome === compaction.status;
+  if (compaction.status === "failed") return new Set(["failed", "unexpected-result"]).has(compaction.outcome);
+  if (compaction.status === "interrupted") return compaction.outcome === "reload-interrupted";
+  return true;
+}
+
 function validLifecycleState(value, sessionId) {
   if (!(value && value.source === "prime-ralph" && value.protocolVersion === EXECUTION_PROTOCOL_VERSION && value.sessionId === sessionId &&
     EXECUTION_STATUSES.includes(value.status) && ["planning", "execution", "blocked"].includes(value.phase) && Number.isInteger(value.transition) && value.transition >= 0 &&
-    Number.isInteger(value.cycle) && value.cycle >= 0)) return false;
+    Number.isInteger(value.cycle) && value.cycle >= 0 && validAdmittedContinuation(value.admittedContinuation))) return false;
   const validPhaseStatus = (value.phase === "planning" && value.status === "inactive") ||
     (value.phase === "execution" && ["running", "waiting", "paused"].includes(value.status)) ||
     (value.phase === "blocked" && value.status === "inactive");
   if (!validPhaseStatus) return false;
+  if (value.phase === "execution" && value.admittedContinuation && value.admittedContinuation.cycle !== value.cycle) return false;
   if (value.status !== "inactive" && (typeof value.lifecycleId !== "string" || !value.lifecycleId || value.cycle < 1)) return false;
   if (value.status === "waiting" && (!value.wait || typeof value.wait.id !== "string" || !value.wait.id)) return false;
   if (value.status !== "waiting" && value.wait != null) return false;
@@ -145,7 +167,7 @@ export function nextExecutionState(current, patch) {
 
 export function beginExecution(current, { lifecycleId, driverGoalId = null }) {
   if (current.status !== "inactive" || current.phase === "blocked") throw new Error(`cannot start execution while Ralph lifecycle is ${current.status} in ${current.phase} phase`);
-  return nextExecutionState(current, { phase: "execution", status: "running", lifecycleId, cycle: 1, driverGoalId, pendingDecision: null, wait: null, provenanceId: null, forwardConfirmed: false });
+  return nextExecutionState(current, { phase: "execution", status: "running", lifecycleId, cycle: 1, driverGoalId, pendingDecision: null, wait: null, provenanceId: null, forwardConfirmed: false, admittedContinuation: null });
 }
 
 export function reconcileGoalState(current, goal) {

@@ -24,6 +24,17 @@ import {
 } from "./planning-transaction.js";
 import { isFinalNormalAssistantTurn } from "./cycle-boundary-poc.js";
 import { RESET_MESSAGE_TYPE } from "./reset-context.js";
+import {
+  EXECUTION_COMPACTION_MARKER_TYPE,
+  EXECUTION_COMPACTION_PROTOCOL_VERSION,
+  executionCompactionInstructions,
+  executionCompactionRequestId,
+  hasExecutionBoundary,
+  hasExecutionCompaction,
+  isExecutionCompactionMarker,
+  isExecutionCompactionSummary,
+  latestExecutionCompactionMarker,
+} from "./execution-boundary-compaction.js";
 
 function assertState(value, label) {
   if (!new Set(["absent", "existing"]).has(value)) throw new TypeError(`unsupported ${label} state: ${value}`);
@@ -74,7 +85,7 @@ export function createWorkflowExtension({
   appendLog = appendExecutionLogEntry, createRequestId = randomUUID, now = () => new Date(), closeoutTimeoutMs = 30_000,
 } = {}) {
   return function workflowExtension(pi) {
-    const startupSessions = new Set(), sessionPhases = new Map(), executionStates = new Map(), activeLifecycleTurns = new Map(), activeBlockedTurns = new Set(), executionRoundBoundaries = new Map(), lifecycleCloseoutWaiters = new Map(), completedLifecycleCloseouts = new Map();
+    const startupSessions = new Set(), sessionPhases = new Map(), executionStates = new Map(), activeLifecycleTurns = new Map(), activeBlockedTurns = new Set(), executionRoundBoundaries = new Map(), lifecycleCloseoutWaiters = new Map(), completedLifecycleCloseouts = new Map(), activeAutomaticCompactions = new Set(), queuedAutomaticCompactionBoundaries = new Set(), projectedAutomaticCompactionBoundaries = new Set();
     const sessionId = (ctx) => ctx.sessionManager.getSessionId();
     const closeoutIdentity = (message) => JSON.stringify([message?.timestamp ?? null, message?.stopReason ?? null, createHash("sha256").update(assistantText(message)).digest("hex")]);
     const finalAssistantImmediatelyBefore = (messages, beforeIndex) => {
@@ -116,6 +127,141 @@ export function createWorkflowExtension({
     };
     const persistExecution = (ctx, state) => {
       pi.appendEntry(EXECUTION_STATE_ENTRY_TYPE, state); executionStates.set(sessionId(ctx), state); return state;
+    };
+    const automaticCompactionCorrelation = (state) => ({
+      sessionId: state.sessionId,
+      lifecycleId: state.lifecycleId,
+      cycle: state.admittedContinuation?.cycle,
+      goalId: state.admittedContinuation?.goalId,
+      continuationsUsed: state.admittedContinuation?.continuationsUsed,
+      boundaryIdentity: state.admittedContinuation?.identity,
+    });
+    const updateAutomaticCompaction = (ctx, state, patch) => persistExecution(ctx, nextExecutionState(state, {
+      admittedContinuation: { ...state.admittedContinuation, compaction: { ...state.admittedContinuation?.compaction, ...patch } },
+    }));
+    const executionBoundaryMessage = (ctx, state, mode, automaticCompactionRequestId) => {
+      const id = sessionId(ctx), identity = state.admittedContinuation?.identity;
+      let message = executionRoundBoundaries.get(id)?.identity === identity ? executionRoundBoundaries.get(id).message : null;
+      if (!message) {
+        message = { role: "custom", customType: EXECUTION_MESSAGE_TYPE, content: executeContent(ctx, state, mode), display: false, details: { source: "prime-ralph", protocolVersion: EXECUTION_PROTOCOL_VERSION, requestId: createRequestId(), sessionId: id, workflowPhase: "execution", invocationMode: mode, lifecycleId: state.lifecycleId, cycle: state.cycle, goalId: state.admittedContinuation?.goalId, continuationsUsed: state.admittedContinuation?.continuationsUsed, boundaryIdentity: identity, preserveTrigger: false } };
+      }
+      if (automaticCompactionRequestId && message.details?.automaticCompactionRequestId !== automaticCompactionRequestId) {
+        message = { ...message, details: { ...message.details, automaticCompactionRequestId } };
+      }
+      executionRoundBoundaries.set(id, { identity, message });
+      return message;
+    };
+    const automaticCompactionState = (state) => state.admittedContinuation?.compaction;
+    const automaticCompactionOwnsInterruptedRun = (state) => {
+      const status = automaticCompactionState(state)?.status;
+      return new Set(["pending", "succeeded", "short-session", "already-compacted", "failed", "interrupted", "resume-requested"]).has(status);
+    };
+    const admitAutomaticCompactionBoundary = (ctx, state) => {
+      const compaction = automaticCompactionState(state), admitted = state.admittedContinuation;
+      if (!compaction || !admitted || state.phase !== "execution" || state.status !== "running") return false;
+      const correlation = { ...automaticCompactionCorrelation(state), requestId: compaction.requestId, markerId: compaction.markerId };
+      const currentEntries = branch(ctx);
+      if (hasExecutionBoundary(currentEntries, correlation)) {
+        queuedAutomaticCompactionBoundaries.delete(compaction.requestId);
+        if (compaction.status !== "admitted") updateAutomaticCompaction(ctx, state, { status: "admitted" });
+        return false;
+      }
+      if (queuedAutomaticCompactionBoundaries.has(compaction.requestId)) return false;
+      let live = state;
+      if (compaction.status !== "resume-requested") {
+        try { live = updateAutomaticCompaction(ctx, live, { status: "resume-requested" }); }
+        catch (error) { ctx.ui.notify("Ralph recorded the clean execution boundary but could not journal its resume request; recovery will verify the durable marker.", "warning"); }
+      }
+      const message = executionBoundaryMessage(ctx, live, admitted.mode, compaction.requestId);
+      try {
+        pi.sendMessage(message, { triggerTurn: true, deliverAs: "steer" });
+        queuedAutomaticCompactionBoundaries.add(compaction.requestId);
+        return true;
+      } catch (error) {
+        ctx.ui.notify("Ralph could not re-admit the compacted execution boundary; reload or retry recovery without starting another goal.", "error");
+        return false;
+      }
+    };
+    const finishAutomaticCompaction = (ctx, request, status, outcome) => {
+      activeAutomaticCompactions.delete(request.requestId);
+      let live = execution(ctx, { reconcile: false });
+      const compaction = automaticCompactionState(live), admitted = live.admittedContinuation;
+      if (!compaction || compaction.requestId !== request.requestId || admitted?.identity !== request.boundaryIdentity) return;
+      const boundaryAlreadyStarted = compaction.status === "admitted";
+      try { live = updateAutomaticCompaction(ctx, live, { status: boundaryAlreadyStarted ? "admitted" : status, outcome }); }
+      catch (error) { ctx.ui.notify("Ralph execution compaction finished, but its outcome journal could not be appended; recovery will inspect the session entries.", "warning"); }
+      if (!boundaryAlreadyStarted) admitAutomaticCompactionBoundary(ctx, live);
+    };
+    const startAutomaticCompaction = (ctx, state) => {
+      const admitted = state.admittedContinuation;
+      if (!admitted || automaticCompactionState(state) || ctx.hasPendingMessages?.()) return state;
+      const correlation = automaticCompactionCorrelation(state);
+      let marker = latestExecutionCompactionMarker(branch(ctx), correlation);
+      if (!marker) {
+        const requestId = createRequestId();
+        try {
+          pi.appendEntry(EXECUTION_COMPACTION_MARKER_TYPE, { source: "prime-ralph", protocolVersion: EXECUTION_COMPACTION_PROTOCOL_VERSION, requestId, ...correlation });
+          marker = branch(ctx).at(-1);
+          if (!isExecutionCompactionMarker(marker, { requestId, ...correlation })) throw new Error("execution compaction marker was not durably observable");
+        } catch (error) {
+          ctx.ui.notify("Ralph kept the clean projected execution boundary, but could not journal the optional compaction request; it will retry at a later safe provider boundary.", "warning");
+          return state;
+        }
+      }
+      const request = { requestId: marker.data.requestId, markerId: marker.id, ...correlation };
+      let live = state;
+      const compacted = hasExecutionCompaction(branch(ctx), request);
+      try { live = updateAutomaticCompaction(ctx, live, { requestId: request.requestId, markerId: request.markerId, status: compacted ? "succeeded" : "pending", ...(compacted ? { outcome: "recovered-compaction" } : {}) }); }
+      catch (error) {
+        ctx.ui.notify("Ralph kept the clean projected execution boundary, but could not journal the optional compaction state; recovery will reuse its durable marker.", "warning");
+        return state;
+      }
+      executionBoundaryMessage(ctx, live, admitted.mode, request.requestId);
+      if (compacted) { admitAutomaticCompactionBoundary(ctx, live); return live; }
+      if (activeAutomaticCompactions.has(request.requestId)) return live;
+      activeAutomaticCompactions.add(request.requestId);
+      let requested = false;
+      try {
+        ctx.compact({
+          customInstructions: executionCompactionInstructions(request.requestId),
+          onComplete: (result) => {
+            const valid = result?.summary === "" && result?.firstKeptEntryId === request.markerId && hasExecutionCompaction(branch(ctx), request);
+            finishAutomaticCompaction(ctx, request, valid ? "succeeded" : "failed", valid ? "compacted" : "unexpected-result");
+          },
+          onError: (error) => {
+            const reason = String(error?.message ?? error);
+            const status = reason.includes("Session is too short to compact") ? "short-session" : reason.includes("Already compacted") ? "already-compacted" : "failed";
+            finishAutomaticCompaction(ctx, request, status, status);
+          },
+        });
+        requested = true;
+        admitAutomaticCompactionBoundary(ctx, live);
+      } catch (error) {
+        if (!requested) {
+          activeAutomaticCompactions.delete(request.requestId);
+          try { live = updateAutomaticCompaction(ctx, live, { status: "admitted", outcome: "request-threw" }); }
+          catch {}
+          ctx.ui.notify("Ralph kept the clean projected execution boundary after the optional compaction request failed to start.", "warning");
+        } else {
+          ctx.ui.notify("Ralph requested execution compaction but could not queue its correlated boundary; recovery will retry from durable state.", "error");
+        }
+      }
+      return live;
+    };
+    const recoverAutomaticCompaction = (ctx, state) => {
+      const compaction = automaticCompactionState(state), admitted = state.admittedContinuation;
+      if (!compaction || !admitted || state.phase !== "execution" || state.status !== "running") return false;
+      const correlation = { ...automaticCompactionCorrelation(state), requestId: compaction.requestId, markerId: compaction.markerId };
+      if (hasExecutionBoundary(branch(ctx), correlation)) {
+        if (compaction.status !== "admitted") updateAutomaticCompaction(ctx, state, { status: "admitted" });
+        return false;
+      }
+      let live = state;
+      if (compaction.status === "pending" || compaction.status === "admitted") {
+        const compacted = hasExecutionCompaction(branch(ctx), correlation);
+        live = updateAutomaticCompaction(ctx, live, { status: compacted ? "succeeded" : "interrupted", outcome: compacted ? "recovered-compaction" : "reload-interrupted" });
+      }
+      return admitAutomaticCompactionBoundary(ctx, live);
     };
     const hasPendingTerminalLog = (state) => ["block", "complete"].includes(state.pendingDecision?.action);
     const finishPendingExecutionLog = (ctx, state) => {
@@ -451,6 +597,19 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
       }
     });
 
+    pi.on("session_before_compact", (event, ctx) => {
+      const requestId = executionCompactionRequestId(event.customInstructions);
+      if (!requestId) return;
+      const live = execution(ctx, { reconcile: false }), compaction = automaticCompactionState(live);
+      if (!compaction || !["pending", "resume-requested"].includes(compaction.status) || compaction.requestId !== requestId) return { cancel: true };
+      const marker = event.branchEntries.find((entry) => entry.id === compaction.markerId);
+      if (!isExecutionCompactionMarker(marker, { requestId, ...automaticCompactionCorrelation(live) })) return { cancel: true };
+      return { compaction: {
+        summary: "", firstKeptEntryId: marker.id, tokensBefore: event.preparation.tokensBefore,
+        details: { source: "prime-ralph", protocolVersion: EXECUTION_COMPACTION_PROTOCOL_VERSION, requestId, kind: "execution-boundary", lifecycleId: live.lifecycleId, cycle: live.cycle, boundaryIdentity: live.admittedContinuation.identity },
+      } };
+    });
+
     pi.on("context", async (event, ctx) => {
       let live = execution(ctx), id = sessionId(ctx);
       const lastUserIndex = event.messages.findLastIndex((message) => message?.role === "user");
@@ -458,13 +617,10 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
       const admitted = live.admittedContinuation;
       const admittedGoalIndex = admitted ? event.messages.findLastIndex((message) => message?.role === "custom" && message.customType === "goal_context" && message.details?.kind === "continuation" && message.details?.goalId === admitted.goalId && message.details?.continuationsUsed === admitted.continuationsUsed) : -1;
       if (live.phase === "execution" && live.status === "running" && admittedGoalIndex >= 0 && admitted?.cycle === live.cycle && (goalIndex === admittedGoalIndex || goalIndex < lastUserIndex)) {
-        let message = executionRoundBoundaries.get(id)?.identity === admitted.identity ? executionRoundBoundaries.get(id).message : null;
-        if (!message) {
-          message = { role: "custom", customType: EXECUTION_MESSAGE_TYPE, content: executeContent(ctx, live, admitted.mode), display: false, details: { source: "prime-ralph", protocolVersion: EXECUTION_PROTOCOL_VERSION, requestId: createRequestId(), sessionId: id, workflowPhase: "execution", invocationMode: admitted.mode, lifecycleId: live.lifecycleId, cycle: live.cycle, boundaryIdentity: admitted.identity, preserveTrigger: false } };
-          executionRoundBoundaries.set(id, { identity: admitted.identity, message });
-        }
+        const message = executionBoundaryMessage(ctx, live, admitted.mode, admitted.compaction?.requestId);
+        if (!automaticCompactionState(live)) live = startAutomaticCompaction(ctx, live);
         const tail = event.messages.slice(admittedGoalIndex + 1).filter((candidate) => candidate?.role !== "custom" || candidate.customType !== "goal_context" || candidate.details?.kind !== "continuation");
-        return { messages: [message, ...tail] };
+        return { messages: [executionBoundaryMessage(ctx, live, admitted.mode, automaticCompactionState(live)?.requestId), ...tail] };
       }
       if (live.phase === "execution" && live.status === "running" && goalIndex > lastUserIndex) {
         const goalMessage = event.messages[goalIndex], goalId = goalMessage.details?.goalId, continuationsUsed = goalMessage.details?.continuationsUsed;
@@ -474,11 +630,11 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
         }
         const boundaryIdentity = `${goalId}:${continuationsUsed}`;
         if (live.admittedContinuation?.identity === boundaryIdentity && live.admittedContinuation?.cycle === live.cycle) {
-          let message = executionRoundBoundaries.get(id)?.identity === boundaryIdentity ? executionRoundBoundaries.get(id).message : null;
-          if (!message) {
-            const mode = live.admittedContinuation.mode;
-            message = { role: "custom", customType: EXECUTION_MESSAGE_TYPE, content: executeContent(ctx, live, mode), display: false, details: { source: "prime-ralph", protocolVersion: EXECUTION_PROTOCOL_VERSION, requestId: createRequestId(), sessionId: id, workflowPhase: "execution", invocationMode: mode, lifecycleId: live.lifecycleId, cycle: live.cycle, boundaryIdentity, preserveTrigger: false } };
-            executionRoundBoundaries.set(id, { identity: boundaryIdentity, message });
+          const mode = live.admittedContinuation.mode;
+          let message = executionBoundaryMessage(ctx, live, mode, automaticCompactionState(live)?.requestId);
+          if (!automaticCompactionState(live)) {
+            live = startAutomaticCompaction(ctx, live);
+            message = executionBoundaryMessage(ctx, live, mode, automaticCompactionState(live)?.requestId);
           }
           return { messages: [message, ...event.messages.slice(goalIndex + 1)] };
         }
@@ -500,7 +656,7 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
         if (live.pendingDecision?.action === "continue" && typeof live.pendingDecision.finalAssistantMessage === "string") {
           try {
             appendLog({ cwd: ctx.cwd, sessionId: id, lifecycleId: live.lifecycleId, action: live.pendingDecision.action, phase: "execute", cycle: live.cycle, finalAssistantMessage: live.pendingDecision.finalAssistantMessage, timestamp: new Date(live.pendingDecision.timestamp) });
-            live = persistExecution(ctx, nextExecutionState(live, { cycle: live.cycle + 1, pendingDecision: null, resetRequested: false }));
+            live = persistExecution(ctx, nextExecutionState(live, { cycle: live.cycle + 1, pendingDecision: null, resetRequested: false, admittedContinuation: null }));
           } catch (error) {
             ctx.abort(); persistExecution(ctx, nextExecutionState(live, { status: "paused", pendingDecision: null, wait: null, pauseReason: `execution boundary commit failed: ${error.message}` }));
             ctx.ui.notify(`Ralph execution boundary failed safely: ${error.message}`, "error"); return { messages: [] };
@@ -511,14 +667,24 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
         }
         const mode = resetForBoundary ? "execution-reset-running" : resumedForBoundary ? "execution-resume" : "execution-continue";
         live = persistExecution(ctx, nextExecutionState(live, { admittedContinuation: { identity: boundaryIdentity, goalId, continuationsUsed, cycle: live.cycle, mode }, resumed: false }));
-        const message = { role: "custom", customType: EXECUTION_MESSAGE_TYPE, content: executeContent(ctx, resetForBoundary ? { ...live, resetRequested: true } : live, mode), display: false, details: { source: "prime-ralph", protocolVersion: EXECUTION_PROTOCOL_VERSION, requestId: createRequestId(), sessionId: id, workflowPhase: "execution", invocationMode: mode, lifecycleId: live.lifecycleId, cycle: live.cycle, boundaryIdentity, preserveTrigger: false } };
-        executionRoundBoundaries.set(id, { identity: boundaryIdentity, message });
+        let message = executionBoundaryMessage(ctx, resetForBoundary ? { ...live, resetRequested: true } : live, mode);
+        live = startAutomaticCompaction(ctx, live);
+        message = executionBoundaryMessage(ctx, resetForBoundary ? { ...live, resetRequested: true } : live, mode, automaticCompactionState(live)?.requestId);
         return { messages: [message, ...event.messages.slice(goalIndex + 1)] };
       }
       if (live.pendingDecision?.action === "continue" && typeof live.pendingDecision.finalAssistantMessage === "string" && lastUserIndex > goalIndex) return;
+      const compaction = automaticCompactionState(live);
+      const compactedBoundaryIndex = compaction ? event.messages.findLastIndex((message) => message?.role === "custom" && message.customType === EXECUTION_MESSAGE_TYPE && message.details?.automaticCompactionRequestId === compaction.requestId && message.details?.boundaryIdentity === admitted?.identity) : -1;
+      const compactedSummaryIndex = compaction ? event.messages.findLastIndex((message) => isExecutionCompactionSummary(message, compaction.requestId)) : -1;
+      if (live.phase === "execution" && live.status === "running" && admitted && compaction && compactedBoundaryIndex < 0 && compactedSummaryIndex >= 0) {
+        if (compaction.status !== "admitted") live = updateAutomaticCompaction(ctx, live, { status: "admitted", outcome: compaction.outcome ?? "projected-before-boundary" });
+        projectedAutomaticCompactionBoundaries.add(compaction.requestId); activeLifecycleTurns.set(id, { kind: "execute" });
+        const tail = event.messages.slice(compactedSummaryIndex + 1).filter((message) => message?.role !== "compactionSummary");
+        return { messages: [executionBoundaryMessage(ctx, live, admitted.mode, compaction.requestId), ...tail] };
+      }
       const newestRalphPhase = [...event.messages].reverse().find((message) => message?.role === "custom" && message.details?.source === "prime-ralph" && [EXECUTION_MESSAGE_TYPE, BLOCKED_MESSAGE_TYPE, PLANNING_MESSAGE_TYPE, PLANNING_STARTUP_MESSAGE_TYPE, SPECIFICATION_MESSAGE_TYPE, STARTUP_PREPARE_MESSAGE_TYPE, RESET_MESSAGE_TYPE].includes(message.customType));
       if (!newestRalphPhase) return;
-      if (live.phase === "execution" && live.status !== "inactive" && newestRalphPhase.customType === EXECUTION_MESSAGE_TYPE) {
+      if (((live.phase === "execution" && live.status !== "inactive") || activeLifecycleTurns.get(id)?.kind === "execute") && newestRalphPhase.customType === EXECUTION_MESSAGE_TYPE) {
         const messages = executionContextProjection(event.messages, { allowedTypes: [EXECUTION_MESSAGE_TYPE], lifecycleId: live.lifecycleId });
         if (messages) return { messages };
       }
@@ -556,7 +722,18 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
     });
 
     pi.on("message_start", (event, ctx) => {
-      const message = event.message, id = sessionId(ctx), live = execution(ctx, { reconcile: false });
+      const message = event.message, id = sessionId(ctx); let live = execution(ctx, { reconcile: false });
+      const automaticRequestId = message?.customType === EXECUTION_MESSAGE_TYPE ? message.details?.automaticCompactionRequestId : undefined;
+      const admitted = live.admittedContinuation, compaction = automaticCompactionState(live);
+      const matchingAutomaticBoundary = automaticRequestId && message.details?.source === "prime-ralph" && message.details?.protocolVersion === EXECUTION_PROTOCOL_VERSION &&
+        compaction?.requestId === automaticRequestId && admitted?.identity === message.details?.boundaryIdentity && live.lifecycleId === message.details?.lifecycleId &&
+        admitted?.cycle === message.details?.cycle && admitted?.goalId === message.details?.goalId && admitted?.continuationsUsed === message.details?.continuationsUsed;
+      if (matchingAutomaticBoundary) {
+        queuedAutomaticCompactionBoundaries.delete(automaticRequestId);
+        const alreadyProjected = projectedAutomaticCompactionBoundaries.delete(automaticRequestId);
+        if (compaction.status !== "admitted") live = updateAutomaticCompaction(ctx, live, { status: "admitted" });
+        if (alreadyProjected) { ctx.abort(); return; }
+      }
       if ((message?.role === "user" && live.status === "waiting") || message?.customType === "goal_context" || message?.customType === EXECUTION_MESSAGE_TYPE || (message?.customType === RESET_MESSAGE_TYPE && message.details?.workflowPhase === "execution" && message.details?.invocationMode !== "execution-reset-paused")) {
         activeLifecycleTurns.set(id, { kind: "execute" });
       }
@@ -571,7 +748,7 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
       if (!activeLifecycleTurns.has(id)) { settleLifecycleCloseout(id); return; }
       const live = execution(ctx, { reconcile: false });
       try {
-        if (live.phase === "execution" && live.status === "running") persistExecution(ctx, nextExecutionState(live, { status: "paused", pendingDecision: null, wait: null, pauseReason: "execution agent ended without normal closeout" }));
+        if (live.phase === "execution" && live.status === "running" && !automaticCompactionOwnsInterruptedRun(live)) persistExecution(ctx, nextExecutionState(live, { status: "paused", pendingDecision: null, wait: null, pauseReason: "execution agent ended without normal closeout" }));
       } finally { activeLifecycleTurns.delete(id); settleLifecycleCloseout(id); }
     });
 
@@ -629,6 +806,7 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
         } else if (live.phase === "execution" && live.status !== "inactive" && (specification.state !== "existing" || plan.state !== "existing")) {
           live = persistExecution(ctx, nextExecutionState(live, { phase: "planning", status: "inactive", pendingDecision: null, wait: null, cancellation: "active planning pair unavailable during recovery" }));
         }
+        if (recoverAutomaticCompaction(ctx, live)) { setPhase(ctx, "execution"); startupSessions.add(id); return; }
       } catch (error) { ctx.ui.notify(`Ralph could not start safely. ${error.message}`, "error"); return; }
       const recovered = latestSessionPhase(branch(ctx), id); if (recovered && !["execution", "blocked"].includes(recovered)) sessionPhases.set(id, recovered);
       const phase = recovered && !["execution", "blocked"].includes(recovered) ? recovered : specification.state === "existing" ? "planning" : "specification";

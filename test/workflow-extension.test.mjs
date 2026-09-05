@@ -11,9 +11,9 @@ const specSkill = { path: "/project/.ralph/skills/spec-it-out/SKILL.md", text: "
 const planSkill = { path: "/project/.ralph/skills/plan/SKILL.md", text: "---\nname: plan\ndescription: test\nprime-ralph-invocation-version: 1\n---\nplan body" };
 const executeSkill = { path: "/project/.ralph/skills/execute/SKILL.md", text: "---\nname: execute\ndescription: test\nprime-ralph-invocation-version: 1\n---\nexecute body" };
 const blockedSkill = { path: "/project/.ralph/skills/blocked/SKILL.md", text: "---\nname: blocked\ndescription: test\nprime-ralph-invocation-version: 1\n---\nblocked body" };
-function harness({ specificationState = "absent", planState = "absent", branch = [], inspectSpecError, inspectPlanError, sendError, loadPrepareError, loadPlanError, blockedState = "absent", blockedProofState = "complete", restoredProofState = "unproven", appendFailureAt: initialAppendFailureAt, logFailureAt, sessionId = "session-1", sharedLogs, closeoutTimeoutMs } = {}) {
+function harness({ specificationState = "absent", planState = "absent", branch = [], inspectSpecError, inspectPlanError, sendError, compactError, loadPrepareError, loadPlanError, blockedState = "absent", blockedProofState = "complete", restoredProofState = "unproven", appendFailureAt: initialAppendFailureAt, logFailureAt, sessionId = "session-1", sharedLogs, closeoutTimeoutMs } = {}) {
   const commands = new Map(), tools = new Map(), handlers = new Map(), sent = [], userMessages = [], notices = [], compactions = [], entries = [], logs = sharedLogs ?? [], transactions = [];
-  let spec = specificationState, plan = planState, blocked = blockedState, restored = restoredProofState, blockedLifecycle = [...branch].reverse().find((entry) => entry?.data?.provenanceId)?.data.provenanceId ?? "blocked-life", nextEntry = branch.length, pending = false, idle = true, aborted = 0, appendCalls = 0, appendFailureAt = initialAppendFailureAt, logCalls = 0;
+  let spec = specificationState, plan = planState, blocked = blockedState, restored = restoredProofState, blockedLifecycle = [...branch].reverse().find((entry) => entry?.data?.provenanceId)?.data.provenanceId ?? "blocked-life", nextEntry = branch.length, pending = false, idle = true, aborted = 0, appendCalls = 0, appendFailureAt = initialAppendFailureAt, logCalls = 0, compactFailure = compactError;
   const pi = {
     registerCommand(name, command) { commands.set(name, command); },
     registerTool(tool) { tools.set(tool.name, tool); },
@@ -22,7 +22,8 @@ function harness({ specificationState = "absent", planState = "absent", branch =
     sendUserMessage(message, options) { userMessages.push({ message, options }); },
     sendMessage(message, options) {
       if (sendError) throw sendError;
-      sent.push({ message, options }); branch.push({ type: "custom_message", id: `e${++nextEntry}`, ...message });
+      sent.push({ message, options });
+      if (!message?.details?.automaticCompactionRequestId) branch.push({ type: "custom_message", id: `e${++nextEntry}`, ...message });
     },
   };
   createWorkflowExtension({
@@ -55,7 +56,7 @@ function harness({ specificationState = "absent", planState = "absent", branch =
   const ctx = {
     cwd: "/project", waitForIdle: async () => {}, isIdle: () => idle,
     hasPendingMessages: () => pending, abort: () => { aborted += 1; },
-    compact: (options) => compactions.push(options),
+    compact: (options) => { if (compactFailure) throw compactFailure; compactions.push(options); },
     sessionManager: { getBranch: () => branch, getSessionId: () => sessionId },
     ui: { notify: (...args) => notices.push(args) },
   };
@@ -66,7 +67,7 @@ function harness({ specificationState = "absent", planState = "absent", branch =
     await emit("message_start", { message: { role: "custom", ...message } });
     await emit("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] });
   };
-  return { commands, tools, handlers, sent, userMessages, notices, branch, entries, compactions, logs, transactions, ctx, emit, fallback, settle, state: () => latestExecutionState(branch, sessionId), addGoal: (data) => branch.push({ type: "custom", customType: "thread_goal_state", data }), setPending: (value) => { pending = value; }, setIdle: (value) => { idle = value; }, aborted: () => aborted, setSpecification: (value) => { spec = value; }, setPlan: (value) => { plan = value; }, setRestored: (value) => { restored = value; }, setBlocked: (value) => { blocked = value; }, failStateAppendIn: (offset) => { appendFailureAt = appendCalls + offset; }, logAttempts: () => logCalls };
+  return { commands, tools, handlers, sent, userMessages, notices, branch, entries, compactions, logs, transactions, ctx, emit, fallback, settle, state: () => latestExecutionState(branch, sessionId), addGoal: (data) => branch.push({ type: "custom", customType: "thread_goal_state", data }), setPending: (value) => { pending = value; }, setIdle: (value) => { idle = value; }, setCompactError: (value) => { compactFailure = value; }, persistSent: (index = sent.length - 1) => { const message = sent.at(index)?.message; if (message && !branch.some((entry) => entry.type === "custom_message" && entry.details?.requestId === message.details?.requestId)) branch.push({ type: "custom_message", id: `e${++nextEntry}`, ...message }); }, aborted: () => aborted, setSpecification: (value) => { spec = value; }, setPlan: (value) => { plan = value; }, setRestored: (value) => { restored = value; }, setBlocked: (value) => { blocked = value; }, failStateAppendIn: (offset) => { appendFailureAt = appendCalls + offset; }, logAttempts: () => logCalls };
 }
 
 test("registers the complete Slice 5 command and lifecycle-control surface", () => {
@@ -838,4 +839,168 @@ test("stale or replaced native goal continuations fail closed", async () => {
   const stale = { role: "custom", customType: "goal_context", content: "old", details: { kind: "continuation", goalId: "old", continuationsUsed: 4 } };
   const result = await h.handlers.get("context").at(-1)({ messages: [stale] }, h.ctx);
   assert.deepEqual(result.messages, []); assert.equal(h.state().status, "paused"); assert.equal(h.aborted(), 1);
+});
+
+
+async function prepareAutomaticCompaction(h, { goalId = "goal-auto", text = "pass one" } = {}) {
+  const initial = await startExecution(h);
+  h.addGoal({ goalId, status: "active", active: true });
+  await control(h, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 });
+  await h.emit("turn_end", finalEvent(text));
+  const goalMessage = { role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId, continuationsUsed: 1 } };
+  await h.emit("message_start", { message: goalMessage });
+  const projected = await h.handlers.get("context").at(-1)({ messages: [{ role: "user", content: "stale" }, goalMessage] }, h.ctx);
+  const options = h.compactions.at(-1), compaction = h.state().admittedContinuation.compaction;
+  return { initial, goalMessage, projected, options, compaction };
+}
+
+async function automaticBeforeCompact(h, customInstructions) {
+  for (const handler of h.handlers.get("session_before_compact") ?? []) {
+    const result = await handler({ customInstructions, branchEntries: h.branch, preparation: { tokensBefore: 5000 } }, h.ctx);
+    if (result !== undefined) return result;
+  }
+}
+
+test("automatic continuation compaction uses an exact marker and re-admits one correlated boundary", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" });
+  const { projected, options, compaction } = await prepareAutomaticCompaction(h);
+  assert.equal(h.compactions.length, 2); assert.equal(compaction.status, "resume-requested"); assert.equal(h.sent.at(-1).options.deliverAs, "steer");
+  assert.equal(projected.messages.length, 1); assert.equal(projected.messages[0].customType, EXECUTION_MESSAGE_TYPE);
+  assert.equal(projected.messages[0].details.automaticCompactionRequestId, compaction.requestId);
+  const replacement = await automaticBeforeCompact(h, options.customInstructions);
+  assert.equal(replacement.compaction.summary, ""); assert.equal(replacement.compaction.firstKeptEntryId, compaction.markerId); assert.equal(replacement.compaction.tokensBefore, 5000);
+  h.branch.push({ type: "compaction", id: "compact-1", summary: "", firstKeptEntryId: compaction.markerId, customInstructions: options.customInstructions });
+  const sentBefore = h.sent.length; options.onComplete({ summary: "", firstKeptEntryId: compaction.markerId, tokensBefore: 5000 });
+  assert.equal(h.sent.length, sentBefore); assert.equal(h.sent.at(-1).message.details.boundaryIdentity, "goal-auto:1");
+  assert.equal(h.sent.at(-1).message.details.automaticCompactionRequestId, compaction.requestId); assert.equal(h.state().admittedContinuation.compaction.status, "succeeded");
+  await h.emit("agent_end", { messages: [] }); assert.equal(h.state().status, "running");
+  await h.emit("message_start", { message: { role: "custom", ...h.sent.at(-1).message } });
+  assert.equal(h.state().admittedContinuation.compaction.status, "admitted"); h.persistSent();
+  options.onComplete({ summary: "", firstKeptEntryId: compaction.markerId, tokensBefore: 5000 });
+  assert.equal(h.sent.length, sentBefore);
+});
+
+test("automatic compaction leaves reset and ordinary compactions outside its matcher", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" });
+  const { options } = await prepareAutomaticCompaction(h);
+  assert.equal(await automaticBeforeCompact(h, "ordinary user compaction"), undefined);
+  assert.equal(await automaticBeforeCompact(h, "prime-ralph-reset:v2:other"), undefined);
+  const replacement = await automaticBeforeCompact(h, options.customInstructions);
+  assert.ok(replacement.compaction);
+  const marker = h.branch.find((entry) => entry.id === replacement.compaction.firstKeptEntryId); marker.data.lifecycleId = "tampered";
+  assert.deepEqual(await automaticBeforeCompact(h, options.customInstructions), { cancel: true });
+});
+
+test("short, already-compacted, and failed automatic compactions retain projection and resume once", async () => {
+  for (const error of [new Error("Session is too short to compact"), new Error("Already compacted"), new Error("provider unavailable")]) {
+    const h = harness({ specificationState: "existing", planState: "existing" });
+    const { options, compaction, projected } = await prepareAutomaticCompaction(h, { goalId: `goal-${error.message}` });
+    const sentBefore = h.sent.length; options.onError(error);
+    assert.equal(projected.messages[0].details.automaticCompactionRequestId, compaction.requestId);
+    assert.equal(h.sent.length, sentBefore); assert.equal(h.state().status, "running");
+    assert.ok(["short-session", "already-compacted", "failed"].includes(h.state().admittedContinuation.compaction.status));
+    options.onError(error); assert.equal(h.sent.length, sentBefore);
+  }
+});
+
+test("reload recovers pending compaction with and without a durable compaction entry", async () => {
+  for (const compacted of [false, true]) {
+    const branch = [], logs = [];
+    const first = harness({ branch, sharedLogs: logs, specificationState: "existing", planState: "existing", sessionId: `auto-reload-${compacted}` });
+    const { options, compaction } = await prepareAutomaticCompaction(first, { goalId: `goal-reload-${compacted}` });
+    if (compacted) branch.push({ type: "compaction", id: `compact-${compacted}`, summary: "", firstKeptEntryId: compaction.markerId, customInstructions: options.customInstructions });
+    const rebuilt = harness({ branch, sharedLogs: logs, specificationState: "existing", planState: "existing", sessionId: `auto-reload-${compacted}` });
+    await rebuilt.emit("session_start", { reason: "reload" });
+    assert.equal(rebuilt.sent.length, 1); assert.equal(rebuilt.sent[0].message.details.automaticCompactionRequestId, compaction.requestId);
+    assert.equal(rebuilt.state().admittedContinuation.compaction.status, "resume-requested"); assert.equal(logs.length, 1);
+  }
+});
+
+test("reload recognizes a persisted resumed boundary and never sends it twice", async () => {
+  const branch = [], logs = [];
+  const first = harness({ branch, sharedLogs: logs, specificationState: "existing", planState: "existing", sessionId: "auto-reload-admitted" });
+  const { options, compaction } = await prepareAutomaticCompaction(first, { goalId: "goal-reload-admitted" });
+  branch.push({ type: "compaction", id: "compact-admitted", summary: "", firstKeptEntryId: compaction.markerId, customInstructions: options.customInstructions });
+  options.onComplete({ summary: "", firstKeptEntryId: compaction.markerId, tokensBefore: 1 });
+  await first.emit("message_start", { message: { role: "custom", ...first.sent.at(-1).message } }); first.persistSent();
+  const sentCount = first.sent.length;
+  const rebuilt = harness({ branch, sharedLogs: logs, specificationState: "existing", planState: "existing", sessionId: "auto-reload-admitted" });
+  await rebuilt.emit("session_start", { reason: "reload" });
+  assert.equal(rebuilt.sent.length, 0); assert.equal(first.sent.length, sentCount);
+  assert.equal(rebuilt.state().admittedContinuation.compaction.status, "admitted");
+});
+
+
+test("a synchronous compaction request failure leaves the current clean provider admission under normal closeout safety", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" }); const initial = await startExecution(h);
+  h.setCompactError(new Error("request rejected")); h.addGoal({ goalId: "goal-request-throw", status: "active", active: true });
+  await control(h, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 }); await h.emit("turn_end", finalEvent("pass one"));
+  const goalMessage = { role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: "goal-request-throw", continuationsUsed: 1 } };
+  await h.emit("message_start", { message: goalMessage });
+  const projected = await h.handlers.get("context").at(-1)({ messages: [{ role: "user", content: "stale" }, goalMessage] }, h.ctx);
+  assert.equal(projected.messages[0].customType, EXECUTION_MESSAGE_TYPE); assert.equal(h.compactions.length, 1);
+  assert.equal(h.state().admittedContinuation.compaction.status, "admitted"); assert.equal(h.state().admittedContinuation.compaction.outcome, "request-threw");
+  await h.emit("agent_end", { messages: [] }); assert.equal(h.state().status, "paused");
+});
+
+
+test("marker and pending-state append failures keep projection and retry without advancing twice", async () => {
+  for (const failureOffset of [3, 4]) {
+    const h = harness({ specificationState: "existing", planState: "existing" }); const initial = await startExecution(h);
+    h.addGoal({ goalId: `goal-append-${failureOffset}`, status: "active", active: true });
+    await control(h, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 }); await h.emit("turn_end", finalEvent("pass one"));
+    const goalMessage = { role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: `goal-append-${failureOffset}`, continuationsUsed: 1 } };
+    await h.emit("message_start", { message: goalMessage }); h.failStateAppendIn(failureOffset);
+    const context = h.handlers.get("context").at(-1);
+    const first = await context({ messages: [{ role: "user", content: "stale" }, goalMessage] }, h.ctx);
+    assert.equal(first.messages[0].customType, EXECUTION_MESSAGE_TYPE); assert.equal(h.state().cycle, 2); assert.equal(h.compactions.length, 1);
+    const second = await context({ messages: [{ role: "user", content: "stale" }, goalMessage] }, h.ctx);
+    assert.equal(second.messages[0].customType, EXECUTION_MESSAGE_TYPE); assert.equal(h.state().cycle, 2); assert.equal(h.logs.length, 1); assert.equal(h.compactions.length, 2);
+    assert.equal(h.state().admittedContinuation.compaction.status, "resume-requested");
+  }
+});
+
+test("reload repairs admitted state when message_start preceded durable boundary persistence", async () => {
+  const branch = [], logs = [];
+  const first = harness({ branch, sharedLogs: logs, specificationState: "existing", planState: "existing", sessionId: "auto-admitted-window" });
+  const { options, compaction } = await prepareAutomaticCompaction(first, { goalId: "goal-admitted-window" });
+  branch.push({ type: "compaction", id: "compact-admitted-window", summary: "", firstKeptEntryId: compaction.markerId, customInstructions: options.customInstructions });
+  await first.emit("message_start", { message: { role: "custom", ...first.sent.at(-1).message } });
+  const sentBeforeCallback = first.sent.length; options.onComplete({ summary: "", firstKeptEntryId: compaction.markerId, tokensBefore: 1 });
+  assert.equal(first.sent.length, sentBeforeCallback); assert.equal(first.state().admittedContinuation.compaction.status, "admitted");
+  assert.equal(branch.some((entry) => entry.type === "custom_message" && entry.details?.automaticCompactionRequestId === compaction.requestId), false);
+  const rebuilt = harness({ branch, sharedLogs: logs, specificationState: "existing", planState: "existing", sessionId: "auto-admitted-window" });
+  await rebuilt.emit("session_start", { reason: "reload" });
+  assert.equal(rebuilt.sent.length, 1); assert.equal(rebuilt.sent[0].message.details.automaticCompactionRequestId, compaction.requestId);
+  assert.equal(rebuilt.state().admittedContinuation.compaction.status, "resume-requested"); assert.equal(logs.length, 1);
+});
+
+
+test("queued input defers optional compaction while preserving the clean execution projection", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" }); const initial = await startExecution(h);
+  h.addGoal({ goalId: "goal-pending-input", status: "active", active: true });
+  await control(h, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 }); await h.emit("turn_end", finalEvent("pass one"));
+  const goalMessage = { role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: "goal-pending-input", continuationsUsed: 1 } };
+  await h.emit("message_start", { message: goalMessage }); h.setPending(true);
+  const context = h.handlers.get("context").at(-1);
+  const deferred = await context({ messages: [{ role: "user", content: "stale" }, goalMessage] }, h.ctx);
+  assert.equal(deferred.messages[0].customType, EXECUTION_MESSAGE_TYPE); assert.equal(h.compactions.length, 1); assert.equal(h.state().admittedContinuation.compaction, undefined);
+  h.setPending(false); await context({ messages: [{ role: "user", content: "stale" }, goalMessage] }, h.ctx);
+  assert.equal(h.compactions.length, 2); assert.equal(h.state().admittedContinuation.compaction.status, "resume-requested");
+});
+
+test("queued steering selected before a compacted boundary receives projection and suppresses the later duplicate turn", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" });
+  const { initial, options, compaction } = await prepareAutomaticCompaction(h, { goalId: "goal-steering-race" });
+  h.branch.push({ type: "compaction", id: "compact-steering-race", summary: "", firstKeptEntryId: compaction.markerId, customInstructions: options.customInstructions });
+  options.onComplete({ summary: "", firstKeptEntryId: compaction.markerId, tokensBefore: 1 });
+  const summary = { role: "compactionSummary", summary: "", customInstructions: options.customInstructions };
+  const steering = { role: "user", content: "queued steering survives" };
+  const projected = await h.handlers.get("context").at(-1)({ messages: [summary, steering] }, h.ctx);
+  assert.equal(projected.messages[0].customType, EXECUTION_MESSAGE_TYPE); assert.deepEqual(projected.messages.at(-1), steering);
+  assert.equal(h.state().admittedContinuation.compaction.status, "admitted");
+  await control(h, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 2 }); await h.emit("turn_end", finalEvent("steered pass"));
+  const abortedBefore = h.aborted(); await h.emit("message_start", { message: { role: "custom", ...h.sent.at(-1).message } });
+  assert.equal(h.aborted(), abortedBefore + 1); await h.emit("agent_end", { messages: [] });
+  assert.equal(h.state().status, "running"); assert.equal(h.state().pendingDecision.action, "continue");
 });

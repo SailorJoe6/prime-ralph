@@ -53,5 +53,6 @@ export {
 } from "./planning.js";
 
 export * from "./execution.js";
+export * from "./execution-boundary-compaction.js";
 export * from "./execution-log.js";
 export * from "./planning-transaction.js";

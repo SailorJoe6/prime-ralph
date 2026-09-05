@@ -31,13 +31,15 @@ Tracked RLM work can end one Agent run and deliver its terminal message in anoth
 
 This removes any dependency on `turn_end` winning an asynchronous scheduling race while retaining the established closeout and failure-injection path. It also prevents an already-consumed continuation from leaving an active native goal parked until unrelated user or child traffic wakes the session.
 
-## Durable execution-boundary projection
+## Durable hybrid execution boundary
 
 Once a matching native continuation is admitted, its persisted `goalId:continuationsUsed`, lifecycle, and cycle record owns the provider boundary for the whole round. Projection no longer depends on the continuation being newer than the latest user message. Every later provider call reconstructs the same `prepare`-then-`execute` boundary, removes all earlier conversation, and retains every message after the matching `goal_context`, including ordinary steering, `/btw`, queued user input, tracked-child notices, and tool-call/result tails.
 
-The admitted record survives extension reload. Ralph reconstructs the execution injection from durable lifecycle state and the matching retained `goal_context`; it does not advance the cycle or append the previous execution log again. A newer distinct goal continuation still goes through the normal identity and lifecycle checks rather than being hidden by the prior boundary.
+At initial continuation admission, Ralph now appends a dedicated non-model-visible marker and journals its exact session, lifecycle, cycle, native goal, continuation count, and boundary identity. One request-scoped `ctx.compact()` then uses that real marker as `firstKeptEntryId`. The provider projection is returned before the fire-and-forget request, so it remains the guard if provider admission and the compaction-triggered abort are adjacent. The handler accepts only the execution-specific instruction namespace and exact durable marker. It cannot match `/reset` or an ordinary compaction.
 
-This is the immediate safety half of the selected hybrid design. A later increment will add one correlated public-API custom compaction at initial continuation admission, with exact-once recovery after the compaction aborts that host turn. Until that is proven, durable projection remains the provider-facing boundary and no compaction behavior has changed.
+Prime Agent `0.9.1` aborts the active Agent run for public compaction. Ralph first defers the optional request when input is already pending. Otherwise, immediately after invoking the aborting public API, it queues one hidden `prepare`-then-`execute` steer for the same recorded boundary. That synchronous ordering places the boundary ahead of later input rather than waiting for the compaction callback. The resumed message carries the opaque compaction request ID. Its `message_start` records the admitted stage, while reload still requires the exact boundary artifact because Prime Agent persists the custom message only after `message_start`. Duplicate callbacks and reload search the branch using the full session/lifecycle/cycle/goal correlation and do not send a durable boundary again.
+
+Too-short, already-compacted, cancelled, and failed requests retain projection as the safe fallback. Ralph records only a bounded categorical outcome and uses the already queued boundary. If retained steering is selected before that boundary, the durable compaction record reconstructs the clean execution injection around the steering turn and aborts the later duplicate trigger. Reload converts a pending or prematurely admitted request with no compaction entry into an interrupted fallback. If the compaction exists but its exact boundary does not, reload requests that boundary once. None of these recovery steps advances the logical cycle or appends the prior pass log again. A newer distinct goal continuation still goes through normal identity and lifecycle checks and gets its own compaction attempt.
 
 ## Terminal execution-log recovery
 
@@ -47,4 +49,4 @@ If the log append fails, reload or the next same-session workflow transition ret
 
 ## Remaining durability work
 
-Later increments still need failure injection around other state-append positions, driver stop, readiness, and the file transactions that are not already covered. Reset races must also be repeated across extension reload. Each increment must leave a failed operation either safely retryable or durably terminal and must preserve the session JSONL and REPL state.
+Later increments still need the full execution-boundary crash matrix around every marker/state/send append position, plus failure injection around driver stop, readiness, and the file transactions that are not already covered. Reset races must also be repeated across extension reload. Each increment must leave a failed operation either safely retryable or durably terminal and must preserve the session JSONL and REPL state.

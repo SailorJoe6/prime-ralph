@@ -31,6 +31,7 @@
     "./specification": "./src/specification.js",
     "./planning": "./src/planning.js",
     "./execution": "./src/execution.js",
+    "./execution-boundary-compaction": "./src/execution-boundary-compaction.js",
     "./execution-log": "./src/execution-log.js",
     "./planning-transaction": "./src/planning-transaction.js"
   },
