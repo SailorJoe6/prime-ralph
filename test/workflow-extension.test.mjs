@@ -674,15 +674,55 @@ test("startup cancels an outstanding execution whose exact active pair disappear
 });
 
 
-test("one native goal continuation injects once and preserves later tool-call/result tails", async () => {
+test("one admitted continuation remains the clean boundary across steering, child notices, and tool tails", async () => {
   const h = harness({ specificationState: "existing", planState: "existing" }); const initial = await startExecution(h);
   h.addGoal({ goalId: "goal", status: "active", active: true }); await control(h, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 }); await h.emit("turn_end", finalEvent("pass one"));
+  const stale = { role: "user", content: "pre-boundary history" };
   const goalMessage = { role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: "goal", continuationsUsed: 1 } }, context = h.handlers.get("context").at(-1);
-  const first = await context({ messages: [goalMessage] }, h.ctx), transition = h.state().transition;
+  const first = await context({ messages: [stale, goalMessage] }, h.ctx), transition = h.state().transition;
+  const steering = { role: "user", content: "<btw>keep this steering</btw>" };
+  const child = { role: "custom", customType: "rlm_child_result", content: "tracked child finished" };
   const call = { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "x", name: "status", arguments: {} }] }, result = { role: "toolResult", toolCallId: "x", content: [{ type: "text", text: "usable output" }] };
-  const second = await context({ messages: [goalMessage, call, result] }, h.ctx);
-  assert.equal(h.state().transition, transition); assert.equal(second.messages[0].content, first.messages[0].content); assert.deepEqual(second.messages.slice(1), [call, result]); assert.equal(h.logs.length, 1);
+  const second = await context({ messages: [stale, goalMessage, steering, child, call, result] }, h.ctx);
+  assert.equal(h.state().transition, transition); assert.equal(second.messages[0].content, first.messages[0].content);
+  assert.deepEqual(second.messages.slice(1), [steering, child, call, result]); assert.ok(!second.messages.includes(stale)); assert.equal(h.logs.length, 1);
 });
+
+
+test("reload reconstructs the admitted continuation boundary after newer user input", async () => {
+  const branch = [], logs = [];
+  const first = harness({ branch, sharedLogs: logs, specificationState: "existing", planState: "existing", sessionId: "projection-reload" });
+  const initial = await startExecution(first);
+  first.addGoal({ goalId: "goal-reload-projection", status: "active", active: true });
+  await control(first, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 }); await first.emit("turn_end", finalEvent("pass one"));
+  const goalMessage = { role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: "goal-reload-projection", continuationsUsed: 1 } };
+  await first.handlers.get("context").at(-1)({ messages: [{ role: "user", content: "stale" }, goalMessage] }, first.ctx);
+
+  const rebuilt = harness({ branch, sharedLogs: logs, specificationState: "existing", planState: "existing", sessionId: "projection-reload" });
+  await rebuilt.emit("session_start", { reason: "reload" });
+  const steering = { role: "user", content: "newer /btw after reload" };
+  const projected = await rebuilt.handlers.get("context").at(-1)({ messages: [{ role: "user", content: "stale" }, goalMessage, steering] }, rebuilt.ctx);
+  assert.equal(rebuilt.state().cycle, 2); assert.equal(rebuilt.state().admittedContinuation.identity, "goal-reload-projection:1");
+  assert.equal(projected.messages[0].customType, EXECUTION_MESSAGE_TYPE); assert.match(projected.messages[0].content, /"cycle":2/);
+  assert.deepEqual(projected.messages.slice(1), [steering]);
+});
+
+test("a /btw-shaped clone keeps the admitted boundary without consuming a newer continuation", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" }); const initial = await startExecution(h);
+  h.addGoal({ goalId: "goal-side", status: "active", active: true }); await control(h, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 }); await h.emit("turn_end", finalEvent("pass one"));
+  const firstGoal = { role: "custom", customType: "goal_context", content: "first", details: { kind: "continuation", goalId: "goal-side", continuationsUsed: 1 } }, context = h.handlers.get("context").at(-1);
+  await h.emit("message_start", { message: firstGoal }); await context({ messages: [{ role: "user", content: "stale" }, firstGoal] }, h.ctx);
+  await control(h, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 2 }); await h.emit("turn_end", finalEvent("pass two"));
+  const secondGoal = { role: "custom", customType: "goal_context", content: "second", details: { kind: "continuation", goalId: "goal-side", continuationsUsed: 2 } };
+  const sideQuestion = { role: "user", content: "<btw>answer without advancing</btw>" }, before = h.state().transition;
+  const side = await context({ messages: [{ role: "user", content: "stale" }, firstGoal, secondGoal, sideQuestion] }, h.ctx);
+  assert.equal(h.state().transition, before); assert.equal(h.state().cycle, 2); assert.equal(h.state().admittedContinuation.identity, "goal-side:1");
+  assert.deepEqual(side.messages.slice(1), [sideQuestion]); assert.ok(!side.messages.some((message) => message === secondGoal || message.content === "stale"));
+
+  const main = await context({ messages: [{ role: "user", content: "stale" }, firstGoal, secondGoal] }, h.ctx);
+  assert.equal(h.state().cycle, 3); assert.equal(h.state().admittedContinuation.identity, "goal-side:2"); assert.match(main.messages[0].content, /"cycle":3/);
+});
+
 
 test("stale or replaced native goal continuations fail closed", async () => {
   const h = harness({ specificationState: "existing", planState: "existing" }); await startExecution(h); h.addGoal({ goalId: "current", status: "active", active: true });

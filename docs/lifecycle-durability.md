@@ -29,6 +29,14 @@ Prime Agent can make a native goal continuation available after it stores the pa
 
 This removes any dependency on `turn_end` winning an asynchronous scheduling race while retaining the established closeout and failure-injection path. It also prevents an already-consumed continuation from leaving an active native goal parked until unrelated user or child traffic wakes the session.
 
+## Durable execution-boundary projection
+
+Once a matching native continuation is admitted, its persisted `goalId:continuationsUsed`, lifecycle, and cycle record owns the provider boundary for the whole round. Projection no longer depends on the continuation being newer than the latest user message. Every later provider call reconstructs the same `prepare`-then-`execute` boundary, removes all earlier conversation, and retains every message after the matching `goal_context`, including ordinary steering, `/btw`, queued user input, tracked-child notices, and tool-call/result tails.
+
+The admitted record survives extension reload. Ralph reconstructs the execution injection from durable lifecycle state and the matching retained `goal_context`; it does not advance the cycle or append the previous execution log again. A newer distinct goal continuation still goes through the normal identity and lifecycle checks rather than being hidden by the prior boundary.
+
+This is the immediate safety half of the selected hybrid design. A later increment will add one correlated public-API custom compaction at initial continuation admission, with exact-once recovery after the compaction aborts that host turn. Until that is proven, durable projection remains the provider-facing boundary and no compaction behavior has changed.
+
 ## Terminal execution-log recovery
 
 A blocked or completed pass now records its final assistant message and timestamp in the lifecycle state before it writes `.ralph/logs/EXECUTION_LOG.md`. The terminal closeout clears that intent only after the log append succeeds.

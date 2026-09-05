@@ -20,7 +20,7 @@ const waitFor = async (predicate, label) => { const deadline = Date.now() + 12_0
 const cwd = await mkdtemp(join(tmpdir(), "prime-ralph-execution-acceptance-")), sessionDir = join(cwd, "sessions"), agentDir = join(cwd, ".agent");
 for (const dir of [".ralph/skills/prepare", ".ralph/skills/spec-it-out", ".ralph/skills/plan", ".ralph/skills/execute", ".ralph/skills/blocked", ".ralph/plans/blocked", ".ralph/plans/archive", ".prime/agent/extensions", "sessions", ".agent"]) await mkdir(join(cwd, dir), { recursive: true });
 await symlink(new URL("../src", import.meta.url), join(cwd, ".prime/agent/extensions/prime-ralph"), "dir");
-const sentinels = { baseline: "SLICE5_HOST_BASELINE", prepare: "SLICE5_PREPARE", execute: "SLICE5_EXECUTE", stale: "SLICE5_STALE_PLANNING", repl: "SLICE5_REPL_ALIVE" };
+const sentinels = { baseline: "SLICE5_HOST_BASELINE", prepare: "SLICE5_PREPARE", execute: "SLICE5_EXECUTE", stale: "SLICE5_STALE_PLANNING", repl: "SLICE5_REPL_ALIVE", steering: "SLICE6_POST_BOUNDARY_STEERING" };
 for (const [name, body] of Object.entries({ prepare: sentinels.prepare, "spec-it-out": "spec", plan: "plan", execute: sentinels.execute, blocked: "blocked" })) await writeFile(join(cwd, `.ralph/skills/${name}/SKILL.md`), `---\nname: ${name}\ndescription: acceptance\n${name === "prepare" ? "" : "prime-ralph-invocation-version: 1\n"}---\n${body}\n`);
 await writeFile(join(cwd, ".ralph/plans/SPECIFICATION.md"), "# execution fixture specification\n");
 await writeFile(join(cwd, ".ralph/plans/EXECUTION_PLAN.md"), "# execution fixture plan\n");
@@ -46,7 +46,12 @@ const agent = new Agent({ initialState: { systemPrompt: sentinels.baseline, mode
       return response(assistant([{ type: "toolCall", id: "set-repl", name: "ipython", arguments: { code: `SLICE5_REPL = ${JSON.stringify(sentinels.repl)}\nprint(SLICE5_REPL)` } }], "toolUse"));
     }
     if (meta.cycle === 2 && stage === 0) return response(assistant([{ type: "toolCall", id: "cycle2-tool", name: "ipython", arguments: { code: "print('SLICE5_CYCLE2_TOOL_RESULT')" } }], "toolUse"));
-    if (meta.cycle === 3 && stage === 0) return response(assistant([{ type: "toolCall", id: "read-repl", name: "ipython", arguments: { code: "print(SLICE5_REPL)" } }], "toolUse"));
+    if (meta.cycle === 3 && stage === 0) {
+      // Core steering models an admitted /btw or queued user input without
+      // introducing a second AgentSession action lifecycle into this acceptance.
+      agent.steer({ role: "user", content: sentinels.steering, timestamp: Date.now() });
+      return response(assistant([{ type: "toolCall", id: "read-repl", name: "ipython", arguments: { code: "print(SLICE5_REPL)" } }], "toolUse"));
+    }
     if ((meta.cycle === 1 && stage === 1) || (meta.cycle === 2 && stage === 1) || (meta.cycle === 3 && stage === 1)) {
       const terminal = meta.cycle === 3;
       if (terminal) hostSession._completeGoalFromHost();
@@ -92,6 +97,7 @@ const checks = {
   continuationAdmittedAfterCloseout,
   noPrematureCloseoutPause: !states.some((state) => state.pauseReason === "native continuation arrived before lifecycle closeout"),
   cycleToolTailPreserved: contexts.some((context) => context.capturedText.includes("SLICE5_CYCLE2_TOOL_RESULT")),
+  postBoundarySteeringPreserved: executionContexts.some((context) => invocation(visible(context))?.cycle === 3 && context.capturedText.includes(sentinels.steering) && !context.capturedText.includes(sentinels.stale)),
   completed: finalState.phase === "planning" && finalState.status === "inactive",
   logEntries: (log.match(/^### .* \| phase=execute \| cycle=/gm) ?? []).length === 3 && [1, 2, 3].every((cycle) => log.includes(`| cycle=${cycle}`)),
   replPreserved: contexts.some((context) => visible(context).includes(sentinels.repl)) && originalSessionId === sm.getSessionId(),

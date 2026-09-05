@@ -101,7 +101,7 @@ provider call 2: prepare + execute + test call + test result -> model requests a
 provider call 3: prepare + execute + all current-cycle tool results -> final response
 ```
 
-Calls 2 and 3 retain everything after the boundary. They do not increment the cycle, log the prior cycle again, or reintroduce stale conversation.
+Calls 2 and 3 retain everything after the boundary. They do not increment the cycle, log the prior cycle again, or reintroduce stale conversation. The persisted admitted-continuation identity keeps this projection active even when a later user message, `/btw`, custom child notice, or tool tail is newer than `goal_context`, and the same boundary is reconstructed after extension reload.
 
 ## Waiting and reset
 

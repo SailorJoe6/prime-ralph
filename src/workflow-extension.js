@@ -440,6 +440,17 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
       let live = execution(ctx), id = sessionId(ctx);
       const lastUserIndex = event.messages.findLastIndex((message) => message?.role === "user");
       const goalIndex = event.messages.findLastIndex((message) => message?.role === "custom" && message.customType === "goal_context" && message.details?.kind === "continuation");
+      const admitted = live.admittedContinuation;
+      const admittedGoalIndex = admitted ? event.messages.findLastIndex((message) => message?.role === "custom" && message.customType === "goal_context" && message.details?.kind === "continuation" && message.details?.goalId === admitted.goalId && message.details?.continuationsUsed === admitted.continuationsUsed) : -1;
+      if (live.phase === "execution" && live.status === "running" && admittedGoalIndex >= 0 && admitted?.cycle === live.cycle && (goalIndex === admittedGoalIndex || goalIndex < lastUserIndex)) {
+        let message = executionRoundBoundaries.get(id)?.identity === admitted.identity ? executionRoundBoundaries.get(id).message : null;
+        if (!message) {
+          message = { role: "custom", customType: EXECUTION_MESSAGE_TYPE, content: executeContent(ctx, live, admitted.mode), display: false, details: { source: "prime-ralph", protocolVersion: EXECUTION_PROTOCOL_VERSION, requestId: createRequestId(), sessionId: id, workflowPhase: "execution", invocationMode: admitted.mode, lifecycleId: live.lifecycleId, cycle: live.cycle, boundaryIdentity: admitted.identity, preserveTrigger: false } };
+          executionRoundBoundaries.set(id, { identity: admitted.identity, message });
+        }
+        const tail = event.messages.slice(admittedGoalIndex + 1).filter((candidate) => candidate?.role !== "custom" || candidate.customType !== "goal_context" || candidate.details?.kind !== "continuation");
+        return { messages: [message, ...tail] };
+      }
       if (live.phase === "execution" && live.status === "running" && goalIndex > lastUserIndex) {
         const goalMessage = event.messages[goalIndex], goalId = goalMessage.details?.goalId, continuationsUsed = goalMessage.details?.continuationsUsed;
         if (!goalId || goalId !== live.driverGoalId || !Number.isInteger(continuationsUsed)) {
