@@ -20,7 +20,7 @@ const waitFor = async (predicate, label) => { const deadline = Date.now() + 12_0
 const cwd = await mkdtemp(join(tmpdir(), "prime-ralph-execution-acceptance-")), sessionDir = join(cwd, "sessions"), agentDir = join(cwd, ".agent");
 for (const dir of [".ralph/skills/prepare", ".ralph/skills/spec-it-out", ".ralph/skills/plan", ".ralph/skills/execute", ".ralph/skills/blocked", ".ralph/plans/blocked", ".ralph/plans/archive", ".prime/agent/extensions", "sessions", ".agent"]) await mkdir(join(cwd, dir), { recursive: true });
 await symlink(new URL("../src", import.meta.url), join(cwd, ".prime/agent/extensions/prime-ralph"), "dir");
-const sentinels = { baseline: "SLICE5_HOST_BASELINE", prepare: "SLICE5_PREPARE", execute: "SLICE5_EXECUTE", stale: "SLICE5_STALE_PLANNING", repl: "SLICE5_REPL_ALIVE", steering: "SLICE6_POST_BOUNDARY_STEERING" };
+const sentinels = { baseline: "SLICE5_HOST_BASELINE", prepare: "SLICE5_PREPARE", execute: "SLICE5_EXECUTE", stale: "SLICE5_STALE_PLANNING", repl: "SLICE5_REPL_ALIVE", steering: "SLICE6_POST_BOUNDARY_STEERING", child: "SLICE6_RLM_SPLIT_CHILD_RESULT" };
 for (const [name, body] of Object.entries({ prepare: sentinels.prepare, "spec-it-out": "spec", plan: "plan", execute: sentinels.execute, blocked: "blocked" })) await writeFile(join(cwd, `.ralph/skills/${name}/SKILL.md`), `---\nname: ${name}\ndescription: acceptance\n${name === "prepare" ? "" : "prime-ralph-invocation-version: 1\n"}---\n${body}\n`);
 await writeFile(join(cwd, ".ralph/plans/SPECIFICATION.md"), "# execution fixture specification\n");
 await writeFile(join(cwd, ".ralph/plans/EXECUTION_PLAN.md"), "# execution fixture plan\n");
@@ -52,7 +52,8 @@ const agent = new Agent({ initialState: { systemPrompt: sentinels.baseline, mode
       agent.steer({ role: "user", content: sentinels.steering, timestamp: Date.now() });
       return response(assistant([{ type: "toolCall", id: "read-repl", name: "ipython", arguments: { code: "print(SLICE5_REPL)" } }], "toolUse"));
     }
-    if ((meta.cycle === 1 && stage === 1) || (meta.cycle === 2 && stage === 1) || (meta.cycle === 3 && stage === 1)) {
+    if (meta.cycle === 2 && stage === 1) return response(assistant("tracked child split this execution pass", "aborted"));
+    if ((meta.cycle === 1 && stage === 1) || (meta.cycle === 2 && stage === 2) || (meta.cycle === 3 && stage === 1)) {
       const terminal = meta.cycle === 3;
       if (terminal) hostSession._completeGoalFromHost();
       return response(assistant([{ type: "toolCall", id: `life-${meta.cycle}`, name: "ralph_lifecycle", arguments: { action: terminal ? "complete" : "continue", lifecycleId: meta.lifecycleId, cycle: meta.cycle, ...(terminal ? { archive: false } : {}) } }], "toolUse"));
@@ -76,11 +77,15 @@ const heldContextCount = contexts.length, heldState = sm.getEntries().filter((en
 await new Promise((resolve) => setTimeout(resolve, 100));
 const rlmHeld = contexts.length === heldContextCount && heldState.cycle === 1 && !(await readFile(join(cwd, ".ralph/logs/EXECUTION_LOG.md"), "utf8").catch(() => ""));
 fakeRlmRun.settled = true; hostSession._maybeResumeGoalContinuationAfterRlmWork();
+await waitFor(() => { const state = sm.getEntries().filter((entry) => entry.customType === EXECUTION_STATE_ENTRY_TYPE).at(-1)?.data; return state?.cycle === 2 && state?.status === "paused" && state?.pauseReason === "execution agent ended without normal closeout" && !hostSession.isStreaming; }, "RLM-split execution pause");
+const splitPausedState = sm.getEntries().filter((entry) => entry.customType === EXECUTION_STATE_ENTRY_TYPE).at(-1)?.data;
+const splitResume = hostSession.prompt(sentinels.child, { customMessage: { role: "custom", customType: "agent_message", content: sentinels.child, display: true, details: { source: "acceptance", fromRelationship: "child" }, timestamp: Date.now() } });
 await waitFor(() => delayedTurnEndRelease && hostSession.goalState.continuationsUsed >= 2, "native continuation held before delayed turn_end");
 const heldCloseoutState = sm.getEntries().filter((entry) => entry.customType === EXECUTION_STATE_ENTRY_TYPE).at(-1)?.data;
 const continuationHeldForCloseout = heldCloseoutState?.cycle === 2 && heldCloseoutState?.status === "running" && heldCloseoutState?.pendingDecision?.action === "continue" && typeof heldCloseoutState.pendingDecision.finalAssistantMessage !== "string" && !raceBoundaryState;
 delayedTurnEndRelease();
 await waitFor(() => raceBoundaryState, "native continuation after delayed turn_end");
+await splitResume;
 const continuationAdmittedAfterCloseout = raceBoundaryState.cycle === 3 && raceBoundaryState.status === "running" && raceBoundaryState.pendingDecision === null && raceBoundaryState.admittedContinuation?.cycle === 3;
 await waitFor(() => { const states = sm.getEntries().filter((entry) => entry.customType === EXECUTION_STATE_ENTRY_TYPE); return states.at(-1)?.data?.status === "inactive" && states.at(-1)?.data?.pendingDecision === null && contexts.length >= beforeExecute + 7 && !hostSession.isStreaming; }, "three execution passes and completion");
 const executionContexts = contexts.filter((context) => invocation(visible(context))?.skill === "execute"), metas = executionContexts.map((context) => invocation(visible(context))).filter(Boolean);
@@ -93,6 +98,7 @@ const checks = {
   cleanOrdering: firstByCycle.every((context) => { const value = visible(context); return value.indexOf(sentinels.prepare) >= 0 && value.indexOf(sentinels.prepare) < value.indexOf(sentinels.execute) && !value.includes(sentinels.stale); }),
   nativeGoalDriver: states.some((state) => state.driverGoalId) && hostSession.goalState.status === "complete",
   trackedRlmHeldBoundary: rlmHeld,
+  rlmSplitRecovered: splitPausedState?.cycle === 2 && splitPausedState?.status === "paused" && states.some((state) => state.cycle === 2 && state.status === "running" && state.resumed === true) && contexts.some((context) => context.capturedText.includes(sentinels.child)),
   continuationHeldForCloseout,
   continuationAdmittedAfterCloseout,
   noPrematureCloseoutPause: !states.some((state) => state.pauseReason === "native continuation arrived before lifecycle closeout"),

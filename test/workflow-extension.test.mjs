@@ -11,7 +11,7 @@ const specSkill = { path: "/project/.ralph/skills/spec-it-out/SKILL.md", text: "
 const planSkill = { path: "/project/.ralph/skills/plan/SKILL.md", text: "---\nname: plan\ndescription: test\nprime-ralph-invocation-version: 1\n---\nplan body" };
 const executeSkill = { path: "/project/.ralph/skills/execute/SKILL.md", text: "---\nname: execute\ndescription: test\nprime-ralph-invocation-version: 1\n---\nexecute body" };
 const blockedSkill = { path: "/project/.ralph/skills/blocked/SKILL.md", text: "---\nname: blocked\ndescription: test\nprime-ralph-invocation-version: 1\n---\nblocked body" };
-function harness({ specificationState = "absent", planState = "absent", branch = [], inspectSpecError, inspectPlanError, sendError, loadPrepareError, loadPlanError, blockedState = "absent", blockedProofState = "complete", restoredProofState = "unproven", appendFailureAt: initialAppendFailureAt, logFailureAt, sessionId = "session-1", sharedLogs } = {}) {
+function harness({ specificationState = "absent", planState = "absent", branch = [], inspectSpecError, inspectPlanError, sendError, loadPrepareError, loadPlanError, blockedState = "absent", blockedProofState = "complete", restoredProofState = "unproven", appendFailureAt: initialAppendFailureAt, logFailureAt, sessionId = "session-1", sharedLogs, closeoutTimeoutMs } = {}) {
   const commands = new Map(), tools = new Map(), handlers = new Map(), sent = [], userMessages = [], notices = [], compactions = [], entries = [], logs = sharedLogs ?? [], transactions = [];
   let spec = specificationState, plan = planState, blocked = blockedState, restored = restoredProofState, blockedLifecycle = [...branch].reverse().find((entry) => entry?.data?.provenanceId)?.data.provenanceId ?? "blocked-life", nextEntry = branch.length, pending = false, idle = true, aborted = 0, appendCalls = 0, appendFailureAt = initialAppendFailureAt, logCalls = 0;
   const pi = {
@@ -50,6 +50,7 @@ function harness({ specificationState = "absent", planState = "absent", branch =
     },
     now: () => new Date("2026-09-04T00:00:00.000Z"),
     createRequestId: (() => { let id = 0; return () => `id${++id}`; })(),
+    ...(closeoutTimeoutMs === undefined ? {} : { closeoutTimeoutMs }),
   })(pi);
   const ctx = {
     cwd: "/project", waitForIdle: async () => {}, isIdle: () => idle,
@@ -286,6 +287,114 @@ test("an admitted native continuation waits for the queued turn_end closeout", a
   await h.emit("message_start", { message: goalMessage });
   await h.emit("turn_end", finalEvent("cycle two forgot its decision"));
   assert.equal(h.aborted(), 1); assert.equal(h.state().status, "paused"); assert.match(h.state().pauseReason, /without a lifecycle decision/);
+});
+
+
+test("an RLM-split running pass re-registers closeout before the continuation reaches context", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" }); const initial = await startExecution(h);
+  h.addGoal({ goalId: "goal-rlm-split", status: "active", active: true });
+
+  // A tracked child can end the current Agent run and deliver its terminal message in a new run.
+  await h.emit("agent_end", { messages: [] });
+  assert.equal(h.state().status, "paused");
+  await h.emit("before_agent_start", { prompt: "[from child:auditor] result" });
+  assert.equal(h.state().status, "running");
+  await h.emit("message_start", { message: { role: "custom", customType: "agent_message", content: "child result" } });
+
+  await control(h, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 });
+  const completed = finalEvent("completed after child result"); completed.message.timestamp = 2;
+  await h.emit("turn_end", completed);
+  assert.equal(h.state().pendingDecision.finalAssistantMessage, "completed after child result");
+
+  const goalMessage = { role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: "goal-rlm-split", continuationsUsed: 1 } };
+  await h.emit("message_start", { message: goalMessage });
+  const context = h.handlers.get("context").at(-1);
+  const outcome = await Promise.race([
+    context({ messages: [completed.message, goalMessage] }, h.ctx),
+    new Promise((resolve) => setImmediate(() => resolve("still waiting"))),
+  ]);
+  assert.notEqual(outcome, "still waiting");
+  assert.equal(h.aborted(), 0); assert.equal(h.logs.length, 1); assert.equal(h.state().cycle, 2);
+  assert.equal(outcome.messages[0].customType, EXECUTION_MESSAGE_TYPE);
+});
+
+
+test("a closeout that passed before waiter registration fails closed without hanging", async () => {
+  const branch = [], logs = [];
+  const first = harness({ branch, sharedLogs: logs, specificationState: "existing", planState: "existing", sessionId: "missed-closeout" }); const initial = await startExecution(first);
+  first.addGoal({ goalId: "goal-missed-closeout", status: "active", active: true });
+  await control(first, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 });
+
+  // Reconstructing the extension loses in-memory turn tracking but keeps the durable pending decision.
+  const rebuilt = harness({ branch, sharedLogs: logs, specificationState: "existing", planState: "existing", sessionId: "missed-closeout" });
+  const completed = finalEvent("untracked resumed run"); completed.message.timestamp = 3;
+  await rebuilt.emit("turn_end", completed);
+  assert.equal(rebuilt.state().pendingDecision.finalAssistantMessage, undefined);
+
+  const goalMessage = { role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: "goal-missed-closeout", continuationsUsed: 1 } };
+  await rebuilt.emit("message_start", { message: goalMessage });
+  const projected = await rebuilt.handlers.get("context").at(-1)({ messages: [completed.message, goalMessage] }, rebuilt.ctx);
+  assert.deepEqual(projected.messages, []); assert.equal(rebuilt.aborted(), 1); assert.equal(logs.length, 0);
+  assert.equal(rebuilt.state().status, "paused"); assert.match(rebuilt.state().pauseReason, /before lifecycle closeout/);
+});
+
+
+test("agent end releases a pending closeout waiter and leaves execution paused", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" }); const initial = await startExecution(h);
+  h.addGoal({ goalId: "goal-closeout-agent-end", status: "active", active: true });
+  await control(h, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 });
+  const completed = finalEvent("agent ends before closeout"); completed.message.timestamp = 4;
+  const goalMessage = { role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: "goal-closeout-agent-end", continuationsUsed: 1 } };
+  await h.emit("message_start", { message: goalMessage });
+  const context = h.handlers.get("context").at(-1);
+  const projection = context({ messages: [completed.message, goalMessage] }, h.ctx);
+  await Promise.resolve();
+  await h.emit("agent_end", { messages: [] });
+  const outcome = await Promise.race([projection, new Promise((resolve) => setImmediate(() => resolve("still waiting")))]);
+  assert.notEqual(outcome, "still waiting"); assert.deepEqual(outcome.messages, []);
+  assert.equal(h.state().status, "paused"); assert.match(h.state().pauseReason, /ended without normal closeout/);
+});
+
+
+test("agent-end append failure still releases the closeout waiter", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" }); const initial = await startExecution(h);
+  h.addGoal({ goalId: "goal-agent-end-append", status: "active", active: true });
+  await control(h, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 });
+  const completed = finalEvent("agent-end append fails"); completed.message.timestamp = 5;
+  const goalMessage = { role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: "goal-agent-end-append", continuationsUsed: 1 } };
+  await h.emit("message_start", { message: goalMessage });
+  const projection = h.handlers.get("context").at(-1)({ messages: [completed.message, goalMessage] }, h.ctx);
+  await Promise.resolve(); h.failStateAppendIn(1);
+  assert.throws(() => h.handlers.get("agent_end").at(-1)({ messages: [] }, h.ctx), /injected state append failure/);
+  const outcome = await Promise.race([projection, new Promise((resolve) => setImmediate(() => resolve("still waiting")))]);
+  assert.notEqual(outcome, "still waiting"); assert.deepEqual(outcome.messages, []);
+  assert.equal(h.aborted(), 1); assert.equal(h.state().status, "paused"); assert.match(h.state().pauseReason, /before lifecycle closeout/);
+});
+
+
+test("session shutdown releases a pending closeout waiter", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" }); const initial = await startExecution(h);
+  h.addGoal({ goalId: "goal-closeout-shutdown", status: "active", active: true });
+  await control(h, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 });
+  const completed = finalEvent("shutdown before closeout"); completed.message.timestamp = 6;
+  const goalMessage = { role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: "goal-closeout-shutdown", continuationsUsed: 1 } };
+  const projection = h.handlers.get("context").at(-1)({ messages: [completed.message, goalMessage] }, h.ctx);
+  await Promise.resolve(); await h.emit("session_shutdown", { reason: "reload" });
+  const outcome = await Promise.race([projection, new Promise((resolve) => setImmediate(() => resolve("still waiting")))]);
+  assert.notEqual(outcome, "still waiting"); assert.deepEqual(outcome.messages, []);
+  assert.equal(h.aborted(), 1); assert.equal(h.state().status, "paused"); assert.match(h.state().pauseReason, /before lifecycle closeout/);
+});
+
+
+test("an absent queued closeout times out and pauses instead of waiting forever", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing", closeoutTimeoutMs: 5 }); const initial = await startExecution(h);
+  h.addGoal({ goalId: "goal-closeout-timeout", status: "active", active: true });
+  await control(h, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 });
+  const completed = finalEvent("closeout never arrives"); completed.message.timestamp = 4;
+  const goalMessage = { role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: "goal-closeout-timeout", continuationsUsed: 1 } };
+  const projected = await h.handlers.get("context").at(-1)({ messages: [completed.message, goalMessage] }, h.ctx);
+  assert.deepEqual(projected.messages, []); assert.equal(h.aborted(), 1); assert.equal(h.logs.length, 0);
+  assert.equal(h.state().status, "paused"); assert.match(h.state().pauseReason, /before lifecycle closeout/);
 });
 
 

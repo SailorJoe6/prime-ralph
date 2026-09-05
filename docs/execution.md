@@ -85,7 +85,7 @@ A mismatch pauses execution. Ralph never attaches unrelated goal work to the cur
 - `unblock`: restore a normally blocked pair together without overwrite.
 - `confirm-forward`: state that the original blocker is resolved. For files restored manually, this also performs the final mechanical verification described below.
 
-For `continue`, the current cycle is committed only when the matching next native continuation reaches provider-context admission after tracked RLM work settles. At that point Ralph logs the completed cycle, increments the cycle number, and creates the next clean execution context.
+For `continue`, the current cycle is committed only when the matching next native continuation reaches provider-context admission after tracked RLM work settles. At that point Ralph logs the completed cycle, increments the cycle number, and creates the next clean execution context. If tracked RLM delivery splits the pass across Agent runs, Ralph re-registers the reconciled running pass before the later run starts. Its closeout fence accepts either local event ordering and fails closed after a bounded wait rather than hanging provider admission.
 
 ## Clean context and repeated provider calls
 

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Type } from "typebox";
 import { createResetExtension } from "./reset-extension.js";
 import { formatPrepareInjection, loadPrepareSkill } from "./reset-skill.js";
@@ -71,28 +71,42 @@ export function createWorkflowExtension({
   blockDocuments = blockPlanningDocuments, unblockDocuments = unblockPlanningDocuments,
   adoptRestoredDocuments = adoptRestoredPlanningDocuments, verifyAdoptedDocuments = verifyAdoptedPlanningDocuments,
   archiveDocuments = archivePlanningDocuments,
-  appendLog = appendExecutionLogEntry, createRequestId = randomUUID, now = () => new Date(),
+  appendLog = appendExecutionLogEntry, createRequestId = randomUUID, now = () => new Date(), closeoutTimeoutMs = 30_000,
 } = {}) {
   return function workflowExtension(pi) {
-    const startupSessions = new Set(), sessionPhases = new Map(), executionStates = new Map(), activeLifecycleTurns = new Map(), activeBlockedTurns = new Set(), executionRoundBoundaries = new Map(), lifecycleCloseoutWaiters = new Map();
+    const startupSessions = new Set(), sessionPhases = new Map(), executionStates = new Map(), activeLifecycleTurns = new Map(), activeBlockedTurns = new Set(), executionRoundBoundaries = new Map(), lifecycleCloseoutWaiters = new Map(), completedLifecycleCloseouts = new Map();
     const sessionId = (ctx) => ctx.sessionManager.getSessionId();
-    const closeoutIdentity = (message) => JSON.stringify([message?.timestamp ?? null, message?.stopReason ?? null, assistantText(message)]);
+    const closeoutIdentity = (message) => JSON.stringify([message?.timestamp ?? null, message?.stopReason ?? null, createHash("sha256").update(assistantText(message)).digest("hex")]);
     const finalAssistantImmediatelyBefore = (messages, beforeIndex) => {
       const message = messages[beforeIndex - 1];
       return isFinalNormalAssistantTurn({ type: "turn_end", message }) ? message : null;
     };
     const waitForLifecycleCloseout = (id, message) => {
-      const identity = closeoutIdentity(message), existing = lifecycleCloseoutWaiters.get(id);
+      const identity = closeoutIdentity(message), completed = completedLifecycleCloseouts.get(id), existing = lifecycleCloseoutWaiters.get(id);
+      if (completed === identity) { completedLifecycleCloseouts.delete(id); return Promise.resolve(true); }
       if (existing?.identity === identity) return existing.promise;
+      if (existing) { clearTimeout(existing.timeout); existing.resolve(false); }
       let resolve;
       const promise = new Promise((settle) => { resolve = settle; });
-      lifecycleCloseoutWaiters.set(id, { identity, promise, resolve });
+      const timeout = setTimeout(() => {
+        const current = lifecycleCloseoutWaiters.get(id);
+        if (current?.identity !== identity) return;
+        lifecycleCloseoutWaiters.delete(id); resolve(false);
+      }, Math.max(1, closeoutTimeoutMs));
+      lifecycleCloseoutWaiters.set(id, { identity, promise, resolve, timeout });
       return promise;
     };
     const settleLifecycleCloseout = (id, message = null) => {
       const waiter = lifecycleCloseoutWaiters.get(id);
-      if (!waiter || (message && waiter.identity !== closeoutIdentity(message))) return;
-      lifecycleCloseoutWaiters.delete(id); waiter.resolve();
+      if (!message) {
+        completedLifecycleCloseouts.delete(id);
+        if (!waiter) return;
+        clearTimeout(waiter.timeout); lifecycleCloseoutWaiters.delete(id); waiter.resolve(false); return;
+      }
+      const identity = closeoutIdentity(message);
+      if (!waiter) { completedLifecycleCloseouts.set(id, identity); return; }
+      if (waiter.identity !== identity) return;
+      completedLifecycleCloseouts.delete(id); clearTimeout(waiter.timeout); lifecycleCloseoutWaiters.delete(id); waiter.resolve(true);
     };
     const branch = (ctx) => ctx.sessionManager.getBranch();
     const rawExecution = (ctx) => {
@@ -425,7 +439,8 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
 
     pi.on("before_agent_start", (_event, ctx) => {
       const live = requireTerminalLogReady(execution(ctx)), id = sessionId(ctx);
-      if (live.status === "waiting") activeLifecycleTurns.set(id, { kind: "waiting-check" });
+      if (live.phase === "execution" && live.status === "running") activeLifecycleTurns.set(id, { kind: "execute" });
+      else if (live.status === "waiting") activeLifecycleTurns.set(id, { kind: "waiting-check" });
       if (live.phase === "blocked" && live.blockedContextEstablished !== true) {
         if (isRestoredRecovery(live)) {
           const proof = requireRestoredProof(ctx, live);
@@ -474,9 +489,9 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
             ctx.abort(); persistExecution(ctx, nextExecutionState(live, { status: "paused", pendingDecision: null, wait: null, pauseReason: "native continuation arrived before lifecycle closeout" }));
             ctx.ui.notify("Ralph rejected a native continuation that arrived before lifecycle closeout.", "error"); return { messages: [] };
           }
-          await waitForLifecycleCloseout(id, finalAssistantMessage);
+          const closeoutCommitted = await waitForLifecycleCloseout(id, finalAssistantMessage);
           live = execution(ctx, { reconcile: false });
-          if (live.pendingDecision?.action === "continue" && typeof live.pendingDecision.finalAssistantMessage !== "string" && live.status === "running") {
+          if ((!closeoutCommitted || (live.pendingDecision?.action === "continue" && typeof live.pendingDecision.finalAssistantMessage !== "string")) && live.status === "running") {
             ctx.abort(); persistExecution(ctx, nextExecutionState(live, { status: "paused", pendingDecision: null, wait: null, pauseReason: "native continuation arrived before lifecycle closeout" }));
             ctx.ui.notify("Ralph rejected a native continuation whose lifecycle closeout did not commit.", "error"); return { messages: [] };
           }
@@ -552,10 +567,12 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
     });
 
     pi.on("agent_end", (_event, ctx) => {
-      const id = sessionId(ctx); activeBlockedTurns.delete(id); if (!activeLifecycleTurns.has(id)) return;
+      const id = sessionId(ctx); activeBlockedTurns.delete(id);
+      if (!activeLifecycleTurns.has(id)) { settleLifecycleCloseout(id); return; }
       const live = execution(ctx, { reconcile: false });
-      if (live.phase === "execution" && live.status === "running") persistExecution(ctx, nextExecutionState(live, { status: "paused", pendingDecision: null, wait: null, pauseReason: "execution agent ended without normal closeout" }));
-      activeLifecycleTurns.delete(id);
+      try {
+        if (live.phase === "execution" && live.status === "running") persistExecution(ctx, nextExecutionState(live, { status: "paused", pendingDecision: null, wait: null, pauseReason: "execution agent ended without normal closeout" }));
+      } finally { activeLifecycleTurns.delete(id); settleLifecycleCloseout(id); }
     });
 
     pi.on("session_shutdown", (event, ctx) => {

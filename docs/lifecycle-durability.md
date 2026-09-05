@@ -27,6 +27,8 @@ This rule prevents a corrupt or replayed newest record from resurrecting an olde
 
 Prime Agent can make a native goal continuation available after it stores the pass's final assistant message but before the queued `turn_end` extension handler runs. When the normal final assistant message is immediately adjacent to that continuation, Ralph holds provider admission until its own queued closeout handler settles. The handler durably records the pending Continue decision. The waiting context hook then writes the execution log entry, advances the cycle, and admits the continuation without aborting the host input pump. A continuation with no immediately adjacent normal assistant closeout still fails closed.
 
+Tracked RLM work can end one Agent run and deliver its terminal message in another while the same native goal remains active. Ralph re-registers every reconciled running execution at `before_agent_start`, so the later normal `turn_end` still owns lifecycle closeout. The closeout fence also remembers a matching event that settled before waiter registration. If neither ordering produces a durable closeout within 30 seconds, or the Agent run ends or the session shuts down, Ralph releases the waiter and pauses instead of leaving provider admission hung indefinitely.
+
 This removes any dependency on `turn_end` winning an asynchronous scheduling race while retaining the established closeout and failure-injection path. It also prevents an already-consumed continuation from leaving an active native goal parked until unrelated user or child traffic wakes the session.
 
 ## Durable execution-boundary projection
