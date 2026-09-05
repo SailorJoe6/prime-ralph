@@ -74,8 +74,26 @@ export function createWorkflowExtension({
   appendLog = appendExecutionLogEntry, createRequestId = randomUUID, now = () => new Date(),
 } = {}) {
   return function workflowExtension(pi) {
-    const startupSessions = new Set(), sessionPhases = new Map(), executionStates = new Map(), activeLifecycleTurns = new Map(), activeBlockedTurns = new Set(), executionRoundBoundaries = new Map();
+    const startupSessions = new Set(), sessionPhases = new Map(), executionStates = new Map(), activeLifecycleTurns = new Map(), activeBlockedTurns = new Set(), executionRoundBoundaries = new Map(), lifecycleCloseoutWaiters = new Map();
     const sessionId = (ctx) => ctx.sessionManager.getSessionId();
+    const closeoutIdentity = (message) => JSON.stringify([message?.timestamp ?? null, message?.stopReason ?? null, assistantText(message)]);
+    const finalAssistantImmediatelyBefore = (messages, beforeIndex) => {
+      const message = messages[beforeIndex - 1];
+      return isFinalNormalAssistantTurn({ type: "turn_end", message }) ? message : null;
+    };
+    const waitForLifecycleCloseout = (id, message) => {
+      const identity = closeoutIdentity(message), existing = lifecycleCloseoutWaiters.get(id);
+      if (existing?.identity === identity) return existing.promise;
+      let resolve;
+      const promise = new Promise((settle) => { resolve = settle; });
+      lifecycleCloseoutWaiters.set(id, { identity, promise, resolve });
+      return promise;
+    };
+    const settleLifecycleCloseout = (id, message = null) => {
+      const waiter = lifecycleCloseoutWaiters.get(id);
+      if (!waiter || (message && waiter.identity !== closeoutIdentity(message))) return;
+      lifecycleCloseoutWaiters.delete(id); waiter.resolve();
+    };
     const branch = (ctx) => ctx.sessionManager.getBranch();
     const rawExecution = (ctx) => {
       const id = sessionId(ctx);
@@ -418,7 +436,7 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
       }
     });
 
-    pi.on("context", (event, ctx) => {
+    pi.on("context", async (event, ctx) => {
       let live = execution(ctx), id = sessionId(ctx);
       const lastUserIndex = event.messages.findLastIndex((message) => message?.role === "user");
       const goalIndex = event.messages.findLastIndex((message) => message?.role === "custom" && message.customType === "goal_context" && message.details?.kind === "continuation");
@@ -439,6 +457,20 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
           return { messages: [message, ...event.messages.slice(goalIndex + 1)] };
         }
         const resetForBoundary = live.resetRequested === true, resumedForBoundary = live.resumed === true;
+        if (live.pendingDecision?.action === "continue" && typeof live.pendingDecision.finalAssistantMessage !== "string") {
+          const finalAssistantMessage = finalAssistantImmediatelyBefore(event.messages, goalIndex);
+          if (!finalAssistantMessage) {
+            ctx.abort(); persistExecution(ctx, nextExecutionState(live, { status: "paused", pendingDecision: null, wait: null, pauseReason: "native continuation arrived before lifecycle closeout" }));
+            ctx.ui.notify("Ralph rejected a native continuation that arrived before lifecycle closeout.", "error"); return { messages: [] };
+          }
+          await waitForLifecycleCloseout(id, finalAssistantMessage);
+          live = execution(ctx, { reconcile: false });
+          if (live.pendingDecision?.action === "continue" && typeof live.pendingDecision.finalAssistantMessage !== "string" && live.status === "running") {
+            ctx.abort(); persistExecution(ctx, nextExecutionState(live, { status: "paused", pendingDecision: null, wait: null, pauseReason: "native continuation arrived before lifecycle closeout" }));
+            ctx.ui.notify("Ralph rejected a native continuation whose lifecycle closeout did not commit.", "error"); return { messages: [] };
+          }
+          if (live.phase !== "execution" || live.status !== "running") return { messages: [] };
+        }
         if (live.pendingDecision?.action === "continue" && typeof live.pendingDecision.finalAssistantMessage === "string") {
           try {
             appendLog({ cwd: ctx.cwd, sessionId: id, lifecycleId: live.lifecycleId, action: live.pendingDecision.action, phase: "execute", cycle: live.cycle, finalAssistantMessage: live.pendingDecision.finalAssistantMessage, timestamp: new Date(live.pendingDecision.timestamp) });
@@ -474,7 +506,7 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
       if (!isFinalNormalAssistantTurn(event)) return;
       const id = sessionId(ctx); activeBlockedTurns.delete(id);
       const active = activeLifecycleTurns.get(id);
-      if (!active) return;
+      if (!active) { settleLifecycleCloseout(id, event.message); return; }
       let live = execution(ctx, { reconcile: false });
       const decision = live.pendingDecision?.action, text = assistantText(event.message);
       try {
@@ -494,7 +526,7 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
         ctx.abort();
         if (live.status !== "inactive") persistExecution(ctx, nextExecutionState(live, { status: "paused", pendingDecision: null, wait: null, pauseReason: `execution closeout failed: ${error.message}` }));
         ctx.ui.notify(`Ralph execution closeout failed safely: ${error.message}`, "error");
-      } finally { activeLifecycleTurns.delete(id); }
+      } finally { activeLifecycleTurns.delete(id); settleLifecycleCloseout(id, event.message); }
     });
 
     pi.on("message_start", (event, ctx) => {
@@ -516,6 +548,7 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
     });
 
     pi.on("session_shutdown", (event, ctx) => {
+      settleLifecycleCloseout(sessionId(ctx));
       if (event.reason === "reload") return;
       const live = execution(ctx, { reconcile: false }); if (!["running", "waiting", "paused"].includes(live.status)) return;
       if (event.reason === "quit" && live.status === "waiting") persistExecution(ctx, nextExecutionState(live, { pendingDecision: null }));

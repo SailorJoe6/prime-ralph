@@ -33,11 +33,12 @@ const provisioner = new IpythonKernelProvisioner(cwd, { sessionId: originalSessi
 // The fake provider cannot call the kernel-side goal skill. These private host calls are
 // fixture-only equivalents of goal.create/complete and an admitted tracked child; the
 // production extension uses only public extension events, messages, state, and tools.
-let hostSession, startupStage = 0, fakeRlmRun; const cycleStages = new Map();
+let hostSession, startupStage = 0, fakeRlmRun, delayedTurnEndRelease, raceBoundaryState; const cycleStages = new Map();
 const agent = new Agent({ initialState: { systemPrompt: sentinels.baseline, model, thinkingLevel: "off", serviceTier: "auto", messages: [], tools: [] }, convertToLlm,
   transformContext: async (messages) => hostSession ? hostSession._extensionRunner.emitContext(messages) : messages,
   streamFn: async (_model, context) => {
     const content = visible(context); contexts.push({ capturedText: content }); const meta = invocation(content);
+    if (meta?.cycle === 3 && !raceBoundaryState) raceBoundaryState = sm.getEntries().filter((entry) => entry.customType === EXECUTION_STATE_ENTRY_TYPE).at(-1)?.data;
     if (!meta || meta.skill !== "execute") { startupStage += 1; return response(assistant("planning interaction complete")); }
     const stage = cycleStages.get(meta.cycle) ?? 0; cycleStages.set(meta.cycle, stage + 1);
     if (meta.cycle === 1 && stage === 0) {
@@ -52,6 +53,12 @@ const agent = new Agent({ initialState: { systemPrompt: sentinels.baseline, mode
       return response(assistant([{ type: "toolCall", id: `life-${meta.cycle}`, name: "ralph_lifecycle", arguments: { action: terminal ? "complete" : "continue", lifecycleId: meta.lifecycleId, cycle: meta.cycle, ...(terminal ? { archive: false } : {}) } }], "toolUse"));
     }
     if (meta.cycle === 1 && !fakeRlmRun) { fakeRlmRun = { settled: false }; hostSession._unsettledRlmChildRuns.add(fakeRlmRun); }
+    if (meta.cycle === 2 && !delayedTurnEndRelease) {
+      let release;
+      const delayedTurnEnd = new Promise((resolve) => { release = resolve; });
+      hostSession._agentEventQueue = hostSession._agentEventQueue.then(() => delayedTurnEnd);
+      delayedTurnEndRelease = release;
+    }
     const suffix = meta.cycle === 2 ? (content.includes("SLICE5_CYCLE2_TOOL_RESULT") ? " using preserved tool output" : " without tool output") : "";
     return response(assistant(`completed execution pass ${meta.cycle}${suffix}`));
   }, sessionId: originalSessionId });
@@ -64,6 +71,12 @@ const heldContextCount = contexts.length, heldState = sm.getEntries().filter((en
 await new Promise((resolve) => setTimeout(resolve, 100));
 const rlmHeld = contexts.length === heldContextCount && heldState.cycle === 1 && !(await readFile(join(cwd, ".ralph/logs/EXECUTION_LOG.md"), "utf8").catch(() => ""));
 fakeRlmRun.settled = true; hostSession._maybeResumeGoalContinuationAfterRlmWork();
+await waitFor(() => delayedTurnEndRelease && hostSession.goalState.continuationsUsed >= 2, "native continuation held before delayed turn_end");
+const heldCloseoutState = sm.getEntries().filter((entry) => entry.customType === EXECUTION_STATE_ENTRY_TYPE).at(-1)?.data;
+const continuationHeldForCloseout = heldCloseoutState?.cycle === 2 && heldCloseoutState?.status === "running" && heldCloseoutState?.pendingDecision?.action === "continue" && typeof heldCloseoutState.pendingDecision.finalAssistantMessage !== "string" && !raceBoundaryState;
+delayedTurnEndRelease();
+await waitFor(() => raceBoundaryState, "native continuation after delayed turn_end");
+const continuationAdmittedAfterCloseout = raceBoundaryState.cycle === 3 && raceBoundaryState.status === "running" && raceBoundaryState.pendingDecision === null && raceBoundaryState.admittedContinuation?.cycle === 3;
 await waitFor(() => { const states = sm.getEntries().filter((entry) => entry.customType === EXECUTION_STATE_ENTRY_TYPE); return states.at(-1)?.data?.status === "inactive" && states.at(-1)?.data?.pendingDecision === null && contexts.length >= beforeExecute + 7 && !hostSession.isStreaming; }, "three execution passes and completion");
 const executionContexts = contexts.filter((context) => invocation(visible(context))?.skill === "execute"), metas = executionContexts.map((context) => invocation(visible(context))).filter(Boolean);
 const firstByCycle = [1, 2, 3].map((cycle) => executionContexts.find((context) => invocation(visible(context))?.cycle === cycle));
@@ -75,6 +88,9 @@ const checks = {
   cleanOrdering: firstByCycle.every((context) => { const value = visible(context); return value.indexOf(sentinels.prepare) >= 0 && value.indexOf(sentinels.prepare) < value.indexOf(sentinels.execute) && !value.includes(sentinels.stale); }),
   nativeGoalDriver: states.some((state) => state.driverGoalId) && hostSession.goalState.status === "complete",
   trackedRlmHeldBoundary: rlmHeld,
+  continuationHeldForCloseout,
+  continuationAdmittedAfterCloseout,
+  noPrematureCloseoutPause: !states.some((state) => state.pauseReason === "native continuation arrived before lifecycle closeout"),
   cycleToolTailPreserved: contexts.some((context) => context.capturedText.includes("SLICE5_CYCLE2_TOOL_RESULT")),
   completed: finalState.phase === "planning" && finalState.status === "inactive",
   logEntries: (log.match(/^### .* \| phase=execute \| cycle=/gm) ?? []).length === 3 && [1, 2, 3].every((cycle) => log.includes(`| cycle=${cycle}`)),

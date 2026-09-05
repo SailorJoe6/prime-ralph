@@ -265,6 +265,74 @@ test("continue requires the native goal and admits the next clean cycle only aft
   assert.equal(projected.messages.length, 1); assert.equal(projected.messages[0].customType, EXECUTION_MESSAGE_TYPE); assert.match(projected.messages[0].content, /"cycle":2/);
 });
 
+
+test("an admitted native continuation waits for the queued turn_end closeout", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" }); const initial = await startExecution(h);
+  h.addGoal({ goalId: "goal-race", status: "active", active: true });
+  await control(h, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 });
+  const completed = finalEvent("completed before closeout dispatch");
+  completed.message.timestamp = 1;
+  const goalMessage = { role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: "goal-race", continuationsUsed: 1 } };
+  const context = h.handlers.get("context").at(-1);
+
+  const projection = context({ messages: [completed.message, goalMessage] }, h.ctx);
+  await Promise.resolve();
+  assert.equal(h.logs.length, 0); assert.equal(h.state().cycle, 1); assert.equal(h.state().pendingDecision.finalAssistantMessage, undefined);
+  await h.emit("turn_end", structuredClone(completed));
+  const projected = await projection;
+  assert.equal(h.aborted(), 0); assert.equal(h.logs.length, 1); assert.equal(h.state().status, "running"); assert.equal(h.state().cycle, 2);
+  assert.equal(projected.messages[0].customType, EXECUTION_MESSAGE_TYPE); assert.match(projected.messages[0].content, /"cycle":2/);
+
+  await h.emit("message_start", { message: goalMessage });
+  await h.emit("turn_end", finalEvent("cycle two forgot its decision"));
+  assert.equal(h.aborted(), 1); assert.equal(h.state().status, "paused"); assert.match(h.state().pauseReason, /without a lifecycle decision/);
+});
+
+
+test("reload after queued closeout preserves exact continuation admission", async () => {
+  const branch = [], logs = [];
+  const first = harness({ branch, sharedLogs: logs, specificationState: "existing", planState: "existing", sessionId: "closeout-reload" });
+  const initial = await startExecution(first);
+  first.addGoal({ goalId: "goal-reload", status: "active", active: true });
+  await control(first, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 });
+  const completed = finalEvent("closeout persisted before reload");
+  await first.emit("turn_end", completed);
+  assert.equal(first.state().cycle, 1); assert.equal(first.state().pendingDecision.finalAssistantMessage, "closeout persisted before reload"); assert.equal(logs.length, 0);
+
+  const rebuilt = harness({ branch, sharedLogs: logs, specificationState: "existing", planState: "existing", sessionId: "closeout-reload" });
+  await rebuilt.emit("session_start", { reason: "reload" });
+  const goalMessage = { role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: "goal-reload", continuationsUsed: 1 } };
+  const projected = await rebuilt.handlers.get("context").at(-1)({ messages: [completed.message, goalMessage] }, rebuilt.ctx);
+  assert.equal(logs.length, 1); assert.equal(rebuilt.state().cycle, 2); assert.equal(rebuilt.state().status, "running"); assert.equal(rebuilt.state().pendingDecision, null);
+  assert.equal(projected.messages[0].customType, EXECUTION_MESSAGE_TYPE); assert.match(projected.messages[0].content, /"cycle":2/);
+});
+
+
+test("a queued closeout state failure consumes no execution boundary", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" }); const initial = await startExecution(h);
+  h.addGoal({ goalId: "goal-closeout-failure", status: "active", active: true });
+  await control(h, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 });
+  h.failStateAppendIn(1);
+  const completed = finalEvent("closeout cannot persist");
+  const goalMessage = { role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: "goal-closeout-failure", continuationsUsed: 1 } };
+  const projection = h.handlers.get("context").at(-1)({ messages: [completed.message, goalMessage] }, h.ctx);
+  await h.emit("turn_end", completed);
+  const projected = await projection;
+  assert.deepEqual(projected.messages, []); assert.equal(h.aborted(), 1); assert.equal(h.logs.length, 0); assert.equal(h.state().cycle, 1); assert.equal(h.state().status, "paused");
+  assert.match(h.state().pauseReason, /execution closeout failed/);
+});
+
+
+test("a continuation without the completed pass immediately before it still fails closed", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" }); const initial = await startExecution(h);
+  h.addGoal({ goalId: "goal-no-closeout", status: "active", active: true });
+  await control(h, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 });
+  const goalMessage = { role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: "goal-no-closeout", continuationsUsed: 1 } };
+  const projected = await h.handlers.get("context").at(-1)({ messages: [{ role: "user", content: "not a closeout" }, goalMessage] }, h.ctx);
+  assert.deepEqual(projected.messages, []); assert.equal(h.aborted(), 1); assert.equal(h.logs.length, 0); assert.equal(h.state().status, "paused");
+  assert.match(h.state().pauseReason, /before lifecycle closeout/);
+});
+
 test("turn end alone pauses safely and never logs or advances", async () => {
   const h = harness({ specificationState: "existing", planState: "existing" }); await startExecution(h);
   await h.emit("before_agent_start", { prompt: h.sent.at(-1).message.content });

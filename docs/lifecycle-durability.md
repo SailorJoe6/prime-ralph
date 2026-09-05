@@ -23,6 +23,12 @@ A retained branch may begin at a transition greater than zero after compaction. 
 
 This rule prevents a corrupt or replayed newest record from resurrecting an older running state, admitting a second lifecycle, or silently dropping a waiting state.
 
+## Continuation closeout ordering
+
+Prime Agent can make a native goal continuation available after it stores the pass's final assistant message but before the queued `turn_end` extension handler runs. When the normal final assistant message is immediately adjacent to that continuation, Ralph holds provider admission until its own queued closeout handler settles. The handler durably records the pending Continue decision. The waiting context hook then writes the execution log entry, advances the cycle, and admits the continuation without aborting the host input pump. A continuation with no immediately adjacent normal assistant closeout still fails closed.
+
+This removes any dependency on `turn_end` winning an asynchronous scheduling race while retaining the established closeout and failure-injection path. It also prevents an already-consumed continuation from leaving an active native goal parked until unrelated user or child traffic wakes the session.
+
 ## Terminal execution-log recovery
 
 A blocked or completed pass now records its final assistant message and timestamp in the lifecycle state before it writes `.ralph/logs/EXECUTION_LOG.md`. The terminal closeout clears that intent only after the log append succeeds.
