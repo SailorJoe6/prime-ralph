@@ -86,6 +86,8 @@ npm run accept:planning
 PRIME_AGENT_ROOT=/path/to/prime-agent \
 PRIME_AGENT_CORE_ROOT=/path/to/prime-agent/node_modules/@earendil-works/pi-agent-core \
 npm run accept:execution
+npm run accept:execution-pause-resume
+npm run accept:execution-admission-failure
 PRIME_AGENT_ROOT=/path/to/prime-agent \
 PRIME_AGENT_CORE_ROOT=/path/to/prime-agent/node_modules/@earendil-works/pi-agent-core \
 npm run accept:blocked-recovery
@@ -125,7 +127,7 @@ Then extract the produced tarball in a clean temporary directory, import `src/in
 - The specification lifecycle acceptance proves startup ordering, reload suppression, context retention, reset projection, and an unambiguous native extension-command catalog on Prime Agent `0.9.1`.
 - The planning lifecycle acceptance proves phase selection, ordered skill delivery, clean and current-context `/plan` paths, both planning reset branches, document protection, and no execution start.
 - The opt-in model matrices prove only the recorded provider/model outcomes under its restricted fixture tools; it covers new creation, the initial existing-spec menu, confirmed future creation, agreed active update, cancellation, and reset-existing behavior, and is not deterministic CI evidence.
-- The disk-backed execution acceptance proves provider context, JSONL, session identity, and REPL continuity on Prime Agent `0.9.1`.
+- The disk-backed execution acceptance proves successful reset-flavor compaction precedes each execute provider request, automatic projection is absent, pause/resume retains the complete current iteration, and JSONL, session identity, and REPL remain continuous on Prime Agent `0.9.1`.
 - The disk-backed blocked-recovery acceptance proves a real manually restored pair is verified and accepted without another move, the blocked context and current tool results remain visible through confirmation, execution does not restart automatically, and a later `/execute` creates a fresh run.
 - The busy acceptance proves ordering behind an active parent turn and existing follow-up.
 - The lifecycle acceptance proves durable custom-compaction resume, cancellation without partial prepare, provider-failure state, and safe retry.

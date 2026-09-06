@@ -50,7 +50,8 @@ const agent = new Agent({ initialState: { systemPrompt: "RECOVERY_BASELINE", mod
         if (!visibleStatus.includes("provider login is missing") || !visibleStatus.includes("provider login is restored")) return response(assistant("I cannot safely continue because the original blocker or condition is unavailable."));
         return response(assistant([{ type: "toolCall", id: "confirm", name: "ralph_lifecycle", arguments: { action: "confirm-forward", provenanceId: meta.provenanceId } }], "toolUse"));
       }
-      return response(assistant("The restored files are verified and the blocker is resolved. Run /execute when ready."));
+      return response(assistant(`The restored files are verified and the blocker is resolved. Run /execute when ready.
+${"recovery context ".repeat(30000)}`));
     }
     if (meta?.skill === "execute") {
       executeCalls += 1;

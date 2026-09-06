@@ -41,6 +41,7 @@ function harness({ branch = [], persistSent = true, sendError, appendError, spec
     hasPendingMessages: () => false,
     waitForIdle: async () => {},
     compact: (options) => compactions.push(options),
+    abort: () => {},
     sessionManager: { getBranch: () => branch },
     ui: { notify: (...args) => notices.push(args) },
   };
@@ -75,7 +76,7 @@ test("registers /reset and supplies a real marker to custom compaction before pr
   assert.equal(h.sent[0].message.customType, RESET_MESSAGE_TYPE);
   assert.equal(h.sent[0].message.details.mode, "compaction");
   assert.deepEqual(h.sent[0].options, { triggerTurn: true, deliverAs: "followUp" });
-  assert.deepEqual(h.handlers.get("context")({ messages: [{ role: "assistant", content: "old" }] }, h.ctx).messages, [h.sent[0].message]);
+  assert.deepEqual(h.handlers.get("context")({ messages: [{ role: "custom", ...h.sent[0].message }] }, h.ctx).messages, [h.sent[0].message]);
   assert.deepEqual(h.handlers.get("context")({ messages: [{ role: "assistant", content: "later" }] }, h.ctx).messages, [{ role: "assistant", content: "later" }]);
   h.handlers.get("message_start")({ message: { role: "custom", ...h.sent[0].message } }, h.ctx);
   h.handlers.get("agent_end")({ messages: [{ role: "assistant", stopReason: "stop" }] }, h.ctx);
@@ -149,7 +150,7 @@ test("uses projection fallback only for host short-session refusal", async () =>
   assert.equal(h.sent.length, 1);
   assert.equal(h.sent[0].message.details.mode, "projection-fallback");
   const boundary = { role: "custom", ...h.sent[0].message };
-  const initial = h.handlers.get("context")({ messages: [{ role: "user", content: "stale" }] }, h.ctx);
+  const initial = h.handlers.get("context")({ messages: [boundary] }, h.ctx);
   assert.deepEqual(initial.messages, [h.sent[0].message]);
   const projected = h.handlers.get("context")({ messages: [{ role: "user", content: "stale" }, boundary] }, h.ctx);
   assert.deepEqual(projected.messages, [boundary]);

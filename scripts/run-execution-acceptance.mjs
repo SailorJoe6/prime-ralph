@@ -20,7 +20,7 @@ const waitFor = async (predicate, label) => { const deadline = Date.now() + 12_0
 const cwd = await mkdtemp(join(tmpdir(), "prime-ralph-execution-acceptance-")), sessionDir = join(cwd, "sessions"), agentDir = join(cwd, ".agent");
 for (const dir of [".ralph/skills/prepare", ".ralph/skills/spec-it-out", ".ralph/skills/plan", ".ralph/skills/execute", ".ralph/skills/blocked", ".ralph/plans/blocked", ".ralph/plans/archive", ".prime/agent/extensions", "sessions", ".agent"]) await mkdir(join(cwd, dir), { recursive: true });
 await symlink(new URL("../src", import.meta.url), join(cwd, ".prime/agent/extensions/prime-ralph"), "dir");
-const sentinels = { baseline: "SLICE5_HOST_BASELINE", prepare: "SLICE5_PREPARE", execute: "SLICE5_EXECUTE", stale: "SLICE5_STALE_PLANNING", repl: "SLICE5_REPL_ALIVE", steering: "SLICE6_POST_BOUNDARY_STEERING", child: "SLICE6_RLM_SPLIT_CHILD_RESULT" };
+const sentinels = { baseline: "SLICE5_HOST_BASELINE", prepare: "SLICE5_PREPARE", execute: "SLICE5_EXECUTE", stale: "SLICE5_STALE_PLANNING", repl: "SLICE5_REPL_ALIVE", steering: "SLICE6_POST_BOUNDARY_STEERING", child: "SLICE6_RLM_SPLIT_CHILD_RESULT", pauseFeedback: "PAUSE_RESUME_FEEDBACK_MUST_SURVIVE", pauseAck: "PAUSE_RESUME_ACK_MUST_SURVIVE" };
 for (const [name, body] of Object.entries({ prepare: sentinels.prepare, "spec-it-out": "spec", plan: "plan", execute: sentinels.execute, blocked: "blocked" })) await writeFile(join(cwd, `.ralph/skills/${name}/SKILL.md`), `---\nname: ${name}\ndescription: acceptance\n${name === "prepare" ? "" : "prime-ralph-invocation-version: 1\n"}---\n${body}\n`);
 await writeFile(join(cwd, ".ralph/plans/SPECIFICATION.md"), "# execution fixture specification\n");
 await writeFile(join(cwd, ".ralph/plans/EXECUTION_PLAN.md"), "# execution fixture plan\n");
@@ -56,7 +56,7 @@ const agent = new Agent({ initialState: { systemPrompt: sentinels.baseline, mode
     if ((meta.cycle === 1 && stage === 1) || (meta.cycle === 2 && stage === 2) || (meta.cycle === 3 && stage === 1)) {
       const terminal = meta.cycle === 3;
       if (terminal) hostSession._completeGoalFromHost();
-      return response(assistant([{ type: "toolCall", id: `life-${meta.cycle}`, name: "ralph_lifecycle", arguments: { action: terminal ? "complete" : "continue", lifecycleId: meta.lifecycleId, cycle: meta.cycle, ...(terminal ? { archive: false } : {}) } }], "toolUse"));
+      return response(assistant([...(terminal ? [] : [{ type: "text", text: `cycle ${meta.cycle} compaction padding ${"context ".repeat(30000)}` }]), { type: "toolCall", id: `life-${meta.cycle}`, name: "ralph_lifecycle", arguments: { action: terminal ? "complete" : "continue", lifecycleId: meta.lifecycleId, cycle: meta.cycle, ...(terminal ? { archive: false } : {}) } }], "toolUse"));
     }
     if (meta.cycle === 1 && !fakeRlmRun) { fakeRlmRun = { settled: false }; hostSession._unsettledRlmChildRuns.add(fakeRlmRun); }
     if (meta.cycle === 2 && !delayedTurnEndRelease) {
@@ -71,6 +71,8 @@ const agent = new Agent({ initialState: { systemPrompt: sentinels.baseline, mode
 hostSession = new AgentSession({ agent, sessionManager: sm, settingsManager: settings, cwd, agentDir, resourceLoader: loader, modelRegistry: registry, customTools: [ipython], initialActiveToolNames: ["ipython"], allowedToolNames: ["ipython", "ralph_lifecycle"], includeGoals: true, includeCompactSkill: false });
 await hostSession.bindExtensions({}); await waitFor(() => contexts.length >= 1 && !hostSession.isStreaming, "planning startup");
 await hostSession.promptAndWait(sentinels.stale);
+for (let turn = 1; turn <= 3; turn += 1) await hostSession.promptAndWait(`EXECUTION_STALE_TURN_${turn}
+${"old execution context ".repeat(2500)}`);
 const beforeExecute = contexts.length; await hostSession.prompt("/execute");
 await waitFor(() => { const state = sm.getEntries().filter((entry) => entry.customType === EXECUTION_STATE_ENTRY_TYPE).at(-1)?.data; return state?.pendingDecision?.action === "continue" && typeof state.pendingDecision.finalAssistantMessage === "string" && !hostSession.isStreaming; }, "first pass waiting at native RLM barrier");
 const heldContextCount = contexts.length, heldState = sm.getEntries().filter((entry) => entry.customType === EXECUTION_STATE_ENTRY_TYPE).at(-1).data;
@@ -90,15 +92,27 @@ const continuationAdmittedAfterCloseout = raceBoundaryState.cycle === 3 && raceB
 await waitFor(() => { const states = sm.getEntries().filter((entry) => entry.customType === EXECUTION_STATE_ENTRY_TYPE); return states.at(-1)?.data?.status === "inactive" && states.at(-1)?.data?.pendingDecision === null && contexts.length >= beforeExecute + 7 && !hostSession.isStreaming; }, "three execution passes and completion");
 const executionContexts = contexts.filter((context) => invocation(visible(context))?.skill === "execute"), metas = executionContexts.map((context) => invocation(visible(context))).filter(Boolean);
 const firstByCycle = [1, 2, 3].map((cycle) => executionContexts.find((context) => invocation(visible(context))?.cycle === cycle));
-const log = await readFile(join(cwd, ".ralph/logs/EXECUTION_LOG.md"), "utf8"), states = sm.getEntries().filter((entry) => entry.customType === EXECUTION_STATE_ENTRY_TYPE).map((entry) => entry.data), finalState = states.at(-1);
+const entries = sm.getEntries();
+const log = await readFile(join(cwd, ".ralph/logs/EXECUTION_LOG.md"), "utf8"), states = entries.filter((entry) => entry.customType === EXECUTION_STATE_ENTRY_TYPE).map((entry) => entry.data), finalState = states.at(-1);
+const automaticBoundaries = entries.filter((entry) => entry.type === "custom_message" && entry.details?.command === "execute-round");
+const automaticCompactions = entries.filter((entry) => entry.type === "compaction" && entry.details?.command === "execute-round");
+const automaticBoundaryOrdering = automaticBoundaries.length === 2 && automaticBoundaries.every((boundary) => {
+  const requestId = boundary.details.automaticCompactionRequestId, boundaryIndex = entries.indexOf(boundary);
+  const armedIndex = entries.findIndex((entry) => entry.customType === EXECUTION_STATE_ENTRY_TYPE && entry.data?.pendingRound?.requestId === requestId && entry.data.pendingRound.stage === "armed");
+  const markerIndex = entries.findIndex((entry) => entry.customType === "prime_ralph_reset_marker" && entry.data?.requestId === requestId);
+  const compactionIndex = entries.findIndex((entry) => entry.type === "compaction" && entry.details?.requestId === requestId);
+  const admissionIndex = entries.findIndex((entry) => entry.customType === EXECUTION_STATE_ENTRY_TYPE && entry.data?.pendingRound?.requestId === requestId && entry.data.pendingRound.stage === "admission-requested");
+  return armedIndex >= 0 && armedIndex < markerIndex && markerIndex < compactionIndex && compactionIndex < admissionIndex && admissionIndex < boundaryIndex;
+});
 const checks = {
   primeAgentVersion: JSON.parse(await readFile(join(primeRoot, "package.json"), "utf8")).version === "0.9.1",
   threeCycles: [1, 2, 3].every((cycle) => metas.some((meta) => meta.cycle === cycle)),
   oneLifecycle: new Set(metas.map((meta) => meta.lifecycleId)).size === 1,
   cleanOrdering: firstByCycle.every((context) => { const value = visible(context); return value.indexOf(sentinels.prepare) >= 0 && value.indexOf(sentinels.prepare) < value.indexOf(sentinels.execute) && !value.includes(sentinels.stale); }),
+  automaticCompactionBeforeBoundary: automaticCompactions.length === 2 && automaticBoundaryOrdering,
   nativeGoalDriver: states.some((state) => state.driverGoalId) && hostSession.goalState.status === "complete",
   trackedRlmHeldBoundary: rlmHeld,
-  rlmSplitRecovered: splitPausedState?.cycle === 2 && splitPausedState?.status === "paused" && states.some((state) => state.cycle === 2 && state.status === "running" && state.resumed === true) && contexts.some((context) => context.capturedText.includes(sentinels.child)),
+  rlmSplitRecovered: splitPausedState?.cycle === 2 && splitPausedState?.status === "paused" && states.some((state) => state.cycle === 2 && state.status === "running" && state.resumed === false) && contexts.some((context) => context.capturedText.includes(sentinels.child)),
   continuationHeldForCloseout,
   continuationAdmittedAfterCloseout,
   noPrematureCloseoutPause: !states.some((state) => state.pauseReason === "native continuation arrived before lifecycle closeout"),

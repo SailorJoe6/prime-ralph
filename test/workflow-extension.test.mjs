@@ -4,22 +4,21 @@ import { createWorkflowExtension } from "../src/workflow-extension.js";
 import { PLANNING_MESSAGE_TYPE, PLANNING_STARTUP_MESSAGE_TYPE } from "../src/planning.js";
 import { SPECIFICATION_MESSAGE_TYPE, STARTUP_PREPARE_MESSAGE_TYPE } from "../src/specification.js";
 import { RESET_MESSAGE_TYPE } from "../src/reset-context.js";
-import { executionCompactionInstructions } from "../src/execution-boundary-compaction.js";
-import { armExecutionBoundaryProjection, BLOCKED_MESSAGE_TYPE, EXECUTION_MESSAGE_TYPE, EXECUTION_STATE_ENTRY_TYPE, latestExecutionState } from "../src/execution.js";
+import { BLOCKED_MESSAGE_TYPE, EXECUTION_MESSAGE_TYPE, EXECUTION_STATE_ENTRY_TYPE, latestExecutionState } from "../src/execution.js";
 
 const prepare = { path: "/project/.ralph/skills/prepare/SKILL.md", text: "---\nname: prepare\ndescription: test\n---\nprepare body" };
 const specSkill = { path: "/project/.ralph/skills/spec-it-out/SKILL.md", text: "---\nname: spec-it-out\ndescription: test\nprime-ralph-invocation-version: 1\n---\nspec body" };
 const planSkill = { path: "/project/.ralph/skills/plan/SKILL.md", text: "---\nname: plan\ndescription: test\nprime-ralph-invocation-version: 1\n---\nplan body" };
 const executeSkill = { path: "/project/.ralph/skills/execute/SKILL.md", text: "---\nname: execute\ndescription: test\nprime-ralph-invocation-version: 1\n---\nexecute body" };
 const blockedSkill = { path: "/project/.ralph/skills/blocked/SKILL.md", text: "---\nname: blocked\ndescription: test\nprime-ralph-invocation-version: 1\n---\nblocked body" };
-function harness({ specificationState = "absent", planState = "absent", branch = [], inspectSpecError, inspectPlanError, sendError, loadPrepareError, loadPlanError, blockedState = "absent", blockedProofState = "complete", restoredProofState = "unproven", appendFailureAt: initialAppendFailureAt, logFailureAt, sessionId = "session-1", rlmDepth = 0, sharedLogs, closeoutTimeoutMs } = {}) {
+function harness({ specificationState = "absent", planState = "absent", branch = [], inspectSpecError, inspectPlanError, sendError, loadPrepareError, loadPlanError, loadExecuteError, blockedState = "absent", blockedProofState = "complete", restoredProofState = "unproven", appendFailureAt: initialAppendFailureAt, appendFailureFrom: initialAppendFailureFrom, logFailureAt, sessionId = "session-1", rlmDepth = 0, sharedLogs, closeoutTimeoutMs } = {}) {
   const commands = new Map(), tools = new Map(), handlers = new Map(), sent = [], userMessages = [], notices = [], compactions = [], entries = [], logs = sharedLogs ?? [], transactions = [];
-  let spec = specificationState, plan = planState, blocked = blockedState, restored = restoredProofState, blockedLifecycle = [...branch].reverse().find((entry) => entry?.data?.provenanceId)?.data.provenanceId ?? "blocked-life", nextEntry = branch.length, pending = false, idle = true, aborted = 0, appendCalls = 0, appendFailureAt = initialAppendFailureAt, logCalls = 0;
+  let spec = specificationState, plan = planState, blocked = blockedState, restored = restoredProofState, blockedLifecycle = [...branch].reverse().find((entry) => entry?.data?.provenanceId)?.data.provenanceId ?? "blocked-life", nextEntry = branch.length, pending = false, idle = true, aborted = 0, appendCalls = 0, appendFailureAt = initialAppendFailureAt, appendFailureFrom = initialAppendFailureFrom, logCalls = 0;
   const pi = {
     registerCommand(name, command) { commands.set(name, command); },
     registerTool(tool) { tools.set(tool.name, tool); },
     on(name, handler) { const values = handlers.get(name) ?? []; values.push(handler); handlers.set(name, values); },
-    appendEntry(customType, data) { appendCalls += 1; if (appendCalls === appendFailureAt) throw new Error("injected state append failure"); const entry = { type: "custom", id: `e${++nextEntry}`, customType, data }; entries.push(entry); branch.push(entry); },
+    appendEntry(customType, data) { appendCalls += 1; if (appendCalls === appendFailureAt || (appendFailureFrom && appendCalls >= appendFailureFrom)) throw new Error("injected state append failure"); const entry = { type: "custom", id: `e${++nextEntry}`, customType, data }; entries.push(entry); branch.push(entry); },
     sendUserMessage(message, options) { userMessages.push({ message, options }); },
     sendMessage(message, options) {
       if (sendError) throw sendError;
@@ -30,7 +29,7 @@ function harness({ specificationState = "absent", planState = "absent", branch =
     loadPrepare: () => { if (loadPrepareError) throw loadPrepareError; return prepare; },
     loadSpecItOut: () => specSkill,
     loadPlan: () => { if (loadPlanError) throw loadPlanError; return planSkill; },
-    loadExecute: () => executeSkill,
+    loadExecute: () => { if (loadExecuteError) throw loadExecuteError; return executeSkill; },
     loadBlocked: () => blockedSkill,
     inspectSpecification: () => { if (inspectSpecError) throw inspectSpecError; return { state: spec, relativePath: ".ralph/plans/SPECIFICATION.md" }; },
     inspectPlan: () => { if (inspectPlanError) throw inspectPlanError; return { state: plan, relativePath: ".ralph/plans/EXECUTION_PLAN.md" }; },
@@ -65,9 +64,10 @@ function harness({ specificationState = "absent", planState = "absent", branch =
   const settle = async () => {
     const message = sent.at(-1)?.message;
     await emit("message_start", { message: { role: "custom", ...message } });
+    await emit("context", { messages: [{ role: "custom", ...message }] });
     await emit("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] });
   };
-  return { commands, tools, handlers, sent, userMessages, notices, branch, entries, compactions, logs, transactions, ctx, emit, fallback, settle, state: () => latestExecutionState(branch, sessionId), addGoal: (data) => branch.push({ type: "custom", customType: "thread_goal_state", data }), setPending: (value) => { pending = value; }, setIdle: (value) => { idle = value; }, aborted: () => aborted, setSpecification: (value) => { spec = value; }, setPlan: (value) => { plan = value; }, setRestored: (value) => { restored = value; }, setBlocked: (value) => { blocked = value; }, failStateAppendIn: (offset) => { appendFailureAt = appendCalls + offset; }, logAttempts: () => logCalls };
+  return { commands, tools, handlers, sent, userMessages, notices, branch, entries, compactions, logs, transactions, ctx, emit, fallback, settle, state: () => latestExecutionState(branch, sessionId), addGoal: (data) => branch.push({ type: "custom", customType: "thread_goal_state", data }), setPending: (value) => { pending = value; }, setIdle: (value) => { idle = value; }, aborted: () => aborted, setSpecification: (value) => { spec = value; }, setPlan: (value) => { plan = value; }, setRestored: (value) => { restored = value; }, setBlocked: (value) => { blocked = value; }, failStateAppendIn: (offset) => { appendFailureAt = appendCalls + offset; }, failAllStateAppends: () => { appendFailureFrom = appendCalls + 1; }, restoreStateAppends: () => { appendFailureAt = undefined; appendFailureFrom = undefined; }, logAttempts: () => logCalls };
 }
 
 test("registers the complete Slice 5 command and lifecycle-control surface", () => {
@@ -231,17 +231,46 @@ test("same-session resume preserves specification phase after a spec appears", a
 });
 
 
+async function completeLatestResetCompaction(h) {
+  const options = h.compactions.at(-1);
+  const requestId = options.customInstructions.split(":").at(-1);
+  const marker = [...h.branch].reverse().find((entry) => entry?.type === "custom" && entry.customType === "prime_ralph_reset_marker" && entry.data?.requestId === requestId);
+  assert.ok(marker?.id);
+  options.onComplete({ summary: "", firstKeptEntryId: marker.id });
+  const admitted = h.sent.at(-1).message;
+  await h.emit("message_start", { message: { role: "custom", ...admitted } });
+  await h.emit("context", { messages: [{ role: "custom", ...admitted }] });
+  return admitted;
+}
+
 async function startExecution(h) {
   await h.commands.get("execute").handler("", h.ctx);
   assert.equal(h.compactions.length, 1);
-  h.fallback();
-  await h.emit("message_start", { message: { role: "custom", ...h.sent.at(-1).message } });
+  const admitted = await completeLatestResetCompaction(h);
   const state = h.state();
   assert.equal(state.status, "running");
   assert.equal(state.cycle, 1);
   assert.match(h.sent.at(-1).message.content, /"invocationMode":"execution-start"/);
   return state;
 }
+async function completeAutomaticRoundCompaction(h) {
+  const pending = h.state().pendingRound;
+  assert.equal(pending?.stage, "compacting");
+  const marker = [...h.branch].reverse().find((entry) => entry?.type === "custom" && entry.customType === "prime_ralph_reset_marker" && entry.data?.requestId === pending.requestId);
+  assert.ok(marker?.id);
+  const options = h.compactions.at(-1);
+  options.onComplete({ summary: "", firstKeptEntryId: marker.id });
+  assert.equal(h.state().pendingRound.stage, "admission-requested");
+  const boundary = h.sent.at(-1).message;
+  assert.equal(boundary.customType, RESET_MESSAGE_TYPE);
+  assert.equal(boundary.details.command, "execute-round");
+  await h.emit("message_start", { message: { role: "custom", ...boundary } });
+  assert.equal(h.state().pendingRound?.stage, "admission-requested");
+  await h.emit("context", { messages: [{ role: "custom", ...boundary }] });
+  assert.equal(h.state().pendingRound ?? null, null);
+  return boundary;
+}
+
 function finalEvent(text = "round finished") {
   return { type: "turn_end", message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text }] }, toolResults: [] };
 }
@@ -279,7 +308,16 @@ test("/execute has exact missing-document fallbacks and admits one lifecycle", a
   assert.match(h.notices.at(-1)[0], /already running/); assert.equal(h.state().lifecycleId, state.lifecycleId); assert.equal(h.compactions.length, 1);
 });
 
-test("continue requires the native goal and admits the next clean cycle only after the explicit decision", async () => {
+test("/execute never replaces a refused reset-flavor compaction with projection", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" });
+  await h.commands.get("execute").handler("", h.ctx);
+  assert.equal(h.compactions.length, 1); assert.equal(h.state().status, "inactive");
+  h.compactions[0].onError(new Error("Session is too short to compact — try again once it grows"));
+  assert.equal(h.state().status, "inactive"); assert.equal(h.sent.length, 0);
+  assert.match(h.notices.at(-1)[0], /failed before its skill prompt was delivered/);
+});
+
+test("continue compacts before it admits the next clean cycle", async () => {
   const h = harness({ specificationState: "existing", planState: "existing" }); const initial = await startExecution(h);
   await h.emit("before_agent_start", { prompt: h.sent.at(-1).message.content });
   await assert.rejects(control(h, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 }), /native Prime Agent goal/);
@@ -289,11 +327,56 @@ test("continue requires the native goal and admits the next clean cycle only aft
   assert.equal(h.logs.length, 0); assert.equal(h.state().cycle, 1); assert.equal(h.state().pendingDecision.action, "continue");
   const context = h.handlers.get("context").at(-1), goalMessage = { role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: "goal-1", continuationsUsed: 1 } };
   await h.emit("message_start", { message: goalMessage });
-  const projected = await context({ messages: [{ role: "user", content: "stale" }, goalMessage] }, h.ctx);
-  assert.equal(h.logs.length, 1); assert.equal(h.state().cycle, 2); assert.equal(h.state().pendingDecision, null);
-  assert.equal(projected.messages.length, 1); assert.equal(projected.messages[0].customType, EXECUTION_MESSAGE_TYPE); assert.match(projected.messages[0].content, /"cycle":2/);
+  const held = await context({ messages: [{ role: "user", content: "stale" }, goalMessage] }, h.ctx);
+  assert.deepEqual(held.messages, []); assert.equal(h.aborted(), 1);
+  assert.equal(h.logs.length, 1); assert.equal(h.state().cycle, 1); assert.equal(h.state().pendingDecision, null);
+  assert.equal(h.state().pendingRound.stage, "compacting"); assert.equal(h.compactions.length, 2);
+  assert.equal(h.sent.filter(({ message }) => message.details?.command === "execute-round").length, 0);
+  const armedIndex = h.branch.findIndex((entry) => entry?.customType === EXECUTION_STATE_ENTRY_TYPE && entry.data?.pendingRound?.stage === "armed");
+  const markerIndex = h.branch.findIndex((entry) => entry?.customType === "prime_ralph_reset_marker" && entry.data?.requestId === h.state().pendingRound.requestId);
+  const compactingIndex = h.branch.findIndex((entry) => entry?.customType === EXECUTION_STATE_ENTRY_TYPE && entry.data?.pendingRound?.stage === "compacting");
+  assert.ok(armedIndex >= 0 && armedIndex < markerIndex && markerIndex < compactingIndex);
+
+  const boundary = await completeAutomaticRoundCompaction(h);
+  assert.equal(h.state().cycle, 2); assert.equal(h.state().admittedContinuation.identity, "goal-1:1");
+  assert.match(boundary.content, /"cycle":2/); assert.match(boundary.content, /"invocationMode":"execution-continue"/);
+  const clean = await h.handlers.get("context")[0]({ messages: [{ role: "compactionSummary", summary: "" }, { role: "user", content: "stale" }, boundary] }, h.ctx);
+  assert.deepEqual(clean.messages, [boundary]);
+  const transition = h.state().transition, sentCount = h.sent.length;
+  h.compactions.at(-1).onComplete({ summary: "", firstKeptEntryId: h.branch[markerIndex].id });
+  assert.equal(h.state().transition, transition); assert.equal(h.sent.length, sentCount);
 });
 
+
+test("native goal pause and resume preserve the complete current iteration without projection", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" }); const initial = await startExecution(h);
+  h.addGoal({ goalId: "goal-pause", status: "active", active: true });
+  await control(h, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 });
+  await h.emit("turn_end", finalEvent("completed cycle one"));
+  const originalGoal = { role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: "goal-pause", continuationsUsed: 1 } };
+  const context = h.handlers.get("context").at(-1);
+  assert.deepEqual((await context({ messages: [{ role: "user", content: "old cycle" }, originalGoal] }, h.ctx)).messages, []);
+  const boundary = await completeAutomaticRoundCompaction(h);
+  assert.equal(h.state().cycle, 2); assert.equal(h.state().admittedContinuation.identity, "goal-pause:1");
+
+  const currentWork = { role: "assistant", content: "current iteration work" };
+  const feedback = { role: "user", content: "keep this feedback" };
+  const acknowledgement = { role: "assistant", content: "I will keep it" };
+  h.addGoal({ goalId: "goal-pause", status: "paused", active: true });
+  await h.emit("before_agent_start", { prompt: "paused-side-input" });
+  assert.equal(h.state().status, "paused");
+  h.addGoal({ goalId: "goal-pause", status: "active", active: true });
+  const duplicateResume = { role: "custom", customType: "goal_context", content: "resume", details: { kind: "continuation", goalId: "goal-pause", continuationsUsed: 1 } };
+  const messages = [boundary, currentWork, feedback, acknowledgement, duplicateResume];
+  const beforeTransition = h.state().transition;
+  const resumed = await context({ messages }, h.ctx);
+
+  assert.equal(resumed, undefined);
+  assert.deepEqual(messages, [boundary, currentWork, feedback, acknowledgement, duplicateResume]);
+  assert.equal(h.state().status, "running"); assert.equal(h.state().cycle, 2); assert.equal(h.state().admittedContinuation.identity, "goal-pause:1");
+  assert.equal(h.state().resumed, false); assert.equal(h.state().transition, beforeTransition + 1);
+  assert.equal(h.compactions.length, 2); assert.equal(h.sent.filter(({ message }) => message.details?.command === "execute-round").length, 1);
+});
 
 test("an admitted native continuation waits for the queued turn_end closeout", async () => {
   const h = harness({ specificationState: "existing", planState: "existing" }); const initial = await startExecution(h);
@@ -309,12 +392,13 @@ test("an admitted native continuation waits for the queued turn_end closeout", a
   assert.equal(h.logs.length, 0); assert.equal(h.state().cycle, 1); assert.equal(h.state().pendingDecision.finalAssistantMessage, undefined);
   await h.emit("turn_end", structuredClone(completed));
   const projected = await projection;
-  assert.equal(h.aborted(), 0); assert.equal(h.logs.length, 1); assert.equal(h.state().status, "running"); assert.equal(h.state().cycle, 2);
-  assert.equal(projected.messages[0].customType, EXECUTION_MESSAGE_TYPE); assert.match(projected.messages[0].content, /"cycle":2/);
+  assert.deepEqual(projected.messages, []); assert.equal(h.aborted(), 1); assert.equal(h.logs.length, 1);
+  assert.equal(h.state().status, "running"); assert.equal(h.state().cycle, 1); assert.equal(h.state().pendingRound.stage, "compacting");
+  await completeAutomaticRoundCompaction(h);
+  assert.equal(h.state().cycle, 2);
 
-  await h.emit("message_start", { message: goalMessage });
   await h.emit("turn_end", finalEvent("cycle two forgot its decision"));
-  assert.equal(h.aborted(), 1); assert.equal(h.state().status, "paused"); assert.match(h.state().pauseReason, /without a lifecycle decision/);
+  assert.equal(h.aborted(), 2); assert.equal(h.state().status, "paused"); assert.match(h.state().pauseReason, /without a lifecycle decision/);
 });
 
 
@@ -342,8 +426,10 @@ test("an RLM-split running pass re-registers closeout before the continuation re
     new Promise((resolve) => setImmediate(() => resolve("still waiting"))),
   ]);
   assert.notEqual(outcome, "still waiting");
-  assert.equal(h.aborted(), 0); assert.equal(h.logs.length, 1); assert.equal(h.state().cycle, 2);
-  assert.equal(outcome.messages[0].customType, EXECUTION_MESSAGE_TYPE);
+  assert.deepEqual(outcome.messages, []); assert.equal(h.aborted(), 1); assert.equal(h.logs.length, 1);
+  assert.equal(h.state().cycle, 1); assert.equal(h.state().pendingRound.stage, "compacting");
+  await completeAutomaticRoundCompaction(h);
+  assert.equal(h.state().cycle, 2);
 });
 
 
@@ -440,8 +526,10 @@ test("reload after queued closeout preserves exact continuation admission", asyn
   await rebuilt.emit("session_start", { reason: "reload" });
   const goalMessage = { role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: "goal-reload", continuationsUsed: 1 } };
   const projected = await rebuilt.handlers.get("context").at(-1)({ messages: [completed.message, goalMessage] }, rebuilt.ctx);
-  assert.equal(logs.length, 1); assert.equal(rebuilt.state().cycle, 2); assert.equal(rebuilt.state().status, "running"); assert.equal(rebuilt.state().pendingDecision, null);
-  assert.equal(projected.messages[0].customType, EXECUTION_MESSAGE_TYPE); assert.match(projected.messages[0].content, /"cycle":2/);
+  assert.deepEqual(projected.messages, []); assert.equal(logs.length, 1); assert.equal(rebuilt.state().cycle, 1);
+  assert.equal(rebuilt.state().status, "running"); assert.equal(rebuilt.state().pendingDecision, null); assert.equal(rebuilt.state().pendingRound.stage, "compacting");
+  const boundary = await completeAutomaticRoundCompaction(rebuilt);
+  assert.equal(rebuilt.state().cycle, 2); assert.match(boundary.content, /"cycle":2/);
 });
 
 
@@ -493,7 +581,7 @@ test("waiting completes the native driver, preserves the open cycle, and resumes
   assert.equal(h.state().status, "running"); assert.equal(h.state().cycle, 1); assert.equal(h.state().pendingDecision, null); assert.equal(h.logs.length, 0);
   const goalMessage = { role: "custom", customType: "goal_context", content: "resume", details: { kind: "continuation", goalId: "goal-2", continuationsUsed: 1 } };
   const projected = await h.handlers.get("context").at(-1)({ messages: [goalMessage] }, h.ctx);
-  assert.equal(projected.messages[0].customType, EXECUTION_MESSAGE_TYPE); assert.match(projected.messages[0].content, /"cycle":1/);
+  assert.equal(projected, undefined); assert.equal(h.state().admittedContinuation.identity, "goal-2:1");
 });
 
 test("recover-driver resumes one exact post-ready terminal-driver mismatch without closing the cycle", async () => {
@@ -516,9 +604,8 @@ test("recover-driver resumes one exact post-ready terminal-driver mismatch witho
   assert.equal(h.state().cycle, 1);
   assert.equal(h.logs.length, 0);
   assert.equal(h.state().pendingDecision, null);
-  assert.equal(projected.messages[0].customType, EXECUTION_MESSAGE_TYPE);
-  assert.match(projected.messages[0].content, /"invocationMode":"execution-resume"/);
-  assert.match(projected.messages[0].content, /"cycle":1/);
+  assert.equal(projected, undefined);
+  assert.equal(h.state().admittedContinuation.identity, "replacement-driver:1");
 });
 
 test("post-ready terminal-driver recovery survives reload and state-append retry", async () => {
@@ -589,7 +676,7 @@ test("explicit /execute resumes the same lifecycle after failed recovery and ter
   h.addGoal({ goalId: "replacement-driver", status: "complete", active: false });
   await h.commands.get("execute").handler("", h.ctx);
   assert.equal(h.compactions.length, 2);
-  h.fallback();
+  await completeLatestResetCompaction(h);
   assert.equal(h.state().status, "running");
   assert.equal(h.state().lifecycleId, initial.lifecycleId);
   assert.equal(h.state().cycle, 1);
@@ -612,15 +699,13 @@ test("reload after recovery adoption closes once and admits one unchanged-cycle 
   const projection = rebuilt.handlers.get("context").at(-1)({ messages: [completed.message, goalMessage] }, rebuilt.ctx);
   await rebuilt.emit("turn_end", completed);
   const projected = await projection;
-  assert.equal(projected.messages.length, 1);
-  assert.equal(projected.messages[0].customType, EXECUTION_MESSAGE_TYPE);
-  assert.match(projected.messages[0].content, /"invocationMode":"execution-resume"/);
-  assert.match(projected.messages[0].content, /"cycle":1/);
+  assert.equal(projected, undefined);
+  assert.equal(rebuilt.state().admittedContinuation.identity, "replacement-driver:1");
   assert.equal(rebuilt.state().cycle, 1);
   assert.equal(rebuilt.logs.length, 0);
   const transition = rebuilt.state().transition;
   const repeated = await rebuilt.handlers.get("context").at(-1)({ messages: [completed.message, goalMessage] }, rebuilt.ctx);
-  assert.equal(repeated.messages.length, 1);
+  assert.equal(repeated, undefined);
   assert.equal(rebuilt.state().transition, transition);
 });
 
@@ -724,7 +809,7 @@ test("same-session execute finishes a failed completion log before starting a ne
   assert.equal(h.logAttempts(), 2);
   assert.equal(h.logs.length, 1);
   assert.equal(h.compactions.length, 2);
-  h.fallback();
+  await completeLatestResetCompaction(h);
   assert.notEqual(h.state().lifecycleId, initial.lifecycleId);
 });
 
@@ -753,7 +838,7 @@ test("unblock requires provenance and forward confirmation before a fresh explic
   assert.equal(h.state().phase, "planning"); assert.equal(h.state().forwardConfirmed, false); assert.equal(h.transactions[0].operation, "unblock");
   await h.commands.get("execute").handler("", h.ctx); assert.match(h.notices.at(-1)[0], /original blocker is resolved/);
   await control(h, { action: "confirm-forward", provenanceId: "blocked-life" });
-  await h.commands.get("execute").handler("", h.ctx); h.fallback(); assert.equal(h.state().status, "running"); assert.notEqual(h.state().lifecycleId, "blocked-life");
+  await h.commands.get("execute").handler("", h.ctx); await completeLatestResetCompaction(h); assert.equal(h.state().status, "running"); assert.notEqual(h.state().lifecycleId, "blocked-life");
 });
 
 test("completion supports no archive and explicit named archive with no continuation", async () => {
@@ -818,6 +903,19 @@ test("blocked /spec-it-out protects the proven blocked specification as existing
   const h = harness({ blockedState: "complete", specificationState: "absent" }); await h.emit("session_start", { reason: "startup" }); await h.emit("message_start", { message: { role: "custom", ...h.sent[0].message } });
   await h.commands.get("spec-it-out").handler("", h.ctx); const message = h.sent.at(-1).message;
   assert.equal(message.customType, SPECIFICATION_MESSAGE_TYPE); assert.equal(message.details.mode, "specification-existing"); assert.equal(message.details.specificationPath, ".ralph/plans/blocked/SPECIFICATION.md"); assert.match(message.content, /Do not offer future-specification creation/);
+});
+
+test("ordinary running execution does not use the generic execution projection fallback", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" }); await startExecution(h);
+  const context = h.handlers.get("context").at(-1);
+  const messages = [
+    { role: "user", content: "keep old current-iteration input" },
+    { role: "custom", customType: EXECUTION_MESSAGE_TYPE, content: "old execution message", details: { source: "prime-ralph", protocolVersion: 1, lifecycleId: h.state().lifecycleId } },
+    { role: "assistant", content: "keep later current-iteration output" },
+  ];
+  const before = h.state();
+  assert.equal(await context({ messages }, h.ctx), undefined);
+  assert.deepEqual(h.state(), before);
 });
 
 test("inactive and interactive planning contexts do not reapply stale execution authority", async () => {
@@ -939,201 +1037,116 @@ test("startup cancels an outstanding execution whose exact active pair disappear
 });
 
 
-test("one admitted continuation remains the clean boundary across steering, child notices, and tool tails", async () => {
-  const h = harness({ specificationState: "existing", planState: "existing" }); const initial = await startExecution(h);
-  h.addGoal({ goalId: "goal", status: "active", active: true }); await control(h, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 }); await h.emit("turn_end", finalEvent("pass one"));
-  const stale = { role: "user", content: "pre-boundary history" };
-  const goalMessage = { role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: "goal", continuationsUsed: 1 } }, context = h.handlers.get("context").at(-1);
-  const first = await context({ messages: [stale, goalMessage] }, h.ctx), transition = h.state().transition;
-  const steering = { role: "user", content: "<btw>keep this steering</btw>" };
-  const child = { role: "custom", customType: "rlm_child_result", content: "tracked child finished" };
-  const call = { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "x", name: "status", arguments: {} }] }, result = { role: "toolResult", toolCallId: "x", content: [{ type: "text", text: "usable output" }] };
-  const second = await context({ messages: [stale, goalMessage, steering, child, call, result] }, h.ctx);
-  assert.equal(h.state().transition, transition); assert.equal(second.messages[0].content, first.messages[0].content);
-  assert.deepEqual(second.messages.slice(1), [steering, child, call, result]); assert.ok(!second.messages.includes(stale)); assert.equal(h.logs.length, 1);
-});
-
-
-test("reload reconstructs the admitted continuation boundary after newer user input", async () => {
-  const branch = [], logs = [];
-  const first = harness({ branch, sharedLogs: logs, specificationState: "existing", planState: "existing", sessionId: "projection-reload" });
-  const initial = await startExecution(first);
-  first.addGoal({ goalId: "goal-reload-projection", status: "active", active: true });
-  await control(first, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 }); await first.emit("turn_end", finalEvent("pass one"));
-  const goalMessage = { role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: "goal-reload-projection", continuationsUsed: 1 } };
-  await first.handlers.get("context").at(-1)({ messages: [{ role: "user", content: "stale" }, goalMessage] }, first.ctx);
-
-  const rebuilt = harness({ branch, sharedLogs: logs, specificationState: "existing", planState: "existing", sessionId: "projection-reload" });
-  await rebuilt.emit("session_start", { reason: "reload" });
-  const steering = { role: "user", content: "newer /btw after reload" };
-  const projected = await rebuilt.handlers.get("context").at(-1)({ messages: [{ role: "user", content: "stale" }, goalMessage, steering] }, rebuilt.ctx);
-  assert.equal(rebuilt.state().cycle, 2); assert.equal(rebuilt.state().admittedContinuation.identity, "goal-reload-projection:1");
-  assert.equal(projected.messages[0].customType, EXECUTION_MESSAGE_TYPE); assert.match(projected.messages[0].content, /"cycle":2/);
-  assert.deepEqual(projected.messages.slice(1), [steering]);
-});
-
-test("a /btw-shaped clone keeps the admitted boundary without consuming a newer continuation", async () => {
-  const h = harness({ specificationState: "existing", planState: "existing" }); const initial = await startExecution(h);
-  h.addGoal({ goalId: "goal-side", status: "active", active: true }); await control(h, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 }); await h.emit("turn_end", finalEvent("pass one"));
-  const firstGoal = { role: "custom", customType: "goal_context", content: "first", details: { kind: "continuation", goalId: "goal-side", continuationsUsed: 1 } }, context = h.handlers.get("context").at(-1);
-  await h.emit("message_start", { message: firstGoal }); await context({ messages: [{ role: "user", content: "stale" }, firstGoal] }, h.ctx);
-  await control(h, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 2 }); await h.emit("turn_end", finalEvent("pass two"));
-  const secondGoal = { role: "custom", customType: "goal_context", content: "second", details: { kind: "continuation", goalId: "goal-side", continuationsUsed: 2 } };
-  const sideQuestion = { role: "user", content: "<btw>answer without advancing</btw>" }, before = h.state().transition;
-  const side = await context({ messages: [{ role: "user", content: "stale" }, firstGoal, secondGoal, sideQuestion] }, h.ctx);
-  assert.equal(h.state().transition, before); assert.equal(h.state().cycle, 2); assert.equal(h.state().admittedContinuation.identity, "goal-side:1");
-  assert.deepEqual(side.messages.slice(1), [sideQuestion]); assert.ok(!side.messages.some((message) => message === secondGoal || message.content === "stale"));
-
-  const main = await context({ messages: [{ role: "user", content: "stale" }, firstGoal, secondGoal] }, h.ctx);
-  assert.equal(h.state().cycle, 3); assert.equal(h.state().admittedContinuation.identity, "goal-side:2"); assert.match(main.messages[0].content, /"cycle":3/);
-});
-
-
-
-async function armedProjectionHarness({ sessionId = "projection-consumption", appendFailureAt } = {}) {
-  const branch = [], logs = [];
-  const first = harness({ branch, sharedLogs: logs, specificationState: "existing", planState: "existing", sessionId });
-  const initial = await startExecution(first);
-  first.addGoal({ goalId: "goal-projection-consumption", status: "active", active: true });
-  await control(first, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 });
-  await first.emit("turn_end", finalEvent("pass one"));
-  const goalMessage = { role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: "goal-projection-consumption", continuationsUsed: 1 } };
-  await first.handlers.get("context").at(-1)({ messages: [{ role: "user", content: "stale" }, goalMessage] }, first.ctx);
-  const armed = armExecutionBoundaryProjection(first.state(), { requestId: "automatic-request" });
-  branch.push({ type: "custom", id: "armed-projection", customType: EXECUTION_STATE_ENTRY_TYPE, data: armed });
-  return { branch, logs, initial, goalMessage, current: harness({ branch, sharedLogs: logs, specificationState: "existing", planState: "existing", sessionId, appendFailureAt }) };
-}
-
-function automaticExecutionBoundary(state, overrides = {}) {
-  const admitted = state.admittedContinuation;
-  return { role: "custom", customType: EXECUTION_MESSAGE_TYPE, content: "execute", details: { source: "prime-ralph", protocolVersion: 1, requestId: "delivery", sessionId: state.sessionId, workflowPhase: "execution", invocationMode: admitted.mode, lifecycleId: state.lifecycleId, cycle: state.cycle, goalId: admitted.goalId, continuationsUsed: admitted.continuationsUsed, boundaryIdentity: admitted.identity, automaticCompactionRequestId: admitted.boundary.requestId, preserveTrigger: false, ...overrides } };
-}
-
-test("a steering-selected automatic boundary durably suppresses its later exact queued duplicate", async () => {
-  const { branch, logs, initial, current: h } = await armedProjectionHarness();
-  const summary = { role: "compactionSummary", summary: "", customInstructions: executionCompactionInstructions("automatic-request") };
-  const steering = { role: "user", content: "queued steering survives" };
-  await h.emit("before_agent_start", { prompt: "steering" });
-  await h.emit("message_start", { message: steering });
-  const projected = await h.handlers.get("context").at(-1)({ messages: [summary, steering] }, h.ctx);
-  assert.equal(h.state().admittedContinuation.boundary.stage, "projection-consumed");
-  assert.equal(projected.messages[0].customType, EXECUTION_MESSAGE_TYPE);
-  assert.equal(projected.messages[0].details.automaticCompactionRequestId, "automatic-request");
-  assert.equal(projected.messages[0].details.goalId, "goal-projection-consumption");
-  assert.equal(projected.messages[0].details.continuationsUsed, 1);
-  assert.deepEqual(projected.messages.slice(1), [steering]);
-  assert.equal(h.compactions.length, 0);
-  assert.equal(h.sent.length, 0);
-  const consumedTransition = h.state().transition;
-  const toolCall = { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "tool-1", name: "status", arguments: {} }] };
-  const toolResult = { role: "toolResult", toolCallId: "tool-1", content: [{ type: "text", text: "result" }] };
-  const repeated = await h.handlers.get("context").at(-1)({ messages: [summary, steering, toolCall, toolResult] }, h.ctx);
-  assert.equal(h.state().transition, consumedTransition);
-  assert.equal(repeated.messages[0].details.automaticCompactionRequestId, "automatic-request");
-  assert.deepEqual(repeated.messages.slice(1), [steering, toolCall, toolResult]);
-
-  const rebuiltProjection = harness({ branch, sharedLogs: logs, specificationState: "existing", planState: "existing", sessionId: "projection-consumption" });
-  const rebuiltRepeated = await rebuiltProjection.handlers.get("context").at(-1)({ messages: [summary, steering, toolCall, toolResult] }, rebuiltProjection.ctx);
-  assert.equal(rebuiltProjection.state().transition, consumedTransition);
-  assert.deepEqual(rebuiltRepeated.messages.slice(1), [steering, toolCall, toolResult]);
-
-  await control(h, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 2 });
-  await h.emit("turn_end", finalEvent("steered pass"));
-  const abortedBefore = h.aborted(), suppressionTransition = h.state().transition;
-  await h.emit("before_agent_start", { prompt: "queued boundary" });
-  await h.emit("message_start", { message: projected.messages[0] });
-  assert.equal(h.aborted(), abortedBefore + 1);
-  await h.emit("agent_end", { messages: [] });
-  assert.equal(h.state().transition, suppressionTransition);
-  assert.equal(h.state().status, "running");
-  assert.equal(h.state().pendingDecision.action, "continue");
-
-  const rebuilt = harness({ branch, sharedLogs: logs, specificationState: "existing", planState: "existing", sessionId: "projection-consumption" });
-  const rebuiltTransition = rebuilt.state().transition;
-  await rebuilt.emit("before_agent_start", { prompt: "queued boundary after reload" });
-  await rebuilt.emit("message_start", { message: projected.messages[0] });
-  assert.equal(rebuilt.aborted(), 1);
-  await rebuilt.emit("agent_end", { messages: [] });
-  assert.equal(rebuilt.state().transition, rebuiltTransition);
-  assert.equal(rebuilt.state().status, "running");
-  assert.equal(rebuilt.state().pendingDecision.action, "continue");
-});
-
-test("projection consumption append failure leaves the armed queued boundary authoritative under host hook order", async () => {
-  const { current: h } = await armedProjectionHarness({ sessionId: "projection-append-failure" });
-  const summary = { role: "compactionSummary", summary: "", customInstructions: executionCompactionInstructions("automatic-request") };
-  const steering = { role: "user", content: "steering" };
-  await h.emit("before_agent_start", { prompt: "steering" });
-  await h.emit("message_start", { message: steering });
-  const transition = h.state().transition;
-  h.failStateAppendIn(1);
-  const result = await h.handlers.get("context").at(-1)({ messages: [summary, steering] }, h.ctx);
-  assert.deepEqual(result.messages, []);
-  assert.equal(h.aborted(), 1);
-  await h.emit("agent_end", { messages: [] });
-  assert.equal(h.state().transition, transition);
-  assert.equal(h.state().status, "running");
-  assert.equal(h.state().admittedContinuation.boundary.stage, "armed");
-  assert.match(h.notices.at(-1)[0], /could not durably record/);
-});
-
-test("post-summary near-matching execution boundaries fail closed without pausing the armed lifecycle", async () => {
-  const mismatches = {
-    source: "other", protocolVersion: 2, sessionId: "other-session", lifecycleId: "other-life", cycle: 3,
-    goalId: "other-goal", continuationsUsed: 2, boundaryIdentity: "other-goal:2", automaticCompactionRequestId: "other-request",
-  };
-  for (const [field, value] of Object.entries(mismatches)) {
-    const sessionId = `projection-near-match-${field}`;
-    const { current: h } = await armedProjectionHarness({ sessionId });
-    const summary = { role: "compactionSummary", summary: "", customInstructions: executionCompactionInstructions("automatic-request") };
-    const nearMatch = automaticExecutionBoundary(h.state(), { [field]: value });
-    await h.emit("before_agent_start", { prompt: `near match ${field}` });
-    await h.emit("message_start", { message: nearMatch });
-    const transition = h.state().transition;
-    const result = await h.handlers.get("context").at(-1)({ messages: [summary, nearMatch, { role: "user", content: "steering" }] }, h.ctx);
-    assert.deepEqual(result.messages, [], field);
-    assert.equal(h.aborted(), 1, field);
-    await h.emit("agent_end", { messages: [] });
-    assert.equal(h.state().transition, transition, field);
-    assert.equal(h.state().status, "running", field);
-    assert.equal(h.state().admittedContinuation.boundary.stage, "armed", field);
-    assert.match(h.notices.at(-1)[0], /stale or mismatched execution boundary/, field);
+test("short, failed, and unexpected automatic compaction outcomes admit no next round", async () => {
+  for (const outcome of ["short", "failed", "unexpected"]) {
+    const h = harness({ specificationState: "existing", planState: "existing", sessionId: `compaction-${outcome}` }); const initial = await startExecution(h);
+    h.addGoal({ goalId: `goal-${outcome}`, status: "active", active: true });
+    await control(h, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 });
+    await h.emit("turn_end", finalEvent(`finished ${outcome}`));
+    const goalMessage = { role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: `goal-${outcome}`, continuationsUsed: 1 } };
+    assert.deepEqual((await h.handlers.get("context").at(-1)({ messages: [goalMessage] }, h.ctx)).messages, []);
+    const marker = [...h.branch].reverse().find((entry) => entry?.customType === "prime_ralph_reset_marker" && entry.data?.requestId === h.state().pendingRound.requestId);
+    if (outcome === "short") h.compactions.at(-1).onError(new Error("Session is too short to compact — try again once it grows"));
+    else if (outcome === "failed") h.compactions.at(-1).onError(new Error("provider failed"));
+    else h.compactions.at(-1).onComplete({ summary: "wrong", firstKeptEntryId: marker.id });
+    assert.equal(h.state().status, "paused", outcome); assert.equal(h.state().cycle, 1, outcome);
+    assert.equal(h.state().pendingRound.stage, "failed", outcome); assert.equal(h.state().compactionHalted, true, outcome);
+    assert.equal(h.sent.filter(({ message }) => message.details?.command === "execute-round").length, 0, outcome);
   }
-
-  const { current: duplicate } = await armedProjectionHarness({ sessionId: "projection-duplicate-exact" });
-  const summary = { role: "compactionSummary", summary: "", customInstructions: executionCompactionInstructions("automatic-request") };
-  const exact = automaticExecutionBoundary(duplicate.state());
-  await duplicate.emit("before_agent_start", { prompt: "duplicate exact boundary" });
-  await duplicate.emit("message_start", { message: exact });
-  const transition = duplicate.state().transition;
-  const result = await duplicate.handlers.get("context").at(-1)({ messages: [summary, exact, exact] }, duplicate.ctx);
-  assert.deepEqual(result.messages, []);
-  await duplicate.emit("agent_end", { messages: [] });
-  assert.equal(duplicate.state().transition, transition);
-  assert.equal(duplicate.state().status, "running");
-  assert.equal(duplicate.state().admittedContinuation.boundary.stage, "armed");
 });
 
-test("unarmed, mismatched, and already-present automatic boundaries are not consumed or suppressed", async () => {
-  const { current: armed } = await armedProjectionHarness({ sessionId: "projection-mismatch" });
-  const wrongSummary = { role: "compactionSummary", summary: "", customInstructions: executionCompactionInstructions("other-request") };
-  assert.equal(await armed.handlers.get("context").at(-1)({ messages: [wrongSummary, { role: "user", content: "steering" }] }, armed.ctx), undefined);
-  const exact = automaticExecutionBoundary(armed.state());
-  const alreadyPresent = await armed.handlers.get("context").at(-1)({ messages: [{ role: "compactionSummary", summary: "", customInstructions: executionCompactionInstructions("automatic-request") }, exact, { role: "user", content: "steering" }] }, armed.ctx);
-  assert.equal(armed.state().admittedContinuation.boundary.stage, "armed");
-  assert.deepEqual(alreadyPresent.messages, [exact, { role: "user", content: "steering" }]);
-  await armed.emit("message_start", { message: { ...exact, details: { ...exact.details, automaticCompactionRequestId: "other-request" } } });
-  assert.equal(armed.aborted(), 0);
+test("automatic compaction reload fails a pending durable boundary and never replays uncertain work", async () => {
+  const branch = [], logs = [];
+  const first = harness({ branch, sharedLogs: logs, specificationState: "existing", planState: "existing", sessionId: "automatic-reload" }); const initial = await startExecution(first);
+  first.addGoal({ goalId: "goal-reload-automatic", status: "active", active: true });
+  await control(first, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 });
+  await first.emit("turn_end", finalEvent("finished before reload"));
+  const goalMessage = { role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: "goal-reload-automatic", continuationsUsed: 1 } };
+  await first.handlers.get("context").at(-1)({ messages: [goalMessage] }, first.ctx);
+  const pending = first.state().pendingRound, marker = [...branch].reverse().find((entry) => entry?.customType === "prime_ralph_reset_marker" && entry.data?.requestId === pending.requestId);
+  first.compactions.at(-1).onComplete({ summary: "", firstKeptEntryId: marker.id });
+  assert.equal(first.state().pendingRound.stage, "admission-requested");
 
-  const plain = harness({ specificationState: "existing", planState: "existing", sessionId: "projection-unarmed" });
-  const initial = await startExecution(plain);
-  plain.addGoal({ goalId: "goal-unarmed", status: "active", active: true });
-  await control(plain, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 });
-  await plain.emit("turn_end", finalEvent("pass one"));
-  const goalMessage = { role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: "goal-unarmed", continuationsUsed: 1 } };
-  const projected = await plain.handlers.get("context").at(-1)({ messages: [goalMessage] }, plain.ctx);
-  await plain.emit("message_start", { message: { ...projected.messages[0], details: { ...projected.messages[0].details, automaticCompactionRequestId: "automatic-request" } } });
-  assert.equal(plain.aborted(), 0);
+  const rebuilt = harness({ branch, sharedLogs: logs, specificationState: "existing", planState: "existing", sessionId: "automatic-reload" });
+  await rebuilt.emit("session_start", { reason: "reload" });
+  assert.equal(rebuilt.state().cycle, 1); assert.equal(rebuilt.state().pendingRound.stage, "failed");
+  assert.equal(rebuilt.state().status, "paused"); assert.equal(rebuilt.sent.length, 0);
+
+  const uncertainBranch = branch.filter((entry) => !(entry?.type === "custom_message" && entry.details?.command === "execute-round"));
+  // Remove the later admitted state too, leaving the durable admission-requested record without its message.
+  while (uncertainBranch.at(-1)?.customType === EXECUTION_STATE_ENTRY_TYPE && uncertainBranch.at(-1).data?.pendingRound == null) uncertainBranch.pop();
+  const uncertain = harness({ branch: uncertainBranch, specificationState: "existing", planState: "existing", sessionId: "automatic-reload" });
+  await uncertain.emit("session_start", { reason: "reload" });
+  assert.equal(uncertain.state().status, "paused"); assert.equal(uncertain.state().pendingRound.stage, "failed"); assert.equal(uncertain.sent.length, 0);
+});
+
+test("reload while automatic compaction is still pending pauses without retry or projection", async () => {
+  const branch = [];
+  const first = harness({ branch, specificationState: "existing", planState: "existing", sessionId: "automatic-pending-reload" }); const initial = await startExecution(first);
+  first.addGoal({ goalId: "goal-pending", status: "active", active: true });
+  await control(first, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 }); await first.emit("turn_end", finalEvent("finished"));
+  await first.handlers.get("context").at(-1)({ messages: [{ role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: "goal-pending", continuationsUsed: 1 } }] }, first.ctx);
+  assert.equal(first.state().pendingRound.stage, "compacting");
+  const rebuilt = harness({ branch, specificationState: "existing", planState: "existing", sessionId: "automatic-pending-reload" });
+  await rebuilt.emit("session_start", { reason: "reload" });
+  assert.equal(rebuilt.state().status, "paused"); assert.equal(rebuilt.state().pendingRound.stage, "failed");
+  assert.equal(rebuilt.compactions.length, 0); assert.equal(rebuilt.sent.length, 0);
+});
+
+test("automatic boundary survives an unrelated queued context before exact admission", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" });
+  const initial = await startExecution(h);
+  h.addGoal({ goalId: "goal-queued-context", status: "active", active: true });
+  await control(h, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 });
+  await h.emit("turn_end", finalEvent("closed before queued context"));
+  const goalMessage = { role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: "goal-queued-context", continuationsUsed: 1 } };
+  await h.handlers.get("context").at(-1)({ messages: [goalMessage] }, h.ctx);
+  const pending = h.state().pendingRound;
+  const marker = [...h.branch].reverse().find((entry) => entry?.customType === "prime_ralph_reset_marker" && entry.data?.requestId === pending.requestId);
+  h.compactions.at(-1).onComplete({ summary: "", firstKeptEntryId: marker.id });
+  const boundary = h.sent.at(-1).message;
+  const unrelated = await h.handlers.get("context").at(-1)({ messages: [{ role: "user", content: "queued before boundary" }] }, h.ctx);
+  assert.deepEqual(unrelated.messages, []);
+  assert.equal(h.state().pendingRound.stage, "admission-requested");
+  await h.emit("message_start", { message: { role: "custom", ...boundary } });
+  await h.emit("context", { messages: [{ role: "custom", ...boundary }] });
+  assert.equal(h.state().cycle, 2);
+  assert.equal(h.state().pendingRound, null);
+});
+
+test("automatic boundary admission append failure aborts before provider context", async () => {
+  const p = harness({ specificationState: "existing", planState: "existing" });
+  const pInitial = await startExecution(p);
+  p.addGoal({ goalId: "goal-persistent", status: "active", active: true });
+  await control(p, { action: "continue", lifecycleId: pInitial.lifecycleId, cycle: 1 });
+  await p.emit("turn_end", finalEvent("closed for commit failure"));
+  const pGoal = { role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: "goal-persistent", continuationsUsed: 1 } };
+  await p.handlers.get("context").at(-1)({ messages: [pGoal] }, p.ctx);
+  const pending = p.state().pendingRound;
+  const marker = [...p.branch].reverse().find((entry) => entry?.customType === "prime_ralph_reset_marker" && entry.data?.requestId === pending.requestId);
+  p.compactions.at(-1).onComplete({ summary: "", firstKeptEntryId: marker.id });
+  const pBoundary = p.sent.at(-1).message;
+  await p.emit("message_start", { message: { role: "custom", ...pBoundary } });
+  p.failAllStateAppends();
+  const result = await p.handlers.get("context").at(-1)({ messages: [{ role: "custom", ...pBoundary }] }, p.ctx);
+  assert.deepEqual(result?.messages ?? [], []);
+  assert.ok(p.aborted() >= 1);
+  assert.equal(p.state().cycle, 1);
+  assert.equal(p.state().pendingRound.stage, "admission-requested");
+  p.restoreStateAppends();
+  const later = await p.handlers.get("context").at(-1)({ messages: [{ role: "user", content: "later user probe" }] }, p.ctx);
+  assert.deepEqual(later.messages, []);
+  assert.equal(p.state().cycle, 1);
+  assert.equal(p.state().status, "running");
+  assert.equal(p.state().pendingRound.stage, "admission-requested");
+});
+
+test("all stale automatic reset messages are denied by default", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" });
+  await startExecution(h);
+  const stale = { role: "custom", customType: RESET_MESSAGE_TYPE, content: "stale", details: { source: "prime-ralph", protocolVersion: 1, command: "execute-round", requestId: "stale", automaticCompactionRequestId: "stale", workflowPhase: "execution" } };
+  await h.emit("message_start", { message: stale });
+  assert.equal(h.aborted(), 1);
 });
 
 test("stale or replaced native goal continuations fail closed", async () => {

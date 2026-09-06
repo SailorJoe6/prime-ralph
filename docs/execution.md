@@ -106,23 +106,15 @@ A mismatch pauses execution. Ralph never attaches unrelated goal work to the cur
 - `unblock`: restore a normally blocked pair together without overwrite.
 - `confirm-forward`: state that the original blocker is resolved. For files restored manually, this also performs the final mechanical verification described below.
 
-For `continue`, the current cycle is committed only when the matching next native continuation reaches provider-context admission after tracked RLM work settles. At that point Ralph logs the completed cycle, increments the cycle number, and creates the next clean execution context. If tracked RLM delivery splits the pass across Agent runs, Ralph re-registers the reconciled running pass before the later run starts. Its closeout fence accepts either local event ordering and fails closed after a bounded wait rather than hanging provider admission.
+For `continue`, the current cycle is committed only when the matching next native continuation reaches the context hook after tracked RLM work settles. Ralph first logs the completed cycle and durably arms one pending round. It then appends the reset marker and requests one public `ctx.compact()`. The cycle number does not advance and no execute message is sent while compaction is pending. If tracked RLM delivery splits the pass across Agent runs, Ralph re-registers the reconciled running pass before the later run starts. Its closeout fence accepts either local event ordering and fails closed after a bounded wait rather than hanging admission.
 
 ## Clean context and repeated provider calls
 
-Every new eligible execution cycle begins with a model-visible context containing the host baseline, then the project `prepare` skill, then `execute`. The specification and plan are not copied into the prompt. The skills tell the model to read durable project state.
+Every new eligible execution cycle begins only after its matching reset-flavor compaction succeeds. The successful callback queues one model-visible message containing the project `prepare` skill followed by `execute`; the pre-provider `context` gate commits the new cycle only when that exact message matches its durable `prepare_pending` admission evidence. The specification and plan are not copied into the prompt. The skills tell the model to read durable project state.
 
-Old conversation remains in the session JSONL but is excluded from that provider request. This is context projection, not session deletion or REPL reset.
+Automatic execution does not use provider-context projection. Old conversation remains in the session JSONL, but the durable host compaction makes it unavailable to later provider requests. Later provider calls in the same cycle use the ordinary complete current-iteration context. Native goal pause/resume does not compact, re-inject skills, change the boundary, or transform context; feedback and acknowledgements added while paused remain visible.
 
-The continuation identity prevents repeated provider calls within one tool loop from processing the same boundary twice. For example:
-
-```text
-provider call 1: prepare + execute -> model requests tests
-provider call 2: prepare + execute + test call + test result -> model requests another tool
-provider call 3: prepare + execute + all current-cycle tool results -> final response
-```
-
-Calls 2 and 3 retain everything after the boundary. They do not increment the cycle, log the prior cycle again, or reintroduce stale conversation. The persisted admitted-continuation identity keeps this projection active even when a later user message, `/btw`, custom child notice, or tool tail is newer than `goal_context`, and the same boundary is reconstructed after extension reload.
+Short-session refusal, an already-compacted branch, cancellation, failure, interruption, or ambiguous recovery admits no next cycle and pauses safely. Prime Agent `0.9.1` checks short/already-compacted conditions before the extension compaction hook, so the public extension API cannot force those cases. Ralph deliberately does not restore automation with a projection fallback.
 
 ## Waiting and reset
 

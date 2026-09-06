@@ -13,11 +13,10 @@ import {
 import {
   BLOCKED_MESSAGE_TYPE, EXECUTION_MESSAGE_TYPE, EXECUTION_PROTOCOL_VERSION, EXECUTION_STATE_ENTRY_TYPE,
   RESTORED_BLOCKED_GUIDANCE,
-  beginExecution, consumeExecutionBoundaryProjection, exactExecutionBoundaryCorrelation, executionContextProjection, formatBlockedInjection, formatExecutionInjection,
+  admitPendingExecutionRound, armPendingExecutionRound, beginExecution, blockedContextBoundary, formatBlockedInjection, formatExecutionInjection,
   latestExecutionState, latestGoalState, loadBlockedSkill, loadExecuteSkill, nextExecutionState, reconcileGoalState,
-  shouldSuppressExecutionBoundary,
+  updatePendingExecutionRound,
 } from "./execution.js";
-import { isExecutionCompactionSummary } from "./execution-boundary-compaction.js";
 import { appendExecutionLogEntry } from "./execution-log.js";
 import {
   adoptRestoredPlanningDocuments, archivePlanningDocuments, blockPlanningDocuments,
@@ -25,7 +24,7 @@ import {
   verifyAdoptedPlanningDocuments,
 } from "./planning-transaction.js";
 import { isFinalNormalAssistantTurn } from "./cycle-boundary-poc.js";
-import { RESET_MESSAGE_TYPE } from "./reset-context.js";
+import { RESET_MESSAGE_TYPE, RESET_PROTOCOL_VERSION, RESET_STATE_TYPE } from "./reset-context.js";
 
 function assertState(value, label) {
   if (!new Set(["absent", "existing"]).has(value)) throw new TypeError(`unsupported ${label} state: ${value}`);
@@ -76,7 +75,7 @@ export function createWorkflowExtension({
   appendLog = appendExecutionLogEntry, createRequestId = randomUUID, now = () => new Date(), closeoutTimeoutMs = 30_000,
 } = {}) {
   return function workflowExtension(pi) {
-    const startupSessions = new Set(), sessionPhases = new Map(), executionStates = new Map(), activeLifecycleTurns = new Map(), activeBlockedTurns = new Set(), executionRoundBoundaries = new Map(), lifecycleCloseoutWaiters = new Map(), completedLifecycleCloseouts = new Map();
+    const startupSessions = new Set(), sessionPhases = new Map(), executionStates = new Map(), activeLifecycleTurns = new Map(), activeBlockedTurns = new Set(), lifecycleCloseoutWaiters = new Map(), completedLifecycleCloseouts = new Map();
     const sessionId = (ctx) => ctx.sessionManager.getSessionId();
     const closeoutIdentity = (message) => JSON.stringify([message?.timestamp ?? null, message?.stopReason ?? null, createHash("sha256").update(assistantText(message)).digest("hex")]);
     const finalAssistantImmediatelyBefore = (messages, beforeIndex) => {
@@ -145,19 +144,6 @@ export function createWorkflowExtension({
     const persistExecution = (ctx, state) => {
       pi.appendEntry(EXECUTION_STATE_ENTRY_TYPE, state); executionStates.set(sessionId(ctx), state); return state;
     };
-    const executionBoundaryMessage = (ctx, state, mode) => {
-      const id = sessionId(ctx), admitted = state.admittedContinuation, identity = admitted?.identity;
-      let message = executionRoundBoundaries.get(id)?.identity === identity ? executionRoundBoundaries.get(id).message : null;
-      if (!message) {
-        message = { role: "custom", customType: EXECUTION_MESSAGE_TYPE, content: executeContent(ctx, state, mode), display: false, details: { source: "prime-ralph", protocolVersion: EXECUTION_PROTOCOL_VERSION, requestId: createRequestId(), sessionId: id, workflowPhase: "execution", invocationMode: mode, lifecycleId: state.lifecycleId, cycle: state.cycle, goalId: admitted?.goalId, continuationsUsed: admitted?.continuationsUsed, boundaryIdentity: identity, preserveTrigger: false } };
-      }
-      const automaticCompactionRequestId = admitted?.boundary?.requestId;
-      if (automaticCompactionRequestId && message.details?.automaticCompactionRequestId !== automaticCompactionRequestId) {
-        message = { ...message, details: { ...message.details, automaticCompactionRequestId } };
-      }
-      executionRoundBoundaries.set(id, { identity, message });
-      return message;
-    };
     const hasPendingTerminalLog = (state) => ["block", "complete"].includes(state.pendingDecision?.action);
     const finishPendingExecutionLog = (ctx, state) => {
       const pending = state.pendingDecision;
@@ -179,6 +165,28 @@ export function createWorkflowExtension({
       return reconcilePlanningLocation(ctx, reconciled);
     };
     const goal = (ctx) => latestGoalState(branch(ctx));
+    const exactPendingRoundBoundary = (state, message) => {
+      const pending = state?.pendingRound, details = message?.details;
+      return pending != null && message?.customType === RESET_MESSAGE_TYPE && details?.source === "prime-ralph" &&
+        details.protocolVersion === RESET_PROTOCOL_VERSION && details.command === "execute-round" &&
+        details.automaticCompactionRequestId === pending.requestId && details.sessionId === state.sessionId &&
+        details.lifecycleId === state.lifecycleId && details.cycle === pending.cycle && details.goalId === pending.goalId &&
+        details.continuationsUsed === pending.continuationsUsed && details.boundaryIdentity === pending.identity;
+    };
+    const durablePendingRoundBoundaries = (ctx, state) => branch(ctx).filter((entry) =>
+      entry?.type === "custom_message" && exactPendingRoundBoundary(state, entry));
+    const haltPendingRound = (ctx, reason, outcome = reason) => {
+      const state = execution(ctx, { reconcile: false });
+      if (!state.pendingRound || state.pendingRound.stage === "failed") return state;
+      return persistExecution(ctx, nextExecutionState(state, {
+        status: "paused", pauseReason: reason, compactionHalted: true, resumeBlocked: true,
+        pendingRound: { ...state.pendingRound, stage: "failed", outcome: String(outcome).slice(0, 200) },
+      }));
+    };
+    const admitPendingRound = (ctx, state = execution(ctx, { reconcile: false })) => {
+      if (!state.pendingRound || state.pendingRound.stage !== "admission-requested") return state;
+      return persistExecution(ctx, admitPendingExecutionRound(state));
+    };
     const blockedState = (ctx) => {
       const blocked = inspectBlocked({ cwd: ctx.cwd });
       if (!new Set(["absent", "partial", "complete"]).has(blocked.state)) throw new TypeError(`unsupported blocked planning state: ${blocked.state}`);
@@ -474,6 +482,7 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
         let live = requireTerminalLogReady(execution(ctx));
         if (isRestoredRecovery(live)) { ctx.ui.notify(`${restoredRecoveryMessage} Continue the unblock check or use /reset to restart it. After Ralph verifies the files and blocker, run /execute again.`, "warning"); return; }
         if (["running", "waiting"].includes(live.status)) { ctx.ui.notify(`Ralph execution lifecycle ${live.lifecycleId} is already ${live.status}; no second lifecycle was created.`, "warning"); return; }
+        if (live.status === "paused" && live.resumeBlocked === true) { ctx.ui.notify("Ralph cannot resume this failed boundary. Clear the native goal with /goal clear, inspect the recorded failure, then use /execute for a fresh lifecycle.", "warning"); return; }
         if (live.status === "paused" && ["paused", "budget_limited"].includes(goal(ctx)?.status)) { ctx.ui.notify("Resume the same native Prime Agent goal with /goal resume; /execute will not create a second lifecycle.", "warning"); return; }
         if (live.status === "inactive" && live.provenanceId && live.forwardConfirmed !== true) { ctx.ui.notify("The planning files are back in the active folder, but the agent has not confirmed that the original blocker is resolved. Ask it to finish the unblock check, then run /execute again.", "warning"); return; }
         const starting = live.status === "inactive", nativeGoal = goal(ctx);
@@ -486,7 +495,7 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
         }
         const proposed = starting ? beginExecution(live, { lifecycleId: createRequestId(), driverGoalId: null }) : nextExecutionState(live, { status: "running", driverGoalId: replaceTerminalDriver ? null : live.driverGoalId, pendingDecision: null, pauseReason: null });
         const mode = starting ? "execution-start" : "execution-resume";
-        await resetRuntime.requestBoundary({ ctx, command: "execute", resolveInjection: ({ ctx: boundaryCtx }) => ({ content: executeContent(boundaryCtx, proposed, mode), details: { workflowPhase: "execution", invocationMode: mode, lifecycleId: proposed.lifecycleId, cycle: proposed.cycle, sessionId: sessionId(boundaryCtx) } }), onAdmitted: () => { persistExecution(ctx, proposed); setPhase(ctx, "execution"); } });
+        await resetRuntime.requestBoundary({ ctx, command: "execute", fallbackOnShort: false, resolveInjection: ({ ctx: boundaryCtx }) => ({ content: executeContent(boundaryCtx, proposed, mode), details: { workflowPhase: "execution", invocationMode: mode, lifecycleId: proposed.lifecycleId, cycle: proposed.cycle, sessionId: sessionId(boundaryCtx) } }), onAdmitted: () => { persistExecution(ctx, proposed); setPhase(ctx, "execution"); } });
       },
     });
 
@@ -509,11 +518,21 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
       const lastUserIndex = event.messages.findLastIndex((message) => message?.role === "user");
       const goalIndex = event.messages.findLastIndex((message) => message?.role === "custom" && message.customType === "goal_context" && message.details?.kind === "continuation");
       const admitted = live.admittedContinuation;
-      const admittedGoalIndex = admitted ? event.messages.findLastIndex((message) => message?.role === "custom" && message.customType === "goal_context" && message.details?.kind === "continuation" && message.details?.goalId === admitted.goalId && message.details?.continuationsUsed === admitted.continuationsUsed) : -1;
-      if (live.phase === "execution" && live.status === "running" && admittedGoalIndex >= 0 && admitted?.cycle === live.cycle && (goalIndex === admittedGoalIndex || goalIndex < lastUserIndex)) {
-        const message = executionBoundaryMessage(ctx, live, admitted.mode);
-        const tail = event.messages.slice(admittedGoalIndex + 1).filter((candidate) => candidate?.role !== "custom" || candidate.customType !== "goal_context" || candidate.details?.kind !== "continuation");
-        return { messages: [message, ...tail] };
+      if (live.pendingRound) {
+        // The reset context handler is the sole admission owner. An unrelated
+        // queued context can arrive first; deny that provider request but keep
+        // the transaction pending while its reset evidence is nonterminal.
+        const requestId = live.pendingRound.requestId;
+        const automaticBoundaries = event.messages.filter((message) => message?.customType === RESET_MESSAGE_TYPE &&
+          message.details?.command === "execute-round" && message.details?.automaticCompactionRequestId === requestId);
+        const resetStates = branch(ctx).filter((entry) => entry?.type === "custom" && entry.customType === RESET_STATE_TYPE && entry.data?.requestId === requestId);
+        const resetStatus = resetStates.at(-1)?.data?.status;
+        if (automaticBoundaries.length > 0 || ["failed", "interrupted", "recovered"].includes(resetStatus)) {
+          try { haltPendingRound(ctx, "automatic compaction admission did not commit", "admission-not-committed"); } catch {}
+        }
+        activeLifecycleTurns.delete(id);
+        ctx.abort();
+        return { messages: [] };
       }
       if (live.phase === "execution" && live.status === "running" && goalIndex > lastUserIndex) {
         const goalMessage = event.messages[goalIndex], goalId = goalMessage.details?.goalId, continuationsUsed = goalMessage.details?.continuationsUsed;
@@ -523,8 +542,9 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
         }
         const boundaryIdentity = `${goalId}:${continuationsUsed}`;
         if (live.admittedContinuation?.identity === boundaryIdentity && live.admittedContinuation?.cycle === live.cycle) {
-          const message = executionBoundaryMessage(ctx, live, live.admittedContinuation.mode);
-          return { messages: [message, ...event.messages.slice(goalIndex + 1)] };
+          // Prime Agent can emit the same continuation again after native pause/resume.
+          // It is the same iteration: preserve the complete context and inject nothing.
+          return;
         }
         const resetForBoundary = live.resetRequested === true, resumedForBoundary = live.resumed === true;
         const closeoutAction = live.pendingDecision?.action;
@@ -546,59 +566,63 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
           if (live.phase !== "execution" || live.status !== "running") return { messages: [] };
         }
         if (live.pendingDecision?.action === "continue" && typeof live.pendingDecision.finalAssistantMessage === "string") {
+          const mode = "execution-continue", requestId = createRequestId(), prior = live;
           try {
-            appendLog({ cwd: ctx.cwd, sessionId: id, lifecycleId: live.lifecycleId, action: live.pendingDecision.action, phase: "execute", cycle: live.cycle, finalAssistantMessage: live.pendingDecision.finalAssistantMessage, timestamp: new Date(live.pendingDecision.timestamp) });
-            live = persistExecution(ctx, nextExecutionState(live, { cycle: live.cycle + 1, pendingDecision: null, resetRequested: false, admittedContinuation: null }));
+            const requested = await resetRuntime.requestBoundaryAtProviderBoundary({
+              ctx, command: "execute-round", requestId, fallbackOnShort: false,
+              resolveInjection: () => ({
+                content: executeContent(ctx, { ...prior, cycle: prior.cycle + 1, pendingDecision: null }, mode),
+                details: {
+                  workflowPhase: "execution", invocationMode: mode, lifecycleId: prior.lifecycleId, cycle: prior.cycle + 1,
+                  sessionId: id, goalId, continuationsUsed, boundaryIdentity, automaticCompactionRequestId: requestId,
+                },
+              }),
+              onBeforeMarker: () => {
+                appendLog({ cwd: ctx.cwd, sessionId: id, lifecycleId: prior.lifecycleId, action: prior.pendingDecision.action, phase: "execute", cycle: prior.cycle, finalAssistantMessage: prior.pendingDecision.finalAssistantMessage, timestamp: new Date(prior.pendingDecision.timestamp) });
+                live = persistExecution(ctx, armPendingExecutionRound(prior, { requestId, goalId, continuationsUsed, mode }));
+              },
+              onMarker: ({ markerId }) => {
+                const current = execution(ctx, { reconcile: false });
+                if (current.pendingRound?.requestId !== requestId || current.pendingRound.stage !== "armed") throw new Error("automatic compaction marker no longer matches the armed round");
+                live = persistExecution(ctx, updatePendingExecutionRound(current, { stage: "compacting", markerId }));
+              },
+              onBeforeAdmission: () => {
+                const current = execution(ctx, { reconcile: false });
+                if (current.pendingRound?.requestId !== requestId || current.pendingRound.stage !== "compacting") throw new Error("automatic compaction completion no longer matches the pending round");
+                live = persistExecution(ctx, updatePendingExecutionRound(current, { stage: "admission-requested" }));
+              },
+              onAdmitted: (message) => {
+                const current = execution(ctx, { reconcile: false });
+                if (current.pendingRound?.stage !== "admission-requested" || !exactPendingRoundBoundary(current, message)) throw new Error("automatic compaction boundary is not the exact pending admission");
+                live = admitPendingRound(ctx, current);
+              },
+              onRejected: ({ reason }) => haltPendingRound(ctx, `automatic compaction ${reason}`, reason),
+            });
+            if (!requested) haltPendingRound(ctx, "automatic compaction request was not accepted", "request-not-accepted");
           } catch (error) {
-            ctx.abort(); persistExecution(ctx, nextExecutionState(live, { status: "paused", pendingDecision: null, wait: null, pauseReason: `execution boundary commit failed: ${error.message}` }));
-            ctx.ui.notify(`Ralph execution boundary failed safely: ${error.message}`, "error"); return { messages: [] };
+            const current = execution(ctx, { reconcile: false });
+            if (current.pendingRound) haltPendingRound(ctx, `automatic compaction setup failed: ${error.message}`, "setup-failed");
+            else persistExecution(ctx, nextExecutionState(current, { status: "paused", wait: null, resumeBlocked: true, pauseReason: `execution boundary commit failed: ${error.message}` }));
+            ctx.ui.notify(`Ralph execution boundary failed safely: ${error.message}`, "error");
           }
+          activeLifecycleTurns.delete(id);
+          ctx.abort();
+          return { messages: [] };
         } else if (live.pendingDecision != null) {
           ctx.abort(); persistExecution(ctx, nextExecutionState(live, { status: "paused", pendingDecision: null, wait: null, pauseReason: "native continuation arrived before lifecycle closeout" }));
           ctx.ui.notify("Ralph rejected a native continuation that arrived before lifecycle closeout.", "error"); return { messages: [] };
         }
         const mode = resetForBoundary ? "execution-reset-running" : resumedForBoundary ? "execution-resume" : "execution-continue";
         live = persistExecution(ctx, nextExecutionState(live, { admittedContinuation: { identity: boundaryIdentity, goalId, continuationsUsed, cycle: live.cycle, mode }, resumed: false }));
-        const message = executionBoundaryMessage(ctx, resetForBoundary ? { ...live, resetRequested: true } : live, mode);
-        return { messages: [message, ...event.messages.slice(goalIndex + 1)] };
-      }
-      const automaticBoundary = live.admittedContinuation?.boundary;
-      const automaticSummaryIndex = automaticBoundary ? event.messages.findLastIndex((message) => isExecutionCompactionSummary(message, automaticBoundary.requestId)) : -1;
-      if (live.phase === "execution" && live.status === "running" && ["armed", "projection-consumed"].includes(automaticBoundary?.stage) && automaticSummaryIndex >= 0) {
-        const tail = event.messages.slice(automaticSummaryIndex + 1).filter((candidate) => !isExecutionCompactionSummary(candidate, automaticBoundary.requestId));
-        const executionBoundaries = tail.filter((candidate) => candidate?.customType === EXECUTION_MESSAGE_TYPE);
-        const exactBoundaries = executionBoundaries.filter((candidate) => exactExecutionBoundaryCorrelation(live, candidate));
-        if (executionBoundaries.length > 0 && (executionBoundaries.length !== 1 || exactBoundaries.length !== 1)) {
-          activeLifecycleTurns.delete(id);
-          ctx.abort();
-          ctx.ui.notify("Ralph rejected a stale or mismatched execution boundary after automatic compaction.", "error");
-          return { messages: [] };
-        }
-        if (exactBoundaries.length === 0) {
-          const message = executionBoundaryMessage(ctx, live, live.admittedContinuation.mode);
-          if (automaticBoundary.stage === "armed") {
-            try {
-              live = persistExecution(ctx, consumeExecutionBoundaryProjection(live, message));
-            } catch (error) {
-              activeLifecycleTurns.delete(id);
-              ctx.abort();
-              ctx.ui.notify("Ralph could not durably record the projected execution boundary; the queued boundary remains authoritative.", "error");
-              return { messages: [] };
-            }
-          }
-          activeLifecycleTurns.set(id, { kind: "execute" });
-          return { messages: [message, ...tail] };
-        }
+        // Ready/recovery continuations remain in the same iteration. Preserve the
+        // complete provider context and do not synthesize an execution boundary.
+        return;
       }
       if (live.pendingDecision?.action === "continue" && typeof live.pendingDecision.finalAssistantMessage === "string" && lastUserIndex > goalIndex) return;
       const newestRalphPhase = [...event.messages].reverse().find((message) => message?.role === "custom" && message.details?.source === "prime-ralph" && [EXECUTION_MESSAGE_TYPE, BLOCKED_MESSAGE_TYPE, PLANNING_MESSAGE_TYPE, PLANNING_STARTUP_MESSAGE_TYPE, SPECIFICATION_MESSAGE_TYPE, STARTUP_PREPARE_MESSAGE_TYPE, RESET_MESSAGE_TYPE].includes(message.customType));
       if (!newestRalphPhase) return;
-      if (live.phase === "execution" && live.status !== "inactive" && newestRalphPhase.customType === EXECUTION_MESSAGE_TYPE) {
-        const messages = executionContextProjection(event.messages, { allowedTypes: [EXECUTION_MESSAGE_TYPE], lifecycleId: live.lifecycleId });
-        if (messages) return { messages };
-      }
       if ((live.phase === "blocked" || activeBlockedTurns.has(id)) && newestRalphPhase.customType === BLOCKED_MESSAGE_TYPE) {
-        const messages = executionContextProjection(event.messages, { allowedTypes: [BLOCKED_MESSAGE_TYPE], provenanceId: live.provenanceId });
+        const messages = blockedContextBoundary(event.messages, { provenanceId: live.provenanceId });
         if (messages) return { messages };
       }
     });
@@ -631,11 +655,15 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
     });
 
     pi.on("message_start", (event, ctx) => {
-      const message = event.message, id = sessionId(ctx), live = execution(ctx, { reconcile: false });
-      if (shouldSuppressExecutionBoundary(live, message)) {
-        activeLifecycleTurns.delete(id);
-        ctx.abort();
-        return;
+      const message = event.message, id = sessionId(ctx); let live = execution(ctx, { reconcile: false });
+      if (message?.customType === RESET_MESSAGE_TYPE && message.details?.command === "execute-round") {
+        const exactPending = live.pendingRound?.stage === "admission-requested" && exactPendingRoundBoundary(live, message);
+        if (!exactPending) {
+          if (live.pendingRound) {
+            try { haltPendingRound(ctx, "automatic compaction boundary was stale or mismatched", "mismatched-boundary"); } catch {}
+          }
+          activeLifecycleTurns.delete(id); ctx.abort(); return;
+        }
       }
       if ((message?.role === "user" && live.status === "waiting") || message?.customType === "goal_context" || message?.customType === EXECUTION_MESSAGE_TYPE || (message?.customType === RESET_MESSAGE_TYPE && message.details?.workflowPhase === "execution" && message.details?.invocationMode !== "execution-reset-paused")) {
         activeLifecycleTurns.set(id, { kind: "execute" });
@@ -651,7 +679,7 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
       if (!activeLifecycleTurns.has(id)) { settleLifecycleCloseout(id); return; }
       const live = execution(ctx, { reconcile: false });
       try {
-        if (live.phase === "execution" && live.status === "running") persistExecution(ctx, nextExecutionState(live, { status: "paused", pendingDecision: null, wait: null, pauseReason: "execution agent ended without normal closeout" }));
+        if (live.phase === "execution" && live.status === "running" && !live.pendingRound) persistExecution(ctx, nextExecutionState(live, { status: "paused", pendingDecision: null, wait: null, pauseReason: "execution agent ended without normal closeout" }));
       } finally { activeLifecycleTurns.delete(id); settleLifecycleCloseout(id); }
     });
 
@@ -672,6 +700,10 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
       executionStates.set(id, live);
       let blocked, specification;
       try {
+        if (live.pendingRound && live.pendingRound.stage !== "failed") {
+          const boundaries = durablePendingRoundBoundaries(ctx, live);
+          live = haltPendingRound(ctx, "automatic compaction was interrupted before durable admission", boundaries.length > 1 ? "ambiguous-boundary" : boundaries.length === 1 ? "reload-uncertain" : "interrupted");
+        }
         live = finishPendingExecutionLog(ctx, live);
         requireTerminalLogReady(live);
         blocked = blockedState(ctx);
