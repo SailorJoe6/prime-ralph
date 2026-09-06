@@ -55,6 +55,12 @@ Correlation requires the exact session, Ralph lifecycle, cycle, native goal, con
 
 This is still a consumer-side seam. Prime Ralph does not yet create the marker, arm the transaction, call `ctx.compact()`, register `session_before_compact`, or queue an automatic resume message. Ordinary compaction and explicit `/reset` remain unchanged. Automatic compaction activation, callback outcomes, and lost-queue reload recovery remain separate increments.
 
+## Dormant automatic-compaction recovery facts
+
+The automatic-boundary helper module defines the durable marker namespace and strict branch predicates needed by later producer and reload work. A valid marker binds one bounded request ID to the exact session, Ralph lifecycle, cycle, native goal, continuation count, and `goalId:continuationsUsed` boundary identity. Its read-only inspector classifies exact reconstructed branch evidence as `absent`, `marker-only`, `compacted`, or `resumed`; malformed input and duplicate, forked, mismatched, or out-of-order same-request records become fail-closed `invalid` or `ambiguous` results. Matching compaction and resumed-boundary entries must have durable entry IDs. Reconstructed JSONL objects are accepted without relying on in-memory object identity.
+
+These helpers are inactive. Prime Ralph does not append the marker, arm the boundary from workflow runtime, call `ctx.compact()`, register a compaction hook, or re-admit a message. Callback and reload behavior therefore remain future cycle-sized increments, and explicit `/reset` and ordinary compaction are unchanged.
+
 ## Terminal execution-log recovery
 
 A blocked or completed pass now records its final assistant message and timestamp in the lifecycle state before it writes `.ralph/logs/EXECUTION_LOG.md`. The terminal closeout clears that intent only after the log append succeeds.
