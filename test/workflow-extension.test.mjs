@@ -11,7 +11,8 @@ const specSkill = { path: "/project/.ralph/skills/spec-it-out/SKILL.md", text: "
 const planSkill = { path: "/project/.ralph/skills/plan/SKILL.md", text: "---\nname: plan\ndescription: test\nprime-ralph-invocation-version: 1\n---\nplan body" };
 const executeSkill = { path: "/project/.ralph/skills/execute/SKILL.md", text: "---\nname: execute\ndescription: test\nprime-ralph-invocation-version: 1\n---\nexecute body" };
 const blockedSkill = { path: "/project/.ralph/skills/blocked/SKILL.md", text: "---\nname: blocked\ndescription: test\nprime-ralph-invocation-version: 1\n---\nblocked body" };
-function harness({ specificationState = "absent", planState = "absent", branch = [], inspectSpecError, inspectPlanError, sendError, loadPrepareError, loadPlanError, loadExecuteError, blockedState = "absent", blockedProofState = "complete", restoredProofState = "unproven", appendFailureAt: initialAppendFailureAt, appendFailureFrom: initialAppendFailureFrom, logFailureAt, sessionId = "session-1", rlmDepth = 0, sharedLogs, closeoutTimeoutMs } = {}) {
+function harness({ specificationState = "absent", planState = "absent", branch = [], inspectSpecError, inspectPlanError, sendError, loadPrepareError, loadPlanError, loadExecuteError, blockedState = "absent", blockedProofState = "complete", restoredProofState = "unproven", appendFailureAt: initialAppendFailureAt, appendFailureFrom: initialAppendFailureFrom, logFailureAt, sessionId = "session-1", rlmDepth = 0, sharedLogs, closeoutTimeoutMs, signalAvailable = true } = {}) {
+  const runAbortController = new AbortController();
   const commands = new Map(), tools = new Map(), handlers = new Map(), sent = [], userMessages = [], notices = [], compactions = [], entries = [], logs = sharedLogs ?? [], transactions = [];
   let spec = specificationState, plan = planState, blocked = blockedState, restored = restoredProofState, blockedLifecycle = [...branch].reverse().find((entry) => entry?.data?.provenanceId)?.data.provenanceId ?? "blocked-life", nextEntry = branch.length, pending = false, idle = true, aborted = 0, appendCalls = 0, appendFailureAt = initialAppendFailureAt, appendFailureFrom = initialAppendFailureFrom, logCalls = 0;
   const pi = {
@@ -54,7 +55,7 @@ function harness({ specificationState = "absent", planState = "absent", branch =
   })(pi);
   const ctx = {
     cwd: "/project", waitForIdle: async () => {}, isIdle: () => idle,
-    hasPendingMessages: () => pending, abort: () => { aborted += 1; },
+    hasPendingMessages: () => pending, signal: signalAvailable ? runAbortController.signal : undefined, abort: () => { aborted += 1; },
     compact: (options) => compactions.push(options),
     sessionManager: { getBranch: () => branch, getHeader: () => ({ rlmDepth }), getSessionId: () => sessionId },
     ui: { notify: (...args) => notices.push(args) },
@@ -67,7 +68,7 @@ function harness({ specificationState = "absent", planState = "absent", branch =
     await emit("turn_end", { message: { role: "assistant", content: [{ type: "text", text: "settled" }], stopReason: "stop" } });
     await emit("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] });
   };
-  return { commands, tools, handlers, sent, userMessages, notices, branch, entries, compactions, logs, transactions, ctx, emit, settle, state: () => latestExecutionState(branch, sessionId), addGoal: (data) => branch.push({ type: "custom", customType: "thread_goal_state", data }), setPending: (value) => { pending = value; }, setIdle: (value) => { idle = value; }, aborted: () => aborted, setSpecification: (value) => { spec = value; }, setPlan: (value) => { plan = value; }, setRestored: (value) => { restored = value; }, setBlocked: (value) => { blocked = value; }, failStateAppendIn: (offset) => { appendFailureAt = appendCalls + offset; }, failAllStateAppends: () => { appendFailureFrom = appendCalls + 1; }, restoreStateAppends: () => { appendFailureAt = undefined; appendFailureFrom = undefined; }, logAttempts: () => logCalls };
+  return { commands, tools, handlers, sent, userMessages, notices, branch, entries, compactions, logs, transactions, ctx, emit, settle, state: () => latestExecutionState(branch, sessionId), addGoal: (data) => branch.push({ type: "custom", customType: "thread_goal_state", data }), setPending: (value) => { pending = value; }, abortRun: () => runAbortController.abort(), setIdle: (value) => { idle = value; }, aborted: () => aborted, setSpecification: (value) => { spec = value; }, setPlan: (value) => { plan = value; }, setRestored: (value) => { restored = value; }, setBlocked: (value) => { blocked = value; }, failStateAppendIn: (offset) => { appendFailureAt = appendCalls + offset; }, failAllStateAppends: () => { appendFailureFrom = appendCalls + 1; }, restoreStateAppends: () => { appendFailureAt = undefined; appendFailureFrom = undefined; }, logAttempts: () => logCalls };
 }
 
 test("registers the complete Slice 5 command and lifecycle-control surface", () => {
@@ -729,6 +730,124 @@ test("running and waiting gate interactive commands until pause", async () => {
   assert.equal(h.state().status, "paused");
   await h.commands.get("plan").handler("", h.ctx); assert.equal(h.sent.at(-1).message.customType, PLANNING_MESSAGE_TYPE); assert.equal(h.compactions.length, 1);
   await h.commands.get("execute").handler("", h.ctx); assert.match(h.notices.at(-1)[0], /\/goal resume/); assert.equal(h.state().status, "paused");
+});
+
+test("queued goal-complete tool handoff preserves the admitted pass until wait closeout", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" });
+  const initial = await startExecution(h);
+  const boundary = h.sent.at(-1).message;
+  h.addGoal({ goalId: "goal-handoff", status: "complete", active: false });
+  const toolUse = { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "goal-complete", name: "goal", arguments: { action: "complete" } }] };
+  const toolResult = { role: "toolResult", toolCallId: "goal-complete", toolName: "goal", content: [{ type: "text", text: "Goal completed" }], isError: false };
+  const before = { sent: h.sent.length, compactions: h.compactions.length, transition: h.state().transition, lifecycleId: h.state().lifecycleId, cycle: h.state().cycle, driverGoalId: h.state().driverGoalId, goals: h.branch.filter((entry) => entry?.customType === "thread_goal_state").length };
+  await h.emit("turn_end", { message: toolUse });
+  h.setPending(true);
+  await h.emit("agent_end", { messages: [{ role: "custom", ...boundary }, toolUse, toolResult] });
+  assert.deepEqual({ sent: h.sent.length, compactions: h.compactions.length, transition: h.state().transition, lifecycleId: h.state().lifecycleId, cycle: h.state().cycle, driverGoalId: h.state().driverGoalId, goals: h.branch.filter((entry) => entry?.customType === "thread_goal_state").length }, before);
+  assert.equal(h.state().status, "running");
+  assert.equal(h.state().pendingDecision, null);
+  const resetBefore = [...h.branch].reverse().find((entry) => entry?.customType === "prime_ralph_reset_state")?.data;
+  assert.equal(resetBefore.status, "prepare_pending");
+
+  h.setPending(false);
+  const childMessage = { role: "custom", customType: "agent_message", content: "child result", details: { source: "agent_message" } };
+  await h.emit("before_agent_start", { prompt: "[from child:auditor] result" });
+  await h.emit("message_start", { message: childMessage });
+  const resumedMessages = [{ role: "custom", ...boundary }, toolUse, toolResult, childMessage];
+  for (const context of h.handlers.get("context")) assert.equal(await context({ messages: resumedMessages }, h.ctx), undefined);
+  assert.deepEqual(resumedMessages, [{ role: "custom", ...boundary }, toolUse, toolResult, childMessage]);
+  assert.deepEqual({ sent: h.sent.length, compactions: h.compactions.length, transition: h.state().transition, lifecycleId: h.state().lifecycleId, cycle: h.state().cycle, driverGoalId: h.state().driverGoalId, goals: h.branch.filter((entry) => entry?.customType === "thread_goal_state").length }, before);
+  const waited = await control(h, { action: "wait", lifecycleId: initial.lifecycleId, cycle: 1, reason: "review", readiness: "child result is durable" });
+  assert.equal(waited.details.action, "wait");
+  await h.emit("turn_end", finalEvent("Waiting for the durable child result."));
+  await h.emit("agent_end", { messages: [finalEvent("Waiting for the durable child result.").message] });
+  const resetAfter = [...h.branch].reverse().find((entry) => entry?.customType === "prime_ralph_reset_state")?.data;
+  assert.equal(resetAfter.status, "completed");
+  assert.equal(h.state().status, "waiting");
+  assert.equal(h.state().cycle, 1);
+  assert.equal(h.state().pendingDecision, null);
+  assert.equal(h.aborted(), 0);
+});
+
+test("queued goal-complete tool handoff preserves block and complete closeout exactly once", async (t) => {
+  for (const scenario of [
+    { action: "block", params: { reason: "credential missing", unblockCondition: "operator authenticates", wakeupsStopped: true }, expectedPhase: "blocked" },
+    { action: "complete", params: { archive: false }, expectedPhase: "planning" },
+  ]) {
+    await t.test(scenario.action, async () => {
+      const h = harness({ specificationState: "existing", planState: "existing" });
+      const initial = await startExecution(h);
+      const boundary = h.sent.at(-1).message;
+      h.addGoal({ goalId: `goal-${scenario.action}`, status: "complete", active: false });
+      const toolUse = { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: `goal-${scenario.action}`, name: "goal", arguments: { action: "complete" } }] };
+      const toolResult = { role: "toolResult", toolCallId: `goal-${scenario.action}`, toolName: "goal", content: [{ type: "text", text: "Goal completed" }], isError: false };
+      const before = { sent: h.sent.length, compactions: h.compactions.length, transition: h.state().transition, lifecycleId: h.state().lifecycleId, cycle: h.state().cycle, driverGoalId: h.state().driverGoalId };
+      await h.emit("turn_end", { message: toolUse });
+      h.setPending(true);
+      await h.emit("agent_end", { messages: [{ role: "custom", ...boundary }, toolUse, toolResult] });
+      assert.equal(h.state().status, "running");
+      assert.deepEqual({ sent: h.sent.length, compactions: h.compactions.length, transition: h.state().transition, lifecycleId: h.state().lifecycleId, cycle: h.state().cycle, driverGoalId: h.state().driverGoalId }, before);
+      h.setPending(false);
+      const childMessage = { role: "custom", customType: "agent_message", content: `${scenario.action} child result` };
+      await h.emit("before_agent_start", { prompt: childMessage.content });
+      await h.emit("message_start", { message: childMessage });
+      const resumedMessages = [{ role: "custom", ...boundary }, toolUse, toolResult, childMessage];
+      for (const context of h.handlers.get("context")) assert.equal(await context({ messages: resumedMessages }, h.ctx), undefined);
+      assert.deepEqual({ sent: h.sent.length, compactions: h.compactions.length, transition: h.state().transition, lifecycleId: h.state().lifecycleId, cycle: h.state().cycle, driverGoalId: h.state().driverGoalId }, before);
+      const result = await control(h, { action: scenario.action, lifecycleId: initial.lifecycleId, cycle: 1, ...scenario.params });
+      assert.equal(result.details.action, scenario.action);
+      const final = finalEvent(`${scenario.action} closeout`);
+      await h.emit("turn_end", final);
+      await h.emit("agent_end", { messages: [final.message] });
+      const resetStates = h.branch.filter((entry) => entry?.customType === "prime_ralph_reset_state").map((entry) => entry.data);
+      assert.equal(resetStates.filter((state) => state.status === "completed").length, 1);
+      assert.equal(resetStates.some((state) => state.status === "failed"), false);
+      assert.equal(h.state().phase, scenario.expectedPhase);
+      assert.equal(h.state().pendingDecision, null);
+      assert.equal(h.aborted(), 0);
+      assert.equal(h.logs.length, 1);
+    });
+  }
+});
+
+test("planning reset cannot preserve a queued tool end without an active lifecycle turn", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" });
+  await h.commands.get("reset").handler("", h.ctx);
+  await completeLatestResetCompaction(h);
+  const boundary = h.sent.at(-1).message;
+  await h.emit("message_start", { message: { role: "custom", ...boundary } });
+  h.setPending(true);
+  const toolUse = { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "unowned", name: "ipython", arguments: {} }] };
+  await h.emit("agent_end", { messages: [{ role: "custom", ...boundary }, toolUse] });
+  const reset = [...h.branch].reverse().find((entry) => entry?.customType === "prime_ralph_reset_state")?.data;
+  assert.equal(reset.status, "failed");
+  assert.equal(reset.reason, "missing_normal_turn_end");
+  assert.equal(h.state().status, "inactive");
+});
+
+test("queued handoff exemption rejects aborted, ambiguous, and non-current ends", async (t) => {
+  const toolUse = { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "goal-complete", name: "goal", arguments: { action: "complete" } }] };
+  for (const scenario of [
+    { name: "no pending host work", pending: false, messages: [toolUse] },
+    { name: "run signal aborted after tool", pending: true, abortRun: true, messages: [toolUse] },
+    { name: "missing live run signal", pending: true, signalAvailable: false, messages: [toolUse] },
+    { name: "provider error", pending: true, messages: [{ role: "assistant", stopReason: "error", content: [] }], reason: "provider_error" },
+    { name: "provider abort", pending: true, messages: [{ role: "assistant", stopReason: "aborted", content: [] }], reason: "provider_aborted" },
+    { name: "older tool use followed by another assistant", pending: true, messages: [toolUse, { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "older normal" }] }] },
+  ]) {
+    await t.test(scenario.name, async () => {
+      const h = harness({ specificationState: "existing", planState: "existing", signalAvailable: scenario.signalAvailable ?? true });
+      await startExecution(h);
+      h.setPending(scenario.pending);
+      if (scenario.abortRun) h.abortRun();
+      await h.emit("agent_end", { messages: scenario.messages });
+      const reset = [...h.branch].reverse().find((entry) => entry?.customType === "prime_ralph_reset_state")?.data;
+      assert.equal(reset.status, "failed");
+      assert.equal(reset.reason, scenario.reason ?? "missing_normal_turn_end");
+      assert.equal(h.state().status, "paused");
+      assert.match(h.state().pauseReason, /without normal closeout/);
+    });
+  }
 });
 
 test("execution agent_end without a new normal turn never authorizes the admitted hidden boundary", async () => {

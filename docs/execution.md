@@ -97,6 +97,8 @@ A mismatch pauses execution. Ralph never attaches unrelated goal work to the cur
 
 `ralph_lifecycle` is a sequential tool registered by the extension. The model must call it. Prose, `turn_end`, errors, elapsed time, and issue counts do not select transitions.
 
+Native goal completion and the matching Ralph lifecycle call are an ordered closeout protocol. A supported Prime Agent queued steering or child-result handoff may end an Agent run immediately after a successful tool-use response. When the exact reset request is already `context_admitted`, the current response contains a real tool call, and public `ctx.hasPendingMessages()` proves queued host work, Ralph preserves the same reset and lifecycle turn into the next Agent run. The model finishes the already-started lifecycle decision before unrelated queued work. A later normal text-only response settles the boundary. Tool use alone never counts as completion; no-pending, stale, error, abort, reload, shutdown, and mismatch cases remain fail-closed.
+
 - `continue`: keep the native goal active and request the next cycle.
 - `wait`: record why the current cycle cannot proceed and the exact evidence that will establish readiness.
 - `ready`: resume the same open cycle with the matching wait ID and a new native goal.

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isQueuedToolHandoff } from "./cycle-boundary.js";
 import { formatPrepareInjection, loadPrepareSkill } from "./reset-skill.js";
 import { formatSpecificationInjection, inspectActiveSpecification, loadSpecItOutSkill } from "./specification.js";
 import {
@@ -36,6 +37,7 @@ export function createResetExtension({
   resolveResetInjection,
   handleReset,
   createRequestId = randomUUID,
+  hasActiveWorkflowTurn = () => false,
 } = {}) {
   return function resetExtension(pi) {
     let pending;
@@ -46,6 +48,10 @@ export function createResetExtension({
       source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId, status, ...details,
     });
     const clearPending = () => { pending = undefined; activeRequestId = undefined; };
+    const admittedQueuedToolHandoff = (event, ctx) => Boolean(
+      pending?.stage === "context_admitted" && activeRequestId === pending.requestId &&
+      hasActiveWorkflowTurn(ctx) === true && isQueuedToolHandoff(event, ctx)
+    );
     const failPending = (reason, error) => {
       const request = pending;
       if (!request) return;
@@ -308,6 +314,10 @@ export function createResetExtension({
         request.ignoreCurrentAbort = false;
         return;
       }
+      // Prime Agent ends the current Agent run after a tool batch when queued
+      // steering is ready. Preserve this exact admitted request for the next run;
+      // a later normal turn_end remains the only successful settlement.
+      if (admittedQueuedToolHandoff(event, ctx)) return;
       if (activeRequestId !== request.requestId && request.stage !== "context_admitted") return;
       try {
         const reason = finalAssistant?.stopReason === "aborted" ? "provider_aborted" : finalAssistant?.stopReason === "error" ? "provider_error" : "missing_normal_turn_end";
@@ -327,7 +337,7 @@ export function createResetExtension({
       finally { clearPending(); activeRequestId = undefined; }
     });
 
-    return Object.freeze({ requestBoundary, requestBoundaryAtProviderBoundary });
+    return Object.freeze({ requestBoundary, requestBoundaryAtProviderBoundary, admittedQueuedToolHandoff });
   };
 }
 

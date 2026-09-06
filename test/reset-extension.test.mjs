@@ -12,8 +12,9 @@ import {
   resetCompactionInstructions,
 } from "../src/reset-context.js";
 
-function harness({ branch = [], persistSent = true, sendError, appendError, specificationState = "absent", idle = true, pendingMessages = false } = {}) {
+function harness({ branch = [], persistSent = true, sendError, appendError, specificationState = "absent", idle = true, pendingMessages = false, signalAvailable = true, activeWorkflowTurn = false } = {}) {
   let runtimeIdle = idle, runtimePendingMessages = pendingMessages;
+  const runAbortController = new AbortController();
   const handlers = new Map(), commands = new Map(), sent = [], entries = [], notices = [], compactions = [];
   let aborts = 0, appendCalls = 0, appendFailureAt;
   let nextEntry = branch.length;
@@ -37,11 +38,13 @@ function harness({ branch = [], persistSent = true, sendError, appendError, spec
     loadSpecItOut: ({ cwd }) => ({ path: `${cwd}/.ralph/skills/spec-it-out/SKILL.md`, text: "---\nname: spec-it-out\ndescription: test\n---\nspec body" }),
     inspectSpecification: () => ({ state: specificationState, relativePath: ".ralph/plans/SPECIFICATION.md" }),
     createRequestId: (() => { let id = 0; return () => `r${++id}`; })(),
+    hasActiveWorkflowTurn: () => activeWorkflowTurn,
   })(pi);
   const ctx = {
     cwd: "/project",
     isIdle: () => runtimeIdle,
     hasPendingMessages: () => runtimePendingMessages,
+    signal: signalAvailable ? runAbortController.signal : undefined,
     waitForIdle: async () => {},
     compact: (options) => compactions.push(options),
     abort: () => { aborts += 1; },
@@ -54,7 +57,7 @@ function harness({ branch = [], persistSent = true, sendError, appendError, spec
     branchEntries: branch,
     signal: new AbortController().signal,
   }, ctx);
-  return { handlers, commands, sent, entries, branch, notices, compactions, ctx, runtime, beforeCompact, getAborts: () => aborts, setIdle: (value) => { runtimeIdle = value; }, setPendingMessages: (value) => { runtimePendingMessages = value; }, failAppendIn: (offset) => { appendFailureAt = appendCalls + offset; } };
+  return { handlers, commands, sent, entries, branch, notices, compactions, ctx, runtime, beforeCompact, getAborts: () => aborts, setIdle: (value) => { runtimeIdle = value; }, setPendingMessages: (value) => { runtimePendingMessages = value; }, abortRun: () => runAbortController.abort(), failAppendIn: (offset) => { appendFailureAt = appendCalls + offset; } };
 }
 
 async function request(h) { await h.commands.get("reset").handler("", h.ctx); }
@@ -311,4 +314,58 @@ test("shutdown records an interrupted in-flight reset", async () => {
   h.handlers.get("session_shutdown")({ reason: "reload" }, h.ctx);
   assert.equal(h.entries.at(-1).data.status, "interrupted");
   assert.equal(h.entries.at(-1).data.reason, "reload");
+});
+
+
+test("preserves an exact admitted boundary across a queued current tool handoff", async () => {
+  const h = harness({ activeWorkflowTurn: true }); await request(h); completeCompaction(h);
+  const visible = [{ role: "custom", ...h.sent[0].message }];
+  assert.equal(h.handlers.get("context")({ messages: visible }, h.ctx), undefined);
+  h.handlers.get("message_start")({ message: { role: "custom", ...h.sent[0].message } }, h.ctx);
+  const toolUse = { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "goal-complete", name: "goal", arguments: { action: "complete" } }] };
+  h.handlers.get("turn_end")({ message: toolUse }, h.ctx);
+  h.setPendingMessages(true);
+  await h.handlers.get("agent_end")({ messages: [toolUse] }, h.ctx);
+  assert.equal(h.entries.some((entry) => entry.customType === RESET_STATE_TYPE && entry.data.status === "failed"), false);
+  assert.equal(h.handlers.get("context")({ messages: [...visible, { role: "custom", customType: "agent_message", content: "child result" }] }, h.ctx), undefined);
+  h.setPendingMessages(false);
+  const final = { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "waiting" }] };
+  h.handlers.get("turn_end")({ message: final }, h.ctx);
+  await h.handlers.get("agent_end")({ messages: [final] }, h.ctx);
+  assert.equal(h.entries.filter((entry) => entry.customType === RESET_STATE_TYPE && entry.data.status === "completed").length, 1);
+  assert.equal(h.entries.some((entry) => entry.customType === RESET_STATE_TYPE && entry.data.status === "failed"), false);
+});
+
+test("does not preserve an admitted queued tool end without active workflow ownership", async () => {
+  const h = harness(); await request(h); completeCompaction(h);
+  h.handlers.get("message_start")({ message: { role: "custom", ...h.sent[0].message } }, h.ctx);
+  h.setPendingMessages(true);
+  const toolUse = { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "c", name: "goal", arguments: {} }] };
+  await h.handlers.get("agent_end")({ messages: [toolUse] }, h.ctx);
+  assert.equal(h.entries.at(-1).data.status, "failed");
+  assert.equal(h.entries.at(-1).data.reason, "missing_normal_turn_end");
+});
+
+test("does not preserve a tool-use end without queued host work or an exact admitted request", async () => {
+  const noQueue = harness({ activeWorkflowTurn: true }); await request(noQueue); completeCompaction(noQueue);
+  noQueue.handlers.get("message_start")({ message: { role: "custom", ...noQueue.sent[0].message } }, noQueue.ctx);
+  const toolUse = { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "c", name: "goal", arguments: {} }] };
+  await noQueue.handlers.get("agent_end")({ messages: [toolUse] }, noQueue.ctx);
+  assert.equal(noQueue.entries.at(-1).data.status, "failed");
+  assert.equal(noQueue.entries.at(-1).data.reason, "missing_normal_turn_end");
+
+  const beforeAdmission = harness({ activeWorkflowTurn: true }); await request(beforeAdmission); beforeAdmission.setPendingMessages(true);
+  await beforeAdmission.handlers.get("agent_end")({ messages: [toolUse] }, beforeAdmission.ctx);
+  assert.equal(beforeAdmission.entries.at(-1).data.status, "compacting");
+});
+
+
+test("aborted live signal never preserves a queued tool-use boundary", async () => {
+  const h = harness({ activeWorkflowTurn: true }); await request(h); completeCompaction(h);
+  h.handlers.get("message_start")({ message: { role: "custom", ...h.sent[0].message } }, h.ctx);
+  h.setPendingMessages(true); h.abortRun();
+  const toolUse = { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "c", name: "goal", arguments: {} }] };
+  await h.handlers.get("agent_end")({ messages: [toolUse] }, h.ctx);
+  assert.equal(h.entries.at(-1).data.status, "failed");
+  assert.equal(h.entries.at(-1).data.reason, "missing_normal_turn_end");
 });

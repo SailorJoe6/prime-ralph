@@ -279,6 +279,7 @@ export function createWorkflowExtension({
     let resetRuntime;
     resetRuntime = createResetExtension({
       loadPrepare, loadSpecItOut, inspectSpecification, createRequestId,
+      hasActiveWorkflowTurn: (ctx) => activeLifecycleTurns.has(sessionId(ctx)),
       handleReset: async ({ ctx }) => {
         const state = requireTerminalLogReady(execution(ctx));
         if (state.phase === "execution" && state.status === "running") {
@@ -692,9 +693,11 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
       }
     });
 
-    pi.on("agent_end", async (_event, ctx) => {
-      const id = sessionId(ctx); activeBlockedTurns.delete(id);
+    pi.on("agent_end", async (event, ctx) => {
+      const id = sessionId(ctx);
       const hadActiveLifecycleTurn = activeLifecycleTurns.has(id);
+      if (hadActiveLifecycleTurn && resetRuntime.admittedQueuedToolHandoff(event, ctx)) return;
+      activeBlockedTurns.delete(id);
       let live = execution(ctx, { reconcile: false });
       if (hadActiveLifecycleTurn) {
         try {

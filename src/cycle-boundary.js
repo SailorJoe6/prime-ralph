@@ -10,3 +10,9 @@ export function isFinalNormalAssistantTurn(event) {
   if (hasToolCall(message)) return false;
   return true;
 }
+
+export function isQueuedToolHandoff(event, ctx) {
+  if (!Array.isArray(event?.messages) || ctx?.signal?.aborted !== false || ctx?.hasPendingMessages?.() !== true) return false;
+  const message = [...event.messages].reverse().find((candidate) => candidate?.role === "assistant");
+  return message?.stopReason === "toolUse" && hasToolCall(message);
+}
