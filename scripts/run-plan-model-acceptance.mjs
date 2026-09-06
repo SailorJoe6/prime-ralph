@@ -22,13 +22,50 @@ mkdirSync(artifactDir, { recursive: true });
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 const secretPatterns = [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, /\b(?:sk|pk)_[A-Za-z0-9_-]{20,}\b/, /\bBearer\s+[A-Za-z0-9._~+\/-]{16,}/i, /\bgh[pousr]_[A-Za-z0-9]{20,}\b/];
 function assertSafe(value, label) { if (secretPatterns.some((pattern) => pattern.test(value))) throw new Error(`${label} rejected for secret shape`); }
+function numberedBlocks(text) {
+  const blocks = []; let current = [];
+  for (const line of text.split("\n")) {
+    const match = line.match(/^\s*(\d+)\.\s+(.+)$/);
+    if (match) {
+      const choice = { number: Number(match[1]), text: match[2] };
+      if (current.length && choice.number === 1) { blocks.push(current); current = []; }
+      current.push(choice);
+    } else if (line.trim() && current.length) { blocks.push(current); current = []; }
+  }
+  if (current.length) blocks.push(current); return blocks;
+}
+function isOrderedChoiceMenu(block) {
+  return block.length >= 4 && block.slice(0, 4).every((choice, index) => choice.number === index + 1) &&
+    /\/execute\b/i.test(block[0].text) && /unchanged|without chang/i.test(block[0].text) &&
+    /discuss/i.test(block[1].text) && /update|edit/i.test(block[2].text) && /agree|consent|explicit/i.test(block[2].text) &&
+    /cancel|no changes|without chang/i.test(block[3].text);
+}
+function hasExactFourChoiceMenu(text) {
+  const candidate = numberedBlocks(text).filter(isOrderedChoiceMenu).at(-1);
+  return candidate?.length === 4;
+}
+const validChoiceFixture = `1. Invoke /execute unchanged.
+2. Discuss.
+3. Update with explicit consent.
+4. Cancel.`;
+const ambiguousChoiceFixture = `1. Review /execute unchanged wording.
+2. Discuss the wording.
+3. Edit only with explicit consent.
+4. Cancel the review.
+
+1. Invoke /execute unchanged.
+2. Discuss.
+3. Update with explicit consent.
+4. Cancel.
+5. Unexpected fifth path.`;
+if (!hasExactFourChoiceMenu(validChoiceFixture) || hasExactFourChoiceMenu(ambiguousChoiceFixture)) throw new Error("numbered choice menu parser self-check failed");
 function manifest(directory, base = directory, output = {}) { for (const name of readdirSync(directory).sort()) { const path = join(directory, name), rel = relative(base, path), stat = lstatSync(path); if (stat.isDirectory() && !stat.isSymbolicLink()) { output[rel] = { kind: "directory" }; manifest(path, base, output); } else if (stat.isFile()) output[rel] = { kind: "file", bytes: stat.size, sha256: sha256(readFileSync(path)) }; else output[rel] = { kind: stat.isSymbolicLink() ? "symlink" : "other" }; } return output; }
 function changedPaths(before, after) { return [...new Set([...Object.keys(before), ...Object.keys(after)])].filter((key) => JSON.stringify(before[key]) !== JSON.stringify(after[key])).sort(); }
 function assistantMessages(records) { return records.filter((record) => record.type === "message_end" && record.message?.role === "assistant").map((record) => record.message); }
 function textOf(message) { return (message?.content ?? []).filter((part) => part.type === "text").map((part) => part.text).join("\n"); }
 function toolCalls(messages) { return messages.flatMap((message) => (message.content ?? []).filter((part) => part.type === "toolCall")); }
 const initialUser = "I want to review the active execution plan, but I have not approved any plan edit.";
-const choiceMenu = "An active execution plan already exists. Choose whether to discuss it, explicitly agree to an in-place update, or cancel without changes.";
+const choiceMenu = "An active execution plan already exists. Choose whether to invoke /execute to run it unchanged, discuss it, explicitly agree to an in-place update, or cancel without changes.";
 const definitions = {
   new: { mode: "planning-new", turns: [] },
   existing: { mode: "planning-existing", turns: [{ role: "user", text: initialUser }] },
@@ -86,7 +123,7 @@ pi.registerTool({ name: "update_execution_plan", label: "Update approved executi
     check("cancel performs no tool call", mutationCalls.length === 0); check("execution plan unchanged", planUnchanged); check("cancel changes no files", changed.length === 0);
   } else {
     check("no mutation before agreement", mutationCalls.length === 0); check("execution plan unchanged", planUnchanged); check("no fixture files changed", changed.length === 0);
-    check("warns active plan exists", /active (?:execution )?plan.*(?:exists|already)|already.*active (?:execution )?plan/i.test(finalText)); check("offers discussion", /discuss/i.test(finalText)); check("offers explicit update", /update|edit/i.test(finalText)); check("offers cancellation", /cancel|unchanged|no changes/i.test(finalText));
+    check("warns active plan exists", /active (?:execution )?plan.*(?:exists|already)|already.*active (?:execution )?plan/i.test(finalText)); check("offers unchanged-plan execution", /\/execute\b/i.test(finalText) && /unchanged|without chang/i.test(finalText)); check("offers discussion", /discuss/i.test(finalText)); check("offers explicit update", /update|edit/i.test(finalText)); check("offers cancellation", /cancel|no changes|without chang/i.test(finalText)); check("offers exactly four numbered choices", hasExactFourChoiceMenu(finalText));
   }
   if (variant === "beads") check("Beads state unchanged", after[".beads/sentinel"]?.sha256 === baseline[".beads/sentinel"]?.sha256);
   check("no execution started", !/(?:started|beginning|launching) (?:automatic )?execution/i.test(finalText));

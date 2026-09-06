@@ -42,7 +42,9 @@ test("specification templates protect the active specification and cleared-sourc
 test("planning templates protect plans and never start execution", () => {
   for (const variant of ["default", "beads"]) {
     const text = load(variant, "plan");
-    for (const pattern of [/\.ralph\/plans\/SPECIFICATION\.md/, /\.ralph\/plans\/EXECUTION_PLAN\.md/, /prime-ralph-invocation/, /planning-new/, /planning-existing/, /planning-reset-new/, /planning-reset-existing/, /do not overwrite/i, /Offer exactly these choices/i, /Discuss the active execution plan/i, /in-place update only after/i, /Cancel without changing/i, /must not start execution/i]) assert.match(text, pattern);
+    for (const pattern of [/\.ralph\/plans\/SPECIFICATION\.md/, /\.ralph\/plans\/EXECUTION_PLAN\.md/, /prime-ralph-invocation/, /planning-new/, /planning-existing/, /planning-reset-new/, /planning-reset-existing/, /do not overwrite/i, /Offer exactly these choices/i, /Invoke `\/execute` to run the active execution plan unchanged/i, /Discuss the active execution plan/i, /in-place update only after/i, /Cancel without changing/i, /Do not invoke it, start execution, create a goal, or change lifecycle state/i, /must not start execution/i]) assert.match(text, pattern);
+    const protectedChoices = text.match(/Offer exactly these choices:\n\n([\s\S]*?)\n\nPresenting `\/execute`/)?.[1] ?? "";
+    assert.equal((protectedChoices.match(/^\d+\. /gm) ?? []).length, 4);
     assert.match(text, /prime-ralph-invocation-version:\s*1/);
     assert.doesNotMatch(text, /execution lifecycle is running|must first pause|native control/i);
   }

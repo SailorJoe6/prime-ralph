@@ -19,9 +19,9 @@ The plan prompt must declare `prime-ralph-invocation-version: 1`. The extension 
 | Mode | Code-owned fact | Skill-owned behavior |
 | --- | --- | --- |
 | `planning-new` | Active spec exists; active plan is absent | Study the project and create the agreed active plan |
-| `planning-existing` | Active spec and plan exist | Warn, then discuss, explicitly update, or cancel |
+| `planning-existing` | Active spec and plan exist | Warn, offer `/execute` for the unchanged plan, or discuss, explicitly update, or cancel |
 | `planning-reset-new` | Planning reset; active plan is absent | Re-enter fresh interactive planning |
-| `planning-reset-existing` | Planning reset; active plan exists | Re-enter protected plan discussion |
+| `planning-reset-existing` | Planning reset; active plan exists | Warn, offer `/execute` for the unchanged plan, or discuss, explicitly update, or cancel |
 
 The metadata states only mechanical facts. The skill owns questions, architecture choices, vertical slices, document content, consent, and all file changes.
 
@@ -42,7 +42,7 @@ Planning phase is recorded in versioned, session-scoped custom-message details. 
 
 `/reset` and fresh `/plan` share the same single-flight, durable marker and custom-compaction transaction. Every required state and skill is validated before a marker is appended. A planning boundary contains one combined `prepare`-then-`plan` message. Host short-session or already-compacted refusal starts no planning pass, preserves the conversation, and uses no projection fallback. Failure before skill admission produces no partial planning prompt.
 
-Neither path creates or edits planning documents, starts a goal, registers `/execute`, or begins automatic work.
+Neither path creates or edits planning documents, invokes `/execute`, starts a goal, changes lifecycle state, or begins automatic work. Existing-plan modes present `/execute` only as the separate command that runs the active plan unchanged.
 
 ## Evidence
 

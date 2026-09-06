@@ -14,10 +14,11 @@ Planning is interactive. Creating a plan must not start execution.
 
 For `planning-existing` or `planning-reset-existing`, warn that an active execution plan already exists. Do not edit it and do not overwrite it before the user agrees. Offer exactly these choices:
 
-1. Discuss the active execution plan without changing it.
-2. Make an in-place update only after the user explicitly agrees to that update.
-3. Cancel without changing the active execution plan.
+1. Invoke `/execute` to run the active execution plan unchanged.
+2. Discuss the active execution plan without changing it.
+3. Make an in-place update only after the user explicitly agrees to that update.
+4. Cancel without changing the active execution plan.
 
-Preserve the existing plan unless the user clearly approves a change.
+Presenting `/execute` is guidance only. Do not invoke it, start execution, create a goal, or change lifecycle state from planning. Preserve the existing plan unless the user clearly approves a change.
 
 Inspect relevant Beads issues and keep the execution plan consistent with them. Create or update plan-related issues when useful, but preserve unrelated issues and never let issue availability silently redefine the specification.
