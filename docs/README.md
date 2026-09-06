@@ -9,10 +9,9 @@ This directory documents the standalone `prime-ralph` package. Start with the ro
 3. **[Interactive planning workflow](planning.md)** — Slice 4 startup, `/plan`, phase-aware reset, and behavioral evidence.
 4. **[Safe execution lifecycle](execution.md)** — ownership hierarchy, cycles, provider/tool loops, native-goal continuation, waiting, blocked and manually restored recovery, and logging.
 5. **[Lifecycle durability](lifecycle-durability.md)** — retained Slice 5 mechanisms, fail-closed state-chain recovery, and remaining failure-injection work.
-6. **[`/reset` context boundary](reset.md)** — compaction, repeated provider-call projection, evidence, and host API gap.
+6. **[`/reset` context boundary](reset.md)** — native compaction, honest refusal, transcript transparency, and host API limits.
 7. **[Release contract](release-contract.md)** — what the package guarantees, what it leaves to the host, and how to validate a release.
-8. **[Research slice 2](research-slice-2.md)** — historical lifecycle observations and POCs.
-9. **[Native transport acceptance](native-transport-acceptance.md)** — historical transport checks and their limits.
+8. **[Native transport acceptance](native-transport-acceptance.md)** — native transport checks and their limits.
 
 ## Documentation roles
 
@@ -26,7 +25,6 @@ This directory documents the standalone `prime-ralph` package. Start with the ro
 | [`lifecycle-durability.md`](lifecycle-durability.md) | understand state-chain recovery and the durability audit |
 | [`reset.md`](reset.md) | understand or validate the production `/reset` path |
 | [`release-contract.md`](release-contract.md) | review compatibility and release criteria |
-| [`research-slice-2.md`](research-slice-2.md) | understand source findings and POCs |
 | [`native-transport-acceptance.md`](native-transport-acceptance.md) | reproduce or assess native transport evidence |
 
 ## Scope
@@ -36,9 +34,9 @@ These documents describe a reusable Prime Agent extension. Host-specific reposit
 ## Evidence vocabulary
 
 - **Unit test** — verifies a package function in isolation.
-- **Fixture POC** — exercises a lifecycle seam with a deterministic or in-memory host.
+- **Deterministic fixture** — exercises a lifecycle seam with a deterministic or in-memory host.
 - **Compatibility check** — verifies assumptions against an installed Prime Agent source/API.
-- **Native smoke** — verifies protocol admission and shutdown through a real host transport.
+- **Native transport acceptance** — verifies protocol admission and shutdown through a real host transport.
 - **Real-model behavioral acceptance** — observes a selected provider/model acting on the exact delivered prompt under a restricted tool surface.
 
 Passing one level does not imply that the next level has passed.

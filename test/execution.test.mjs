@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   BLOCKED_MESSAGE_TYPE,
-  blockedContextBoundary,
   EXECUTION_MESSAGE_TYPE,
   EXECUTION_STATE_ENTRY_TYPE,
   admitPendingExecutionRound,
@@ -107,12 +106,6 @@ test("reads latest native goal marker", () => {
   assert.equal(latestGoalState([]), null);
   assert.equal(latestGoalState([{ type: "custom", customType: "thread_goal_state", data: { goalId: "g", status: "active" } }]).goalId, "g");
 });
-
-test("blocked projection preserves the nearest triggering user rather than stale tool output", () => {
-  const trigger = { role: "user", content: "fixed" }, boundary = { role: "custom", customType: BLOCKED_MESSAGE_TYPE, content: "blocked", details: { source: "prime-ralph", protocolVersion: 1, preserveTrigger: true } };
-  assert.deepEqual(blockedContextBoundary([{ role: "assistant", content: "old" }, trigger, { role: "toolResult", content: [] }, boundary]), [boundary, trigger]);
-});
-
 
 test("reducer rejects forbidden phase jumps and recovery fails closed on inconsistent markers", () => {
   const base = inactiveExecutionState("s"), running = beginExecution(base, { lifecycleId: "life" });

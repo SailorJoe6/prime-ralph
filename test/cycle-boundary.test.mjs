@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isFinalNormalAssistantTurn, shouldRequestGoalCycleCompaction } from "../src/cycle-boundary-poc.js";
+import { isFinalNormalAssistantTurn } from "../src/cycle-boundary.js";
 
 const normal = { type: "turn_end", message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "done" }] }, toolResults: [] };
 
@@ -10,9 +10,4 @@ test("accepts final responses after tool results but rejects errors and aborts",
   assert.equal(isFinalNormalAssistantTurn({ ...normal, toolResults: [{}] }), true);
   assert.equal(isFinalNormalAssistantTurn({ ...normal, message: { ...normal.message, stopReason: "error" } }), false);
   assert.equal(isFinalNormalAssistantTurn({ ...normal, message: { ...normal.message, stopReason: "aborted" } }), false);
-});
-test("requires an active goal before requesting cycle compaction", () => {
-  assert.equal(shouldRequestGoalCycleCompaction(normal, { status: "active", objectivePresent: true }), true);
-  assert.equal(shouldRequestGoalCycleCompaction(normal, { status: "paused", objectivePresent: true }), false);
-  assert.equal(shouldRequestGoalCycleCompaction(normal, { status: "active", objectivePresent: false }), false);
 });

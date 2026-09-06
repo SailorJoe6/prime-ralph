@@ -40,7 +40,7 @@ Planning phase is recorded in versioned, session-scoped custom-message details. 
 
 ## Planning-aware reset
 
-`/reset` and fresh `/plan` share the same single-flight, durable marker and custom-compaction transaction. Every required state and skill is validated before a marker is appended. A planning boundary contains one combined `prepare`-then-`plan` message. Host short-session refusal uses the established exact projection fallback. Failure before skill admission produces no partial planning prompt.
+`/reset` and fresh `/plan` share the same single-flight, durable marker and custom-compaction transaction. Every required state and skill is validated before a marker is appended. A planning boundary contains one combined `prepare`-then-`plan` message. Host short-session or already-compacted refusal starts no planning pass, preserves the conversation, and uses no projection fallback. Failure before skill admission produces no partial planning prompt.
 
 Neither path creates or edits planning documents, starts a goal, registers `/execute`, or begins automatic work.
 

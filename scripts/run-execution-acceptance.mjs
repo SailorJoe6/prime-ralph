@@ -10,13 +10,14 @@ const imp = (path) => import(pathToFileURL(join(primeRoot, "dist", path)).href);
 const [{ Agent }, { AgentSession }, { SessionManager }, { SettingsManager }, { AuthStorage }, { ModelRegistry }, { DefaultResourceLoader }, { convertToLlm }, { createIpythonTool, IpythonKernelProvisioner }] = await Promise.all([
   import(pathToFileURL(join(coreRoot, "dist/agent.js")).href), imp("core/agent-session.js"), imp("core/session-manager.js"), imp("core/settings-manager.js"), imp("core/auth-storage.js"), imp("core/model-registry.js"), imp("core/resource-loader.js"), imp("core/messages.js"), imp("core/tools/index.js"),
 ]);
-const model = { provider: "poc", id: "fake", api: "openai-completions", contextWindow: 100000, maxTokens: 1000, reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+const model = { provider: "acceptance", id: "fake", api: "openai-completions", contextWindow: 100000, maxTokens: 1000, reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
 function assistant(content, stopReason = "stop") { return { role: "assistant", content: typeof content === "string" ? [{ type: "text", text: content }] : content, api: model.api, provider: model.provider, model: model.id, stopReason, usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 }, timestamp: Date.now() }; }
 function response(message) { return { async *[Symbol.asyncIterator]() { yield { type: "start", partial: { ...message, content: [] } }; yield { type: "done", reason: message.stopReason, message }; }, async result() { return message; } }; }
 const visible = (context) => context.capturedText ?? context.messages.map((message) => typeof message.content === "string" ? message.content : Array.isArray(message.content) ? message.content.map((part) => part?.text ?? part?.output ?? "").join("\n") : "").join("\n");
 const invocation = (value) => { const match = value.match(/<prime-ralph-invocation>(.*?)<\/prime-ralph-invocation>/s); return match ? JSON.parse(match[1]) : null; };
 const waitFor = async (predicate, label) => { const deadline = Date.now() + 12_000; while (!predicate()) { if (Date.now() > deadline) throw new Error(`timeout waiting for ${label}`); await new Promise((resolve) => setTimeout(resolve, 10)); } };
 
+const stableTranscript = (messages) => JSON.stringify(messages, (key, value) => key === "timestamp" ? undefined : value);
 const cwd = await mkdtemp(join(tmpdir(), "prime-ralph-execution-acceptance-")), sessionDir = join(cwd, "sessions"), agentDir = join(cwd, ".agent");
 for (const dir of [".ralph/skills/prepare", ".ralph/skills/spec-it-out", ".ralph/skills/plan", ".ralph/skills/execute", ".ralph/skills/blocked", ".ralph/plans/blocked", ".ralph/plans/archive", ".prime/agent/extensions", "sessions", ".agent"]) await mkdir(join(cwd, dir), { recursive: true });
 await symlink(new URL("../src", import.meta.url), join(cwd, ".prime/agent/extensions/prime-ralph"), "dir");
@@ -24,11 +25,11 @@ const sentinels = { baseline: "SLICE5_HOST_BASELINE", prepare: "SLICE5_PREPARE",
 for (const [name, body] of Object.entries({ prepare: sentinels.prepare, "spec-it-out": "spec", plan: "plan", execute: sentinels.execute, blocked: "blocked" })) await writeFile(join(cwd, `.ralph/skills/${name}/SKILL.md`), `---\nname: ${name}\ndescription: acceptance\n${name === "prepare" ? "" : "prime-ralph-invocation-version: 1\n"}---\n${body}\n`);
 await writeFile(join(cwd, ".ralph/plans/SPECIFICATION.md"), "# execution fixture specification\n");
 await writeFile(join(cwd, ".ralph/plans/EXECUTION_PLAN.md"), "# execution fixture plan\n");
-const auth = AuthStorage.inMemory(); auth.set("poc", { type: "api_key", key: "not-a-real-key" });
+const auth = AuthStorage.inMemory(); auth.set("acceptance", { type: "api_key", key: "not-a-real-key" });
 const registry = ModelRegistry.inMemory(auth), settings = SettingsManager.inMemory({ compaction: { enabled: false }, goals: { enabled: true, maxContinuations: 20 } });
 const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager: settings, additionalExtensionPaths: [join(cwd, ".prime/agent/extensions/prime-ralph/index.js")], noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true, systemPrompt: sentinels.baseline });
 await loader.reload(); if (loader.getExtensions().errors.length) throw new Error(`extension load failed: ${JSON.stringify(loader.getExtensions().errors)}`);
-const sm = SessionManager.create(cwd, sessionDir), originalSessionId = sm.getSessionId(), originalSessionFile = sm.getSessionFile(), contexts = [];
+const sm = SessionManager.create(cwd, sessionDir), originalSessionId = sm.getSessionId(), originalSessionFile = sm.getSessionFile(), contexts = [], transcriptMatches = [];
 const provisioner = new IpythonKernelProvisioner(cwd, { sessionId: originalSessionId }), ipython = createIpythonTool(cwd, { provisioner });
 // The fake provider cannot call the kernel-side goal skill. These private host calls are
 // fixture-only equivalents of goal.create/complete and an admitted tracked child; the
@@ -37,7 +38,9 @@ let hostSession, startupStage = 0, fakeRlmRun, delayedTurnEndRelease, raceBounda
 const agent = new Agent({ initialState: { systemPrompt: sentinels.baseline, model, thinkingLevel: "off", serviceTier: "auto", messages: [], tools: [] }, convertToLlm,
   transformContext: async (messages) => hostSession ? hostSession._extensionRunner.emitContext(messages) : messages,
   streamFn: async (_model, context) => {
-    const content = visible(context); contexts.push({ capturedText: content }); const meta = invocation(content);
+    const content = visible(context); contexts.push({ capturedText: content });
+    transcriptMatches.push(stableTranscript(context.messages) === stableTranscript(convertToLlm(sm.buildSessionContext().messages)));
+    const meta = invocation(content);
     if (meta?.cycle === 3 && !raceBoundaryState) raceBoundaryState = sm.getEntries().filter((entry) => entry.customType === EXECUTION_STATE_ENTRY_TYPE).at(-1)?.data;
     if (!meta || meta.skill !== "execute") { startupStage += 1; return response(assistant("planning interaction complete")); }
     const stage = cycleStages.get(meta.cycle) ?? 0; cycleStages.set(meta.cycle, stage + 1);
@@ -106,6 +109,7 @@ const automaticBoundaryOrdering = automaticBoundaries.length === 2 && automaticB
 });
 const checks = {
   primeAgentVersion: JSON.parse(await readFile(join(primeRoot, "package.json"), "utf8")).version === "0.9.1",
+  providerTranscriptEquivalent: transcriptMatches.length === contexts.length && transcriptMatches.every(Boolean),
   threeCycles: [1, 2, 3].every((cycle) => metas.some((meta) => meta.cycle === cycle)),
   oneLifecycle: new Set(metas.map((meta) => meta.lifecycleId)).size === 1,
   cleanOrdering: firstByCycle.every((context) => { const value = visible(context); return value.indexOf(sentinels.prepare) >= 0 && value.indexOf(sentinels.prepare) < value.indexOf(sentinels.execute) && !value.includes(sentinels.stale); }),

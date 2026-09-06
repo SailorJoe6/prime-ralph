@@ -12,7 +12,8 @@ const [{ Agent }, { AgentSession }, { SessionManager }, { SettingsManager }, { A
   import(pathToFileURL(join(coreRoot, "dist/agent.js")).href), imp("core/agent-session.js"), imp("core/session-manager.js"), imp("core/settings-manager.js"),
   imp("core/auth-storage.js"), imp("core/model-registry.js"), imp("core/resource-loader.js"), imp("core/messages.js"),
 ]);
-const model = { provider: "poc", id: "fake", api: "openai-completions", contextWindow: 100000, maxTokens: 1000, reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+const stableTranscript = (messages) => JSON.stringify(messages, (key, value) => key === "timestamp" ? undefined : value);
+const model = { provider: "acceptance", id: "fake", api: "openai-completions", contextWindow: 100000, maxTokens: 1000, reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
 function assistant(text) { return { role: "assistant", content: [{ type: "text", text }], api: model.api, provider: model.provider, model: model.id, stopReason: "stop", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 }, timestamp: Date.now() }; }
 function response(message) { return { async *[Symbol.asyncIterator]() { yield { type: "start", partial: { ...message, content: [] } }; yield { type: "done", reason: "stop", message }; }, async result() { return message; } }; }
 const text = (context) => context.messages.map((message) => typeof message.content === "string" ? message.content : Array.isArray(message.content) ? message.content.map((part) => part?.text ?? "").join("") : "").join("\n");
@@ -32,23 +33,26 @@ async function fixture({ activeSpecification, activePlan = false }) {
   await writeFile(join(cwd, ".ralph/skills/plan/SKILL.md"), `---\nname: plan\ndescription: test\nprime-ralph-invocation-version: 1\n---\n${sentinels.plan}\n`);
   if (activeSpecification) await writeFile(join(cwd, ".ralph/plans/SPECIFICATION.md"), "# Fixture specification\n");
   if (activePlan) await writeFile(join(cwd, ".ralph/plans/EXECUTION_PLAN.md"), "# Existing startup plan\n");
-  const auth = AuthStorage.inMemory(); auth.set("poc", { type: "api_key", key: "not-a-real-key" });
+  const auth = AuthStorage.inMemory(); auth.set("acceptance", { type: "api_key", key: "not-a-real-key" });
   const registry = ModelRegistry.inMemory(auth); const settings = SettingsManager.inMemory({ compaction: { enabled: false } });
   const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager: settings, additionalExtensionPaths: [join(cwd, ".prime/agent/extensions/prime-ralph/index.js")], noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true, systemPrompt: "SLICE4_BASELINE" });
   await loader.reload(); if (loader.getExtensions().errors.length) throw new Error(`extension load failed: ${JSON.stringify(loader.getExtensions().errors)}`);
-  const sm = SessionManager.create(cwd, sessionDir), id = sm.getSessionId(), contexts = []; let hostSession;
+  const sm = SessionManager.create(cwd, sessionDir), id = sm.getSessionId(), contexts = [], transcriptMatches = []; let hostSession;
   const agent = new Agent({ initialState: { systemPrompt: "SLICE4_BASELINE", model, thinkingLevel: "off", serviceTier: "auto", messages: [], tools: [] }, convertToLlm,
     transformContext: async (messages) => hostSession ? hostSession._extensionRunner.emitContext(messages) : messages,
-    streamFn: async (_model, context) => { contexts.push(structuredClone(context)); return response(assistant(`provider-call-${contexts.length}`)); }, sessionId: id });
+    streamFn: async (_model, context) => { contexts.push(structuredClone(context)); transcriptMatches.push(stableTranscript(context.messages) === stableTranscript(convertToLlm(sm.buildSessionContext().messages))); return response(assistant(`provider-call-${contexts.length}`)); }, sessionId: id });
   const session = hostSession = new AgentSession({ agent, sessionManager: sm, settingsManager: settings, cwd, agentDir, resourceLoader: loader, modelRegistry: registry, customTools: [], initialActiveToolNames: [], allowedToolNames: [], includeGoals: false, includeCompactSkill: false });
   await session.bindExtensions({});
   await waitFor(() => contexts.length >= 1 && !session.isStreaming, "startup turn");
-  return { cwd, session, sm, contexts, id, sentinels, loader };
+  return { cwd, session, sm, contexts, transcriptMatches, id, sentinels, loader };
 }
+
+async function grow(runtime, prefix) { for (let turn = 0; turn < 4; turn += 1) await runtime.session.promptAndWait(`${prefix}_${turn} ${"old context ".repeat(2500)}`); }
 
 const startup = await fixture({ activeSpecification: true });
 const startupContext = startup.contexts[0];
 await startup.session.promptAndWait(startup.sentinels.stale);
+await grow(startup, "RESET_NEW_PADDING");
 let before = startup.contexts.length; await startup.session.prompt("/reset"); await waitFor(() => startup.contexts.length > before && !startup.session.isStreaming, "planning reset without plan");
 const resetNewContext = startup.contexts.at(-1);
 await writeFile(join(startup.cwd, ".ralph/plans/EXECUTION_PLAN.md"), "# Protected fixture plan\n");
@@ -56,6 +60,7 @@ await startup.session.promptAndWait(startup.sentinels.later);
 before = startup.contexts.length; await startup.session.prompt("/plan"); await waitFor(() => startup.contexts.length > before && !startup.session.isStreaming, "existing plan discussion");
 const existingCommandContext = startup.contexts.at(-1);
 const planAfterCommand = await readFile(join(startup.cwd, ".ralph/plans/EXECUTION_PLAN.md"), "utf8");
+await grow(startup, "RESET_EXISTING_PADDING");
 before = startup.contexts.length; await startup.session.prompt("/reset"); await waitFor(() => startup.contexts.length > before && !startup.session.isStreaming, "planning reset with plan");
 const resetExistingContext = startup.contexts.at(-1);
 
@@ -66,14 +71,17 @@ const existingStartupPlan = await readFile(join(existingStartup.cwd, ".ralph/pla
 const transition = await fixture({ activeSpecification: false });
 await writeFile(join(transition.cwd, ".ralph/plans/SPECIFICATION.md"), "# Created during specification phase\n");
 await transition.session.promptAndWait(transition.sentinels.stale);
+await grow(transition, "SPEC_RESET_PADDING");
 before = transition.contexts.length; await transition.session.prompt("/reset"); await waitFor(() => transition.contexts.length > before && !transition.session.isStreaming, "specification reset after spec creation");
 const specificationResetContext = transition.contexts.at(-1);
+await grow(transition, "PLAN_TRANSITION_PADDING");
 before = transition.contexts.length; await transition.session.prompt("/plan"); await waitFor(() => transition.contexts.length > before && !transition.session.isStreaming, "explicit planning transition");
 const explicitPlanContext = transition.contexts.at(-1);
 const commandNames = [...startup.loader.getExtensions().extensions[0].commands.keys()];
 const result = {
   primeAgentVersion: JSON.parse(await readFile(join(primeRoot, "package.json"), "utf8")).version,
   registeredCommands: commandNames,
+  providerTranscriptEquivalent: [startup, existingStartup, transition].every((runtime) => runtime.transcriptMatches.length === runtime.contexts.length && runtime.transcriptMatches.every(Boolean)),
   startupOrdered: text(startupContext).indexOf(startup.sentinels.prepare) < text(startupContext).indexOf(startup.sentinels.plan),
   startupNewMode: text(startupContext).includes('"invocationMode":"planning-new"'),
   startupSingleMessage: startupContext.messages.length === 1,
@@ -91,6 +99,7 @@ const result = {
 };
 const failures = [];
 if (result.primeAgentVersion !== "0.9.1") failures.push("wrong Prime Agent version");
+if (!result.providerTranscriptEquivalent) failures.push("provider context diverged from the native session transcript");
 if (JSON.stringify(result.registeredCommands) !== JSON.stringify(["reset", "spec-it-out", "plan", "execute"])) failures.push("wrong command surface");
 for (const key of ["startupOrdered", "startupNewMode", "startupSingleMessage", "existingStartupMode", "existingStartupProtected", "resetNewClean", "existingPlanCurrentContext", "existingPlanProtected", "resetExistingClean", "specificationPhasePreserved", "explicitPlanClean", "sameSessionTransition", "planHandlerDidNotWrite"]) if (!result[key]) failures.push(key);
 if (result.executionEntries !== 0) failures.push("execution state was introduced");

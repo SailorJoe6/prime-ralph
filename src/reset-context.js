@@ -8,39 +8,23 @@ export function resetCompactionInstructions(requestId) {
   return `${RESET_COMPACTION_INSTRUCTION_PREFIX}${requestId}`;
 }
 
-export function isResetPrepareMessage(message) {
-  return message?.role === "custom" && message.customType === RESET_MESSAGE_TYPE &&
-    message.details?.source === "prime-ralph" && message.details?.protocolVersion === RESET_PROTOCOL_VERSION &&
-    typeof message.details?.requestId === "string";
-}
-
-export function isResetCompactionSummary(message) {
-  return message?.role === "compactionSummary" && message.summary === "" &&
-    typeof message.customInstructions === "string" &&
-    message.customInstructions.startsWith(RESET_COMPACTION_INSTRUCTION_PREFIX);
-}
-
-/** Remove Ralph's fixed empty compaction wrapper and enforce the newest persisted prepare boundary exactly. */
-export function projectResetContext(messages) {
-  if (!Array.isArray(messages)) return [];
-  let projected = messages;
-  if (isResetCompactionSummary(projected[0])) projected = projected.slice(1);
-  let boundary = -1;
-  for (let index = projected.length - 1; index >= 0; index -= 1) {
-    if (isResetPrepareMessage(projected[index])) {
-      boundary = index;
-      break;
-    }
-  }
-  return boundary < 0 ? projected : projected.slice(boundary);
-}
-
 export function latestResetState(entries) {
   if (!Array.isArray(entries)) return undefined;
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
     if (entry?.type === "custom" && entry.customType === RESET_STATE_TYPE &&
         entry.data?.source === "prime-ralph" && entry.data?.protocolVersion === RESET_PROTOCOL_VERSION) return entry.data;
+  }
+  return undefined;
+}
+
+export function latestResetStateForRequest(entries, requestId) {
+  if (!Array.isArray(entries) || typeof requestId !== "string" || !requestId) return undefined;
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (entry?.type === "custom" && entry.customType === RESET_STATE_TYPE &&
+        entry.data?.source === "prime-ralph" && entry.data?.protocolVersion === RESET_PROTOCOL_VERSION &&
+        entry.data?.requestId === requestId) return entry.data;
   }
   return undefined;
 }

@@ -264,21 +264,3 @@ export function reconcileGoalState(current, goal) {
   }
   return current;
 }
-
-export function blockedContextBoundary(messages, { provenanceId } = {}) {
-  if (!Array.isArray(messages)) return undefined;
-  let index = -1;
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const message = messages[i], details = message?.details;
-    if (message?.role !== "custom" || message.customType !== BLOCKED_MESSAGE_TYPE || details?.source !== "prime-ralph" || details?.protocolVersion !== EXECUTION_PROTOCOL_VERSION) continue;
-    if (provenanceId && details.provenanceId !== provenanceId) continue;
-    index = i; break;
-  }
-  if (index < 0) return undefined;
-  const boundary = messages[index];
-  if (boundary.details?.preserveTrigger === true && index > 0) {
-    const trigger = [...messages.slice(0, index)].reverse().find((message) => message?.role === "user");
-    return trigger ? [boundary, trigger, ...messages.slice(index + 1)] : messages.slice(index);
-  }
-  return messages.slice(index);
-}

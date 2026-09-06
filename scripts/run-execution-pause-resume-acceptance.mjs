@@ -10,13 +10,14 @@ const imp = (path) => import(pathToFileURL(join(primeRoot, "dist", path)).href);
 const [{ Agent }, { AgentSession }, { SessionManager }, { SettingsManager }, { AuthStorage }, { ModelRegistry }, { DefaultResourceLoader }, { convertToLlm }, { createIpythonTool, IpythonKernelProvisioner }] = await Promise.all([
   import(pathToFileURL(join(coreRoot, "dist/agent.js")).href), imp("core/agent-session.js"), imp("core/session-manager.js"), imp("core/settings-manager.js"), imp("core/auth-storage.js"), imp("core/model-registry.js"), imp("core/resource-loader.js"), imp("core/messages.js"), imp("core/tools/index.js"),
 ]);
-const model = { provider: "poc", id: "fake", api: "openai-completions", contextWindow: 120000, maxTokens: 1000, reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+const model = { provider: "acceptance", id: "fake", api: "openai-completions", contextWindow: 120000, maxTokens: 1000, reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
 const assistant = (content, stopReason = "stop") => ({ role: "assistant", content: typeof content === "string" ? [{ type: "text", text: content }] : content, api: model.api, provider: model.provider, model: model.id, stopReason, usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 }, timestamp: Date.now() });
 const response = (message) => ({ async *[Symbol.asyncIterator]() { yield { type: "start", partial: { ...message, content: [] } }; yield { type: "done", reason: message.stopReason, message }; }, async result() { return message; } });
 const text = (context) => context.messages.map((message) => typeof message.content === "string" ? message.content : Array.isArray(message.content) ? message.content.map((part) => part?.text ?? "").join("\n") : "").join("\n");
 const invocation = (value) => { const match = value.match(/<prime-ralph-invocation>(.*?)<\/prime-ralph-invocation>/s); return match ? JSON.parse(match[1]) : null; };
 const waitFor = async (predicate, label) => { const deadline = Date.now() + 15000; while (!predicate()) { if (Date.now() > deadline) throw new Error(`timeout waiting for ${label}`); await new Promise((resolve) => setTimeout(resolve, 10)); } };
 
+const stableTranscript = (messages) => JSON.stringify(messages, (key, value) => key === "timestamp" ? undefined : value);
 const cwd = await mkdtemp(join(tmpdir(), "prime-ralph-pause-resume-acceptance-")), sessionDir = join(cwd, "sessions"), agentDir = join(cwd, ".agent");
 for (const dir of [".ralph/skills/prepare", ".ralph/skills/spec-it-out", ".ralph/skills/plan", ".ralph/skills/execute", ".ralph/skills/blocked", ".ralph/plans/blocked", ".ralph/plans/archive", ".prime/agent/extensions", "sessions", ".agent"]) await mkdir(join(cwd, dir), { recursive: true });
 await symlink(new URL("../src", import.meta.url), join(cwd, ".prime/agent/extensions/prime-ralph"), "dir");
@@ -28,18 +29,20 @@ ${body}
 `);
 await writeFile(join(cwd, ".ralph/plans/SPECIFICATION.md"), "# pause fixture specification\n");
 await writeFile(join(cwd, ".ralph/plans/EXECUTION_PLAN.md"), "# pause fixture plan\n");
-const auth = AuthStorage.inMemory(); auth.set("poc", { type: "api_key", key: "not-a-real-key" });
+const auth = AuthStorage.inMemory(); auth.set("acceptance", { type: "api_key", key: "not-a-real-key" });
 const registry = ModelRegistry.inMemory(auth), settings = SettingsManager.inMemory({ compaction: { enabled: false }, goals: { enabled: true, maxContinuations: 10 } });
 const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager: settings, additionalExtensionPaths: [join(cwd, ".prime/agent/extensions/prime-ralph/index.js")], noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true, systemPrompt: "PAUSE_BASELINE" });
 await loader.reload(); if (loader.getExtensions().errors.length) throw new Error(JSON.stringify(loader.getExtensions().errors));
-const sm = SessionManager.create(cwd, sessionDir), contexts = [], stages = new Map();
+const sm = SessionManager.create(cwd, sessionDir), contexts = [], transcriptMatches = [], stages = new Map();
 const provisioner = new IpythonKernelProvisioner(cwd, { sessionId: sm.getSessionId() }), ipython = createIpythonTool(cwd, { provisioner });
 const feedback = "NATIVE_PAUSE_FEEDBACK", acknowledgement = "NATIVE_PAUSE_ACKNOWLEDGEMENT";
 let session, pauseStarted = false, counterBeforeResume, counterAfterResume, resumePromise;
 const agent = new Agent({ initialState: { systemPrompt: "PAUSE_BASELINE", model, thinkingLevel: "off", serviceTier: "auto", messages: [], tools: [] }, convertToLlm,
   transformContext: async (messages) => session ? session._extensionRunner.emitContext(messages) : messages,
   streamFn: async (_model, context) => {
-    const visible = text(context); contexts.push(visible); const meta = invocation(visible);
+    const visible = text(context); contexts.push(visible);
+    transcriptMatches.push(stableTranscript(context.messages) === stableTranscript(convertToLlm(sm.buildSessionContext().messages)));
+    const meta = invocation(visible);
     if (!meta || meta.skill !== "execute") return response(assistant("planning interaction"));
     const stage = stages.get(meta.cycle) ?? 0; stages.set(meta.cycle, stage + 1);
     if (meta.cycle === 1 && stage === 0) {
@@ -81,11 +84,12 @@ const autoCompactions = entries.filter((entry) => entry.type === "compaction" &&
 const workflowSource = await readFile(new URL("../src/workflow-extension.js", import.meta.url), "utf8"), executionSource = await readFile(new URL("../src/execution.js", import.meta.url), "utf8");
 const checks = {
   primeAgentVersion: JSON.parse(await readFile(join(primeRoot, "package.json"), "utf8")).version === "0.9.1",
+  providerTranscriptEquivalent: transcriptMatches.length === contexts.length && transcriptMatches.every(Boolean),
   sameLifecycleAndTwoCycles: new Set(metas.map((meta) => meta.lifecycleId)).size === 1 && [1, 2].every((cycle) => metas.some((meta) => meta.cycle === cycle)),
   pauseResumeCounterUnchanged: counterBeforeResume === counterAfterResume,
   fullCurrentIterationPreserved: resumeContexts.some((value) => value.includes(feedback) && value.includes(acknowledgement) && value.includes("PAUSE_EXECUTE")),
   noResumeResetOrReinjection: autoCompactions.length === 1 && resumeContexts.every((value) => (value.match(/PAUSE_EXECUTE/g) ?? []).length === 1),
-  resumedWithoutProjection: !workflowSource.includes("executionContextProjection") && !executionSource.includes("executionContextProjection") && states.some((state) => state.cycle === 2 && state.status === "running" && state.resumed === false),
+  resumedWithoutContextRewrite: !workflowSource.includes("executionContextProjection") && !executionSource.includes("executionContextProjection") && states.some((state) => state.cycle === 2 && state.status === "running" && state.resumed === false),
   completed: states.at(-1)?.status === "inactive" && session.goalState.status === "complete",
 };
 await session.disposeAsync({ kernelSnapshot: false });

@@ -58,7 +58,7 @@ The project skill must declare `prime-ralph-invocation-version: 1`. Package upda
 - With an active specification, the one atomic boundary contains `prepare` first, followed by `spec-it-out` in `specification-reset-existing` mode.
 - With a conflict or incompatible skill, no marker, compaction, or prompt is produced.
 
-The existing reset projection and recovery protocol remains authoritative. Creating a specification during the session does not start planning. The user must invoke `/plan`; specification-phase `/reset` remains in the existing-specification discussion behavior.
+The native reset-compaction and transcript-transparency protocol remains authoritative. Creating a specification during the session does not start planning. The user must invoke `/plan`; specification-phase `/reset` remains in the existing-specification discussion behavior.
 
 ## Evidence layers
 

@@ -60,14 +60,14 @@ function harness({ specificationState = "absent", planState = "absent", branch =
     ui: { notify: (...args) => notices.push(args) },
   };
   const emit = async (name, event) => { for (const handler of handlers.get(name) ?? []) await handler(event, ctx); };
-  const fallback = () => compactions.at(-1).onError(new Error("Session is too short to compact"));
   const settle = async () => {
     const message = sent.at(-1)?.message;
     await emit("message_start", { message: { role: "custom", ...message } });
     await emit("context", { messages: [{ role: "custom", ...message }] });
+    await emit("turn_end", { message: { role: "assistant", content: [{ type: "text", text: "settled" }], stopReason: "stop" } });
     await emit("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] });
   };
-  return { commands, tools, handlers, sent, userMessages, notices, branch, entries, compactions, logs, transactions, ctx, emit, fallback, settle, state: () => latestExecutionState(branch, sessionId), addGoal: (data) => branch.push({ type: "custom", customType: "thread_goal_state", data }), setPending: (value) => { pending = value; }, setIdle: (value) => { idle = value; }, aborted: () => aborted, setSpecification: (value) => { spec = value; }, setPlan: (value) => { plan = value; }, setRestored: (value) => { restored = value; }, setBlocked: (value) => { blocked = value; }, failStateAppendIn: (offset) => { appendFailureAt = appendCalls + offset; }, failAllStateAppends: () => { appendFailureFrom = appendCalls + 1; }, restoreStateAppends: () => { appendFailureAt = undefined; appendFailureFrom = undefined; }, logAttempts: () => logCalls };
+  return { commands, tools, handlers, sent, userMessages, notices, branch, entries, compactions, logs, transactions, ctx, emit, settle, state: () => latestExecutionState(branch, sessionId), addGoal: (data) => branch.push({ type: "custom", customType: "thread_goal_state", data }), setPending: (value) => { pending = value; }, setIdle: (value) => { idle = value; }, aborted: () => aborted, setSpecification: (value) => { spec = value; }, setPlan: (value) => { plan = value; }, setRestored: (value) => { restored = value; }, setBlocked: (value) => { blocked = value; }, failStateAppendIn: (offset) => { appendFailureAt = appendCalls + offset; }, failAllStateAppends: () => { appendFailureFrom = appendCalls + 1; }, restoreStateAppends: () => { appendFailureAt = undefined; appendFailureFrom = undefined; }, logAttempts: () => logCalls };
 }
 
 test("registers the complete Slice 5 command and lifecycle-control surface", () => {
@@ -155,7 +155,7 @@ test("explicit /plan from specification phase uses one clean prepare-plan bounda
   h.setSpecification("existing");
   await h.commands.get("plan").handler("", h.ctx);
   assert.equal(h.compactions.length, 1); assert.equal(h.sent.length, 1);
-  h.fallback();
+  await completeLatestResetCompaction(h);
   const message = h.sent.at(-1).message;
   assert.equal(message.customType, RESET_MESSAGE_TYPE);
   assert.equal(message.details.workflowPhase, "planning");
@@ -176,20 +176,20 @@ test("phase survives reload and distinguishes specification reset from planning 
   const branch = [];
   const first = harness({ branch, specificationState: "absent", planState: "absent", sessionId: "phase-session" });
   await first.emit("session_start", { reason: "startup" }); first.setSpecification("existing");
-  await first.commands.get("reset").handler("", first.ctx); first.fallback();
+  await first.commands.get("reset").handler("", first.ctx); await completeLatestResetCompaction(first);
   assert.match(first.sent.at(-1).message.content, /"invocationMode":"specification-reset-existing"/);
   await first.settle();
-  await first.commands.get("plan").handler("", first.ctx); first.fallback(); await first.settle();
+  await first.commands.get("plan").handler("", first.ctx); await completeLatestResetCompaction(first); await first.settle();
   const rebuilt = harness({ branch, specificationState: "existing", planState: "absent", sessionId: "phase-session" });
   await rebuilt.emit("session_start", { reason: "reload" });
-  await rebuilt.commands.get("reset").handler("", rebuilt.ctx); rebuilt.fallback();
+  await rebuilt.commands.get("reset").handler("", rebuilt.ctx); await completeLatestResetCompaction(rebuilt);
   assert.match(rebuilt.sent.at(-1).message.content, /"invocationMode":"planning-reset-new"/);
   assert.doesNotMatch(rebuilt.sent.at(-1).message.content, /<skill name="spec-it-out"/);
 });
 
 test("planning reset with an existing plan stays clean and never starts execution", async () => {
   const h = harness({ specificationState: "existing", planState: "existing" }); await h.emit("session_start", { reason: "startup" });
-  await h.commands.get("reset").handler("", h.ctx); h.fallback();
+  await h.commands.get("reset").handler("", h.ctx); await completeLatestResetCompaction(h);
   assert.match(h.sent.at(-1).message.content, /"invocationMode":"planning-reset-existing"/);
   assert.equal(h.commands.has("execute"), true);
   assert.equal(h.branch.some((entry) => /goal|blocked/.test(entry.customType ?? "")), false);
@@ -204,11 +204,15 @@ test("/plan rejects arguments and path or skill conflicts before a boundary", as
 });
 
 
-test("complete proven blocked documents take startup precedence and partial state fails closed", async () => {
+test("complete proven blocked documents take startup precedence through native compaction", async () => {
   const blocked = harness({ specificationState: "existing", blockedState: "complete" });
   await blocked.emit("session_start", { reason: "startup" });
-  assert.equal(blocked.sent.length, 1); assert.equal(blocked.sent[0].message.customType, BLOCKED_MESSAGE_TYPE);
-  assert.ok(blocked.sent[0].message.content.indexOf('<skill name="prepare"') < blocked.sent[0].message.content.indexOf('<skill name="blocked"'));
+  assert.equal(blocked.sent.length, 0); assert.equal(blocked.compactions.length, 1);
+  const boundary = await completeLatestResetCompaction(blocked);
+  assert.equal(boundary.customType, RESET_MESSAGE_TYPE); assert.equal(boundary.details.command, "blocked-pass");
+  assert.equal(blocked.sent[0].options.triggerTurn, false);
+  assert.ok(boundary.content.indexOf('<skill name="prepare"') < boundary.content.indexOf('<skill name="blocked"'));
+  assert.equal(blocked.state().blockedContextEstablished, true);
   await blocked.commands.get("plan").handler("", blocked.ctx); assert.match(blocked.notices.at(-1)[0], /Resolve the blocked/);
   await blocked.commands.get("execute").handler("", blocked.ctx); assert.match(blocked.notices.at(-1)[0], /unavailable while blocked/);
   const partial = harness({ blockedState: "partial" }); await partial.emit("session_start", { reason: "startup" });
@@ -225,7 +229,7 @@ test("same-session resume preserves specification phase after a spec appears", a
   const resumed = harness({ branch, specificationState: "existing", planState: "absent", sessionId: "resume-phase" });
   await resumed.emit("session_start", { reason: "resume" });
   assert.equal(resumed.sent.length, 0);
-  await resumed.commands.get("reset").handler("", resumed.ctx); resumed.fallback();
+  await resumed.commands.get("reset").handler("", resumed.ctx); await completeLatestResetCompaction(resumed);
   assert.match(resumed.sent.at(-1).message.content, /"invocationMode":"specification-reset-existing"/);
   assert.doesNotMatch(resumed.sent.at(-1).message.content, /<skill name="plan"/);
 });
@@ -236,10 +240,14 @@ async function completeLatestResetCompaction(h) {
   const requestId = options.customInstructions.split(":").at(-1);
   const marker = [...h.branch].reverse().find((entry) => entry?.type === "custom" && entry.customType === "prime_ralph_reset_marker" && entry.data?.requestId === requestId);
   assert.ok(marker?.id);
+  h.branch.push({ type: "compaction", id: `compaction-${requestId}`, summary: "", firstKeptEntryId: marker.id, customInstructions: options.customInstructions, details: { command: marker.data.command } });
   options.onComplete({ summary: "", firstKeptEntryId: marker.id });
-  const admitted = h.sent.at(-1).message;
-  await h.emit("message_start", { message: { role: "custom", ...admitted } });
-  await h.emit("context", { messages: [{ role: "custom", ...admitted }] });
+  const sent = h.sent.at(-1);
+  const admitted = sent.message;
+  if (sent.options?.triggerTurn !== false) {
+    await h.emit("message_start", { message: { role: "custom", ...admitted } });
+    await h.emit("context", { messages: [{ role: "custom", ...admitted }] });
+  }
   return admitted;
 }
 
@@ -314,7 +322,7 @@ test("/execute never replaces a refused reset-flavor compaction with projection"
   assert.equal(h.compactions.length, 1); assert.equal(h.state().status, "inactive");
   h.compactions[0].onError(new Error("Session is too short to compact — try again once it grows"));
   assert.equal(h.state().status, "inactive"); assert.equal(h.sent.length, 0);
-  assert.match(h.notices.at(-1)[0], /failed before its skill prompt was delivered/);
+  assert.equal(h.notices.at(-1)[0], "The Ralph execution pass was not started because native compaction was unavailable.");
 });
 
 test("continue compacts before it admits the next clean cycle", async () => {
@@ -340,8 +348,10 @@ test("continue compacts before it admits the next clean cycle", async () => {
   const boundary = await completeAutomaticRoundCompaction(h);
   assert.equal(h.state().cycle, 2); assert.equal(h.state().admittedContinuation.identity, "goal-1:1");
   assert.match(boundary.content, /"cycle":2/); assert.match(boundary.content, /"invocationMode":"execution-continue"/);
-  const clean = await h.handlers.get("context")[0]({ messages: [{ role: "compactionSummary", summary: "" }, { role: "user", content: "stale" }, boundary] }, h.ctx);
-  assert.deepEqual(clean.messages, [boundary]);
+  const providerMessages = [{ role: "compactionSummary", summary: "" }, { role: "user", content: "visible after compaction" }, boundary];
+  const clean = await h.handlers.get("context")[0]({ messages: providerMessages }, h.ctx);
+  assert.equal(clean, undefined);
+  assert.deepEqual(providerMessages, [{ role: "compactionSummary", summary: "" }, { role: "user", content: "visible after compaction" }, boundary]);
   const transition = h.state().transition, sentCount = h.sent.length;
   h.compactions.at(-1).onComplete({ summary: "", firstKeptEntryId: h.branch[markerIndex].id });
   assert.equal(h.state().transition, transition); assert.equal(h.sent.length, sentCount);
@@ -479,7 +489,7 @@ test("agent-end append failure still releases the closeout waiter", async () => 
   await h.emit("message_start", { message: goalMessage });
   const projection = h.handlers.get("context").at(-1)({ messages: [completed.message, goalMessage] }, h.ctx);
   await Promise.resolve(); h.failStateAppendIn(1);
-  assert.throws(() => h.handlers.get("agent_end").at(-1)({ messages: [] }, h.ctx), /injected state append failure/);
+  await assert.rejects(h.handlers.get("agent_end").at(-1)({ messages: [] }, h.ctx), /injected state append failure/);
   const outcome = await Promise.race([projection, new Promise((resolve) => setImmediate(() => resolve("still waiting")))]);
   assert.notEqual(outcome, "still waiting"); assert.deepEqual(outcome.messages, []);
   assert.equal(h.aborted(), 1); assert.equal(h.state().status, "paused"); assert.match(h.state().pauseReason, /before lifecycle closeout/);
@@ -543,7 +553,7 @@ test("a queued closeout state failure consumes no execution boundary", async () 
   const projection = h.handlers.get("context").at(-1)({ messages: [completed.message, goalMessage] }, h.ctx);
   await h.emit("turn_end", completed);
   const projected = await projection;
-  assert.deepEqual(projected.messages, []); assert.equal(h.aborted(), 1); assert.equal(h.logs.length, 0); assert.equal(h.state().cycle, 1); assert.equal(h.state().status, "paused");
+  assert.deepEqual(projected.messages, []); assert.equal(h.aborted(), 2); assert.equal(h.logs.length, 0); assert.equal(h.state().cycle, 1); assert.equal(h.state().status, "paused");
   assert.match(h.state().pauseReason, /execution closeout failed/);
 });
 
@@ -721,29 +731,109 @@ test("running and waiting gate interactive commands until pause", async () => {
   await h.commands.get("execute").handler("", h.ctx); assert.match(h.notices.at(-1)[0], /\/goal resume/); assert.equal(h.state().status, "paused");
 });
 
+test("execution agent_end without a new normal turn never authorizes the admitted hidden boundary", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" });
+  await h.commands.get("execute").handler("", h.ctx);
+  const staleBoundary = await completeLatestResetCompaction(h);
+  assert.equal(h.state().status, "running");
+  await h.emit("agent_end", { messages: [{ role: "assistant", content: [{ type: "text", text: "older planning response" }], stopReason: "stop" }] });
+  const reset = [...h.branch].reverse().find((entry) => entry?.customType === "prime_ralph_reset_state")?.data;
+  assert.equal(reset.status, "failed"); assert.equal(reset.reason, "missing_normal_turn_end");
+  assert.equal(h.state().status, "paused");
+  const before = h.aborted();
+  await h.emit("context", { messages: [{ role: "custom", ...staleBoundary }, { role: "user", content: "ordinary follow-up" }] });
+  assert.equal(h.aborted(), before + 1);
+});
+
+test("initial execution admission failure blocks the durable hidden prompt from later provider requests", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" });
+  h.failStateAppendIn(4);
+  await h.commands.get("execute").handler("", h.ctx);
+  const staleBoundary = await completeLatestResetCompaction(h);
+  assert.notEqual(h.state().status, "running");
+  const before = h.aborted();
+  await h.emit("context", { messages: [{ role: "custom", ...staleBoundary }, { role: "user", content: "ordinary follow-up" }] });
+  assert.equal(h.aborted(), before + 1);
+  assert.match(h.notices.at(-1)[0], /prior Ralph context boundary was not admitted/);
+});
+
 test("execution reset requests a later boundary, waiting defers, and paused reset does not trigger a turn", async () => {
   const running = harness({ specificationState: "existing", planState: "existing" }); await startExecution(running); running.setIdle(false);
   await running.commands.get("reset").handler("", running.ctx); assert.equal(running.state().resetRequested, true); assert.equal(running.compactions.length, 1); assert.equal(running.userMessages[0].options.deliverAs, "steer"); assert.match(running.userMessages[0].message, /earliest eligible boundary/);
   const pausedBranch = [{ type: "custom", customType: EXECUTION_STATE_ENTRY_TYPE, data: { protocolVersion: 1, source: "prime-ralph", sessionId: "session-1", transition: 2, phase: "execution", status: "paused", lifecycleId: "life", cycle: 1, driverGoalId: "goal", pendingDecision: null, wait: null, provenanceId: null, forwardConfirmed: false } }];
   const paused = harness({ branch: pausedBranch, specificationState: "existing", planState: "existing" });
-  await paused.commands.get("reset").handler("", paused.ctx); assert.equal(paused.compactions.length, 1); paused.fallback();
+  await paused.commands.get("reset").handler("", paused.ctx); assert.equal(paused.compactions.length, 1); await completeLatestResetCompaction(paused);
   assert.equal(paused.sent.at(-1).options.triggerTurn, false); assert.match(paused.sent.at(-1).message.content, /execution-reset-paused/);
   await paused.commands.get("reset").handler("", paused.ctx); assert.equal(paused.compactions.length, 2);
 });
 
-test("block commits one pair transaction, logs final help, and first user response gets clean blocked context", async () => {
+test("execution to blocked starts no blocked pass before native compaction", async () => {
   const h = harness({ specificationState: "existing", planState: "existing" }); const initial = await startExecution(h);
   await h.emit("before_agent_start", { prompt: h.sent.at(-1).message.content }); h.addGoal({ goalId: "goal", status: "complete", active: false });
   await control(h, { action: "block", lifecycleId: initial.lifecycleId, cycle: 1, reason: "credential missing", unblockCondition: "operator authenticates", wakeupsStopped: true });
   assert.equal(h.transactions[0].operation, "block"); assert.equal(h.state().phase, "blocked");
   await h.emit("turn_end", finalEvent("Please authenticate the provider.")); assert.equal(h.logs.length, 1);
+  assert.equal(h.compactions.length, 1); assert.equal(h.sent.filter((item) => item.message.details?.command === "blocked-pass").length, 0);
+  await h.emit("agent_end", { messages: [finalEvent("Please authenticate the provider.").message] });
+  assert.equal(h.compactions.length, 2); assert.equal(h.state().blockedContextEstablished, false);
+  const boundary = await completeLatestResetCompaction(h);
+  assert.equal(boundary.details.command, "blocked-pass"); assert.equal(boundary.details.invocationMode, "blocked-start");
+  assert.equal(h.sent.at(-1).options.triggerTurn, false); assert.equal(h.state().blockedContextEstablished, true);
   const before = h.handlers.get("before_agent_start").at(-1);
-  const injected = await before({ prompt: "Credentials are restored" }, h.ctx);
-  assert.equal(injected.message.customType, BLOCKED_MESSAGE_TYPE); assert.equal(injected.message.details.preserveTrigger, true);
+  assert.equal(await before({ prompt: "Credentials are restored" }, h.ctx), undefined);
   const context = h.handlers.get("context").at(-1);
   const user = { role: "user", content: "Credentials are restored" };
-  const projected = await context({ messages: [{ role: "assistant", content: "stale" }, user, { role: "custom", ...injected.message }] }, h.ctx);
-  assert.deepEqual(projected.messages, [{ role: "custom", ...injected.message }, user]);
+  const messages = [{ role: "compactionSummary", summary: "" }, { role: "custom", ...boundary }, user];
+  assert.equal(await context({ messages }, h.ctx), undefined);
+  assert.deepEqual(messages, [{ role: "compactionSummary", summary: "" }, { role: "custom", ...boundary }, user]);
+});
+
+
+test("blocked-pass compaction refusal admits no blocked provider request", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" }); const initial = await startExecution(h);
+  await h.emit("before_agent_start", { prompt: h.sent.at(-1).message.content }); h.addGoal({ goalId: "goal", status: "complete", active: false });
+  await control(h, { action: "block", lifecycleId: initial.lifecycleId, cycle: 1, reason: "credential missing", unblockCondition: "operator authenticates", wakeupsStopped: true });
+  await h.emit("turn_end", finalEvent("Please authenticate the provider."));
+  await h.emit("agent_end", { messages: [finalEvent("Please authenticate the provider.").message] });
+  assert.equal(h.compactions.length, 2); h.compactions.at(-1).onError(new Error("Session is too short to compact"));
+  assert.equal(h.state().phase, "blocked"); assert.equal(h.state().blockedContextEstablished, false);
+  assert.equal(h.sent.filter((item) => item.message.details?.command === "blocked-pass").length, 0);
+  const before = h.aborted(); assert.equal(await h.handlers.get("before_agent_start").at(-1)({ prompt: "Credentials are restored" }, h.ctx), undefined);
+  assert.equal(h.aborted(), before + 1); assert.match(h.notices.at(-1)[0], /Use \/reset to retry/);
+});
+
+test("reload never replays an uncertain blocked-pass compaction", async () => {
+  const branch = [], h = harness({ branch, specificationState: "existing", planState: "existing" }); const initial = await startExecution(h);
+  await h.emit("before_agent_start", { prompt: h.sent.at(-1).message.content }); h.addGoal({ goalId: "goal", status: "complete", active: false });
+  await control(h, { action: "block", lifecycleId: initial.lifecycleId, cycle: 1, reason: "credential missing", unblockCondition: "operator authenticates", wakeupsStopped: true });
+  await h.emit("turn_end", finalEvent("Please authenticate the provider."));
+  await h.emit("agent_end", { messages: [finalEvent("Please authenticate the provider.").message] });
+  assert.equal(h.compactions.length, 2);
+  const rebuilt = harness({ branch, blockedState: "complete", specificationState: "absent", planState: "absent" });
+  await rebuilt.emit("session_start", { reason: "reload" });
+  assert.equal(rebuilt.compactions.length, 0); assert.equal(rebuilt.sent.length, 0); assert.equal(rebuilt.state().blockedContextEstablished, false);
+  assert.match(rebuilt.notices.at(-1)[0], /compaction is incomplete/);
+});
+
+test("reload never promotes a blocked boundary whose state admission failed", async () => {
+  const branch = [], h = harness({ branch, specificationState: "existing", planState: "existing" }); const initial = await startExecution(h);
+  await h.emit("before_agent_start", { prompt: h.sent.at(-1).message.content }); h.addGoal({ goalId: "goal", status: "complete", active: false });
+  await control(h, { action: "block", lifecycleId: initial.lifecycleId, cycle: 1, reason: "credential missing", unblockCondition: "operator authenticates", wakeupsStopped: true });
+  await h.emit("turn_end", finalEvent("Please authenticate the provider."));
+  await h.emit("agent_end", { messages: [finalEvent("Please authenticate the provider.").message] });
+  h.failStateAppendIn(2);
+  const staleBoundary = await completeLatestResetCompaction(h);
+  assert.equal(h.state().blockedContextEstablished, false);
+  assert.equal([...branch].reverse().find((entry) => entry?.customType === "prime_ralph_reset_state").data.status, "failed");
+
+  const rebuilt = harness({ branch, blockedState: "complete", specificationState: "absent", planState: "absent" });
+  await rebuilt.emit("session_start", { reason: "reload" });
+  assert.equal(rebuilt.compactions.length, 0); assert.equal(rebuilt.sent.length, 0);
+  assert.equal(rebuilt.state().blockedContextEstablished, false);
+  assert.match(rebuilt.notices.at(-1)[0], /compaction is incomplete/);
+  const before = rebuilt.aborted();
+  await rebuilt.emit("context", { messages: [{ role: "custom", ...staleBoundary }, { role: "user", content: "Credentials are restored" }] });
+  assert.equal(rebuilt.aborted(), before + 1);
 });
 
 test("terminal log failure preserves a durable closeout intent and reconstructed extension retries it", async () => {
@@ -762,7 +852,9 @@ test("terminal log failure preserves a durable closeout intent and reconstructed
   await rebuilt.emit("session_start", { reason: "reload" });
   assert.equal(sharedLogs.length, 1);
   assert.equal(rebuilt.state().pendingDecision, null);
-  assert.equal(rebuilt.sent.filter((item) => item.message.customType === BLOCKED_MESSAGE_TYPE).length, 1);
+  assert.equal(rebuilt.compactions.length, 1); assert.equal(rebuilt.sent.length, 0);
+  const blockedBoundary = await completeLatestResetCompaction(rebuilt);
+  assert.equal(blockedBoundary.details.command, "blocked-pass"); assert.equal(blockedBoundary.details.invocationMode, "blocked-start");
 });
 
 test("state append failure after terminal log write leaves an idempotent retry intent", async () => {
@@ -880,11 +972,11 @@ test("a fresh lifecycle refuses an unrelated native goal and ready requires a ne
   await assert.rejects(control(h, { action: "ready", lifecycleId: initial.lifecycleId, cycle: 1, waitId: waited.details.waitId }), /new native goal identifier/);
 });
 
-test("blocked context is marked established only when its message starts", async () => {
+test("blocked context is marked established only after native compaction and durable no-turn admission", async () => {
   const h = harness({ blockedState: "complete" }); await h.emit("session_start", { reason: "startup" });
-  assert.equal(h.state().blockedContextEstablished, false);
-  await h.emit("message_start", { message: { role: "custom", ...h.sent[0].message } });
-  assert.equal(h.state().blockedContextEstablished, true);
+  assert.equal(h.state().blockedContextEstablished, false); assert.equal(h.sent.length, 0); assert.equal(h.compactions.length, 1);
+  await completeLatestResetCompaction(h);
+  assert.equal(h.state().blockedContextEstablished, true); assert.equal(h.sent[0].options.triggerTurn, false);
 });
 
 
@@ -900,7 +992,7 @@ test("queued user input cannot consume or relabel a pending completed pass", asy
 
 
 test("blocked /spec-it-out protects the proven blocked specification as existing", async () => {
-  const h = harness({ blockedState: "complete", specificationState: "absent" }); await h.emit("session_start", { reason: "startup" }); await h.emit("message_start", { message: { role: "custom", ...h.sent[0].message } });
+  const h = harness({ blockedState: "complete", specificationState: "absent" }); await h.emit("session_start", { reason: "startup" }); await completeLatestResetCompaction(h);
   await h.commands.get("spec-it-out").handler("", h.ctx); const message = h.sent.at(-1).message;
   assert.equal(message.customType, SPECIFICATION_MESSAGE_TYPE); assert.equal(message.details.mode, "specification-existing"); assert.equal(message.details.specificationPath, ".ralph/plans/blocked/SPECIFICATION.md"); assert.match(message.content, /Do not offer future-specification creation/);
 });
@@ -944,8 +1036,12 @@ test("startup keeps an exact manually restored pair blocked and delivers one rec
   const branch = [{ type: "custom", customType: EXECUTION_STATE_ENTRY_TYPE, data: { protocolVersion: 1, source: "prime-ralph", sessionId: "session-1", transition: 4, phase: "blocked", status: "inactive", lifecycleId: "life", cycle: 1, driverGoalId: "goal", pendingDecision: null, wait: null, provenanceId: "life", forwardConfirmed: false, blockedContextEstablished: true, block: { reason: "credential missing", unblockCondition: "operator authenticates" } } }];
   const h = harness({ branch, specificationState: "existing", planState: "existing", blockedState: "absent", restoredProofState: "complete" }); await h.emit("session_start", { reason: "startup" });
   assert.equal(h.state().phase, "blocked"); assert.equal(h.state().status, "inactive"); assert.equal(h.state().forwardConfirmed, false); assert.equal(h.state().recovery, "active-pair-restored");
-  assert.equal(h.sent[0].message.customType, BLOCKED_MESSAGE_TYPE); assert.equal(h.sent[0].message.details.invocationMode, "blocked-restored");
-  assert.match(h.sent[0].message.content, /Do not move the files again/); assert.doesNotMatch(h.sent[0].message.content, /forwardConfirmed/);
+  assert.equal(h.sent.length, 0); assert.equal(h.compactions.length, 1);
+  const boundary = await completeLatestResetCompaction(h);
+  assert.equal(boundary.customType, RESET_MESSAGE_TYPE); assert.equal(boundary.details.invocationMode, "blocked-restored");
+  assert.match(boundary.content, /Do not move the files again/); assert.doesNotMatch(boundary.content, /forwardConfirmed/);
+  assert.equal(await h.handlers.get("before_agent_start").at(-1)({ prompt: "BLOCKED_RECOVERY_USER_RESPONSE" }, h.ctx), undefined);
+  assert.equal(h.state().blockedContextEstablished, true);
 });
 
 
@@ -969,7 +1065,7 @@ test("restored recovery gates commands with plain guidance and /reset restarts t
   const h = harness({ branch, specificationState: "existing", planState: "existing", restoredProofState: "complete" });
   for (const command of ["execute", "plan", "spec-it-out"]) await h.commands.get(command).handler("", h.ctx);
   assert.equal(h.notices.length, 3); for (const [message] of h.notices) { assert.match(message, /original blocker/); assert.doesNotMatch(message, /provenance|forwardConfirmed/); }
-  await h.commands.get("reset").handler("", h.ctx); h.fallback();
+  await h.commands.get("reset").handler("", h.ctx); await completeLatestResetCompaction(h);
   const reset = h.sent.at(-1).message; assert.equal(reset.customType, RESET_MESSAGE_TYPE); assert.equal(reset.details.invocationMode, "blocked-restored"); assert.match(reset.content, /Do not move the files again/);
 });
 
@@ -988,8 +1084,10 @@ test("confirming a manually restored pair journals adoption, removes its marker,
   assert.equal(h.transactions[0].operation, "adopt-restored"); assert.equal(h.state().phase, "planning"); assert.equal(h.state().forwardConfirmed, true); assert.equal(h.state().recovery, null);
   assert.match(accepted.content[0].text, /planning files are verified/); assert.doesNotMatch(accepted.content[0].text, /provenance|forward/);
   const call = { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "x", name: "ralph_lifecycle", arguments: {} }] }, result = { role: "toolResult", toolCallId: "x", content: [{ type: "text", text: "verified" }] };
-  const projected = await h.handlers.get("context").at(-1)({ messages: [{ role: "user", content: "stale" }, boundary, call, result] }, h.ctx);
-  assert.deepEqual(projected.messages, [boundary, call, result]);
+  const messages = [{ role: "user", content: "visible history" }, boundary, call, result];
+  const projected = await h.handlers.get("context").at(-1)({ messages }, h.ctx);
+  assert.equal(projected, undefined);
+  assert.deepEqual(messages, [{ role: "user", content: "visible history" }, boundary, call, result]);
   await h.emit("turn_end", finalEvent("Run /execute when ready."));
   assert.equal(await h.handlers.get("context").at(-1)({ messages: [boundary, call, result] }, h.ctx), undefined);
 });
@@ -1020,8 +1118,9 @@ test("startup completes an adoption whose marker was removed before final state 
 test("reload notices a blocked pair moved to active paths and does not replay an established recovery boundary", async () => {
   const branch = [{ type: "custom", customType: EXECUTION_STATE_ENTRY_TYPE, data: { protocolVersion: 1, source: "prime-ralph", sessionId: "session-1", transition: 4, phase: "blocked", status: "inactive", lifecycleId: null, cycle: 0, driverGoalId: null, pendingDecision: null, wait: null, provenanceId: "life", forwardConfirmed: false, recovery: null, blockedContextEstablished: true, blockedContextMode: "blocked" } }];
   const h = harness({ branch, specificationState: "existing", planState: "existing", restoredProofState: "complete" });
-  await h.emit("session_start", { reason: "reload" }); assert.equal(h.sent.length, 1); assert.equal(h.sent[0].message.details.invocationMode, "blocked-restored");
-  await h.emit("session_start", { reason: "reload" }); assert.equal(h.sent.length, 1);
+  await h.emit("session_start", { reason: "reload" }); assert.equal(h.sent.length, 0); assert.equal(h.compactions.length, 1);
+  const boundary = await completeLatestResetCompaction(h); assert.equal(boundary.details.invocationMode, "blocked-restored");
+  await h.emit("session_start", { reason: "reload" }); assert.equal(h.sent.length, 1); assert.equal(h.compactions.length, 1);
 });
 
 test("modified manually restored files fail closed with a concrete startup explanation", async () => {

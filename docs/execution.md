@@ -108,11 +108,12 @@ A mismatch pauses execution. Ralph never attaches unrelated goal work to the cur
 
 For `continue`, the current cycle is committed only when the matching next native continuation reaches the context hook after tracked RLM work settles. Ralph first logs the completed cycle and durably arms one pending round. It then appends the reset marker and requests one public `ctx.compact()`. The cycle number does not advance and no execute message is sent while compaction is pending. If tracked RLM delivery splits the pass across Agent runs, Ralph re-registers the reconciled running pass before the later run starts. Its closeout fence accepts either local event ordering and fails closed after a bounded wait rather than hanging admission.
 
-## Clean context and repeated provider calls
+## Native pass boundaries and transcript equivalence
 
 Every new eligible execution cycle begins only after its matching reset-flavor compaction succeeds. The successful callback queues one model-visible message containing the project `prepare` skill followed by `execute`; the pre-provider `context` gate commits the new cycle only when that exact message matches its durable `prepare_pending` admission evidence. The specification and plan are not copied into the prompt. The skills tell the model to read durable project state.
 
 Automatic execution does not use provider-context projection. Old conversation remains in the session JSONL, but the durable host compaction makes it unavailable to later provider requests. Later provider calls in the same cycle use the ordinary complete current-iteration context. Native goal pause/resume does not compact, re-inject skills, change the boundary, or transform context; feedback and acknowledgements added while paused remain visible.
+After the latest visible native compaction boundary, every ordinary user, assistant, tool, steering, child-notice, and custom conversation message reaches the LLM unchanged and in the same order. Production context hooks validate or abort; they never rewrite a provider request that proceeds. Hidden Ralph skill messages are additive.
 
 Short-session refusal, an already-compacted branch, cancellation, failure, interruption, or ambiguous recovery admits no next cycle and pauses safely. Prime Agent `0.9.1` checks short/already-compacted conditions before the extension compaction hook, so the public extension API cannot force those cases. Ralph deliberately does not restore automation with a projection fallback.
 
@@ -127,11 +128,11 @@ Tracked RLM work is held by Prime Agent's native goal until descendants settle. 
 - paused: create a clean `prepare`-then-`execute` boundary without automatically resuming;
 - blocked: create a clean `prepare`-then-`blocked` interaction.
 
-See [`reset.md`](reset.md) for compaction and projection details.
+See [`reset.md`](reset.md) for native compaction, refusal, and transcript-transparency details.
 
 ## Blocked files and recovery
 
-A normal block transaction moves the exact specification and plan together into `.ralph/plans/blocked/`. It records their paths, byte lengths, SHA-256 hashes, and execution-run ID in `.ralph/plans/blocked/.prime-ralph-lifecycle.json`. No-replace moves, symlink checks, and rollback protect partial operations and destination conflicts.
+A normal block transaction moves the exact specification and plan together into `.ralph/plans/blocked/`. It records their paths, byte lengths, SHA-256 hashes, and execution-run ID in `.ralph/plans/blocked/.prime-ralph-lifecycle.json`. No-replace moves, symlink checks, and rollback protect partial operations and destination conflicts. The current execution pass then gives its final user-facing help request. After that pass ends, Ralph performs one native compaction and durably queues hidden `prepare` then `blocked` without starting a redundant provider turn. The user's next response begins the blocked pass only after that boundary succeeds.
 
 The normal unblock path is:
 
@@ -157,7 +158,7 @@ When the saved hashes match the active files, Ralph supplies the blocked skill i
 
 Modified, partial, unproven, stale, symlinked, or conflicting pairs remain blocked. Diagnostics name the observed condition and safe next action without requiring the user to understand internal state fields. `/execute`, `/plan`, and `/spec-it-out` remain unavailable while this check is outstanding. `/reset` restarts the clean recovery interaction.
 
-The blocked context remains projected through every provider call in the recovery turn, including the tool result after successful confirmation. This prevents old conversation from reappearing before the model gives its final user-facing response.
+Blocked recovery uses no provider-context projection. After its native compaction boundary, the hidden blocked control message, user responses, status tool call and result, confirmation tool call and result, and final assistant response reach the provider unchanged and in their original order. A blocked boundary is established only when its correlated reset state is durably `completed`. A failed or uncertain blocked-pass compaction, including failure after the hidden message was persisted, leaves the workflow durably blocked and provider-denies that stale message until an explicit retry compacts it away.
 
 Completion does not force archive. When the project skill explicitly requests archival, both active documents move to one safe named directory under `.ralph/plans/archive/<name>/`.
 

@@ -12,14 +12,17 @@ import {
   resetCompactionInstructions,
 } from "../src/reset-context.js";
 
-function harness({ branch = [], persistSent = true, sendError, appendError, specificationState = "absent" } = {}) {
+function harness({ branch = [], persistSent = true, sendError, appendError, specificationState = "absent", idle = true, pendingMessages = false } = {}) {
+  let runtimeIdle = idle, runtimePendingMessages = pendingMessages;
   const handlers = new Map(), commands = new Map(), sent = [], entries = [], notices = [], compactions = [];
+  let aborts = 0, appendCalls = 0, appendFailureAt;
   let nextEntry = branch.length;
   const pi = {
     registerCommand(name, value) { commands.set(name, value); },
     on(name, handler) { handlers.set(name, handler); },
     appendEntry(customType, data) {
-      if (appendError) throw appendError;
+      appendCalls += 1;
+      if (appendError || appendCalls === appendFailureAt) throw appendError ?? new Error("injected append failure");
       const entry = { type: "custom", id: `e${++nextEntry}`, customType, data };
       entries.push(entry); branch.push(entry);
     },
@@ -29,7 +32,7 @@ function harness({ branch = [], persistSent = true, sendError, appendError, spec
       if (persistSent) branch.push({ type: "custom_message", id: `e${++nextEntry}`, ...message });
     },
   };
-  createResetExtension({
+  const runtime = createResetExtension({
     loadPrepare: ({ cwd }) => ({ path: `${cwd}/.ralph/skills/prepare/SKILL.md`, text: "---\nname: prepare\ndescription: test\n---\nbody" }),
     loadSpecItOut: ({ cwd }) => ({ path: `${cwd}/.ralph/skills/spec-it-out/SKILL.md`, text: "---\nname: spec-it-out\ndescription: test\n---\nspec body" }),
     inspectSpecification: () => ({ state: specificationState, relativePath: ".ralph/plans/SPECIFICATION.md" }),
@@ -37,11 +40,11 @@ function harness({ branch = [], persistSent = true, sendError, appendError, spec
   })(pi);
   const ctx = {
     cwd: "/project",
-    isIdle: () => true,
-    hasPendingMessages: () => false,
+    isIdle: () => runtimeIdle,
+    hasPendingMessages: () => runtimePendingMessages,
     waitForIdle: async () => {},
     compact: (options) => compactions.push(options),
-    abort: () => {},
+    abort: () => { aborts += 1; },
     sessionManager: { getBranch: () => branch },
     ui: { notify: (...args) => notices.push(args) },
   };
@@ -51,13 +54,14 @@ function harness({ branch = [], persistSent = true, sendError, appendError, spec
     branchEntries: branch,
     signal: new AbortController().signal,
   }, ctx);
-  return { handlers, commands, sent, entries, branch, notices, compactions, ctx, beforeCompact };
+  return { handlers, commands, sent, entries, branch, notices, compactions, ctx, runtime, beforeCompact, getAborts: () => aborts, setIdle: (value) => { runtimeIdle = value; }, setPendingMessages: (value) => { runtimePendingMessages = value; }, failAppendIn: (offset) => { appendFailureAt = appendCalls + offset; } };
 }
 
 async function request(h) { await h.commands.get("reset").handler("", h.ctx); }
 
 function completeCompaction(h, requestId = "r1") {
   const marker = h.branch.find((entry) => entry.customType === RESET_MARKER_TYPE && entry.data.requestId === requestId);
+  h.branch.push({ type: "compaction", summary: "", firstKeptEntryId: marker.id, customInstructions: resetCompactionInstructions(requestId) });
   h.compactions.at(-1).onComplete({ summary: "", firstKeptEntryId: marker.id, tokensBefore: 123 });
 }
 
@@ -76,9 +80,10 @@ test("registers /reset and supplies a real marker to custom compaction before pr
   assert.equal(h.sent[0].message.customType, RESET_MESSAGE_TYPE);
   assert.equal(h.sent[0].message.details.mode, "compaction");
   assert.deepEqual(h.sent[0].options, { triggerTurn: true, deliverAs: "followUp" });
-  assert.deepEqual(h.handlers.get("context")({ messages: [{ role: "custom", ...h.sent[0].message }] }, h.ctx).messages, [h.sent[0].message]);
-  assert.deepEqual(h.handlers.get("context")({ messages: [{ role: "assistant", content: "later" }] }, h.ctx).messages, [{ role: "assistant", content: "later" }]);
+  assert.equal(h.handlers.get("context")({ messages: [{ role: "custom", ...h.sent[0].message }] }, h.ctx), undefined);
+  assert.equal(h.handlers.get("context")({ messages: [{ role: "assistant", content: "later" }] }, h.ctx), undefined);
   h.handlers.get("message_start")({ message: { role: "custom", ...h.sent[0].message } }, h.ctx);
+  h.handlers.get("turn_end")({ message: { role: "assistant", stopReason: "stop" } }, h.ctx);
   h.handlers.get("agent_end")({ messages: [{ role: "assistant", stopReason: "stop" }] }, h.ctx);
   assert.equal(h.entries.filter((entry) => entry.customType === RESET_STATE_TYPE && entry.data.status === "completed").length, 1);
 });
@@ -94,7 +99,7 @@ test("default reset factory detects an active specification", async () => {
   const h = harness(); h.ctx.cwd = cwd;
   const pi = { registerCommand: (name, value) => h.commands.set(name, value), on: (name, value) => h.handlers.set(name, value), appendEntry: (type, data) => { const entry = { type: "custom", id: `d${h.branch.length}`, customType: type, data }; h.entries.push(entry); h.branch.push(entry); }, sendMessage: (message, options) => { h.sent.push({ message, options }); h.branch.push({ type: "custom_message", ...message }); } };
   createResetExtension({ createRequestId: () => "default-request" })(pi);
-  await h.commands.get("reset").handler("", h.ctx); h.compactions.at(-1).onError(new Error("Session is too short to compact"));
+  await h.commands.get("reset").handler("", h.ctx); completeCompaction(h, "default-request");
   assert.match(h.sent[0].message.content, /"invocationMode":"specification-reset-existing"/);
 });
 
@@ -130,6 +135,20 @@ test("validates prepare before recording a marker or reset state", async () => {
   assert.equal(h.entries.length, 0); assert.equal(h.sent.length, 0);
 });
 
+test("busy reset waits through all queued work and coalesces duplicates", async () => {
+  const h = harness({ idle: false, pendingMessages: true }); await request(h); await request(h);
+  assert.equal(h.compactions.length, 0); assert.match(h.notices.at(-1)[0], /already pending/);
+  await h.handlers.get("agent_end")({}, h.ctx); assert.equal(h.compactions.length, 0);
+  h.setIdle(true); h.setPendingMessages(false); await h.handlers.get("agent_end")({}, h.ctx);
+  assert.equal(h.compactions.length, 1);
+});
+
+test("shutdown clears a busy reset before any transaction starts", async () => {
+  const h = harness({ idle: false }); await request(h); await h.handlers.get("session_shutdown")({ reason: "reload" }, h.ctx);
+  h.setIdle(true); await h.handlers.get("agent_end")({}, h.ctx);
+  assert.equal(h.compactions.length, 0); assert.equal(h.entries.length, 0);
+});
+
 test("coalesces a duplicate while compaction or prepare is pending and permits the next settled reset", async () => {
   const h = harness(); await request(h); await request(h);
   assert.equal(h.compactions.length, 1); assert.match(h.notices.at(-1)[0], /already pending/);
@@ -137,6 +156,7 @@ test("coalesces a duplicate while compaction or prepare is pending and permits t
   await request(h);
   assert.equal(h.compactions.length, 1);
   h.handlers.get("message_start")({ message: { role: "custom", ...h.sent[0].message } }, h.ctx);
+  h.handlers.get("turn_end")({ message: { role: "assistant", stopReason: "stop" } }, h.ctx);
   h.handlers.get("agent_end")({ messages: [{ role: "assistant", stopReason: "stop" }] }, h.ctx);
   await request(h);
   assert.equal(h.compactions.length, 2);
@@ -144,16 +164,19 @@ test("coalesces a duplicate while compaction or prepare is pending and permits t
   assert.deepEqual(requestIds, ["r1", "r2"]);
 });
 
-test("uses projection fallback only for host short-session refusal", async () => {
-  const h = harness(); await request(h);
-  h.compactions[0].onError(new Error("Session is too short to compact — try again once it grows"));
-  assert.equal(h.sent.length, 1);
-  assert.equal(h.sent[0].message.details.mode, "projection-fallback");
-  const boundary = { role: "custom", ...h.sent[0].message };
-  const initial = h.handlers.get("context")({ messages: [boundary] }, h.ctx);
-  assert.deepEqual(initial.messages, [h.sent[0].message]);
-  const projected = h.handlers.get("context")({ messages: [{ role: "user", content: "stale" }, boundary] }, h.ctx);
-  assert.deepEqual(projected.messages, [boundary]);
+test("short and already-compacted refusal preserve context without fallback", async () => {
+  for (const [error, notice] of [
+    ["Session is too short to compact — try again once it grows", "No reset was performed because the session is too short to warrant compaction."],
+    ["Already compacted", "No reset was performed because the session was already compacted."],
+  ]) {
+    const h = harness(); await request(h);
+    h.compactions[0].onError(new Error(error));
+    assert.equal(h.sent.length, 0);
+    assert.equal(h.entries.at(-1).data.status, "failed");
+    assert.equal(h.entries.at(-1).data.reason, "compaction_unavailable");
+    assert.equal(h.notices.at(-1)[0], notice);
+    assert.equal(h.handlers.get("context")({ messages: [{ role: "user", content: "unchanged" }] }, h.ctx), undefined);
+  }
 });
 
 test("does not intercept ordinary compaction or nonmatching markers", async () => {
@@ -184,15 +207,32 @@ test("converts synchronous prepare admission failure into terminal failed state"
   assert.equal(h.entries.at(-1).data.reason, "skill_admission_failed");
 });
 
-test("reload recovers a persisted prepare boundary without replay", () => {
+test("admission callback failure keeps the durable boundary fail-closed for later provider requests", async () => {
+  const h = harness();
+  await h.runtime.requestBoundaryAtProviderBoundary({
+    ctx: h.ctx, command: "execute",
+    resolveInjection: () => ({ content: "prepare then execute" }),
+    onAdmitted: () => { throw new Error("state append failed"); },
+  });
+  completeCompaction(h);
+  const visible = [{ role: "custom", ...h.sent[0].message }];
+  assert.deepEqual(h.handlers.get("context")({ messages: visible }, h.ctx), { messages: [] });
+  assert.equal(h.entries.at(-1).data.status, "failed");
+  assert.deepEqual(h.handlers.get("context")({ messages: visible }, h.ctx), { messages: [] });
+  assert.equal(h.getAborts(), 2);
+});
+
+test("reload rejects a persisted but unadmitted prepare boundary", () => {
   const branch = [
     { type: "custom", id: "m", customType: RESET_MARKER_TYPE, data: { source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId: "r1" } },
     { type: "custom", id: "s", customType: RESET_STATE_TYPE, data: { source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId: "r1", status: "prepare_pending" } },
     { type: "custom_message", id: "p", customType: RESET_MESSAGE_TYPE, details: { source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId: "r1", mode: "compaction" } },
   ];
   const h = harness({ branch }); h.handlers.get("session_start")({}, h.ctx);
-  assert.equal(h.sent.length, 0); assert.equal(h.entries.at(-1).data.status, "recovered");
+  assert.equal(h.sent.length, 0); assert.equal(h.entries.at(-1).data.status, "interrupted");
   assert.equal(h.entries.at(-1).data.boundaryExists, true);
+  assert.deepEqual(h.handlers.get("context")({ messages: [{ role: "custom", ...branch[2] }] }, h.ctx), { messages: [] });
+  assert.equal(h.getAborts(), 1);
 });
 
 test("reload reports a compacted request whose prepare was not admitted", () => {
@@ -206,6 +246,55 @@ test("reload reports a compacted request whose prepare was not admitted", () => 
   assert.match(h.notices.at(-1)[0], /before prepare was admitted/);
 });
 
+
+test("automatic boundary ignores only the originating provider end after replacement admission", async () => {
+  const h = harness();
+  await h.runtime.requestBoundaryAtProviderBoundary({
+    ctx: h.ctx, command: "execute-round", ignoreCurrentAbort: true,
+    resolveInjection: () => ({ content: "next pass" }),
+  });
+  completeCompaction(h);
+  const visible = [{ role: "custom", ...h.sent[0].message }];
+  assert.equal(h.handlers.get("context")({ messages: visible }, h.ctx), undefined);
+  h.handlers.get("message_start")({ message: { role: "custom", ...h.sent[0].message } }, h.ctx);
+  await h.handlers.get("agent_end")({ messages: [...visible, { role: "assistant", stopReason: "aborted" }] }, h.ctx);
+  assert.equal(h.entries.at(-1).data.status, "prepare_pending");
+  h.handlers.get("turn_end")({ message: { role: "assistant", stopReason: "stop" } }, h.ctx);
+  await h.handlers.get("agent_end")({ messages: [...visible, { role: "assistant", stopReason: "stop" }] }, h.ctx);
+  assert.equal(h.entries.at(-1).data.status, "completed");
+});
+
+test("automatic boundary consumes an origin end without a new assistant before admission", async () => {
+  const h = harness();
+  await h.runtime.requestBoundaryAtProviderBoundary({
+    ctx: h.ctx, command: "execute-round", ignoreCurrentAbort: true,
+    resolveInjection: () => ({ content: "next pass" }),
+  });
+  await h.handlers.get("agent_end")({ messages: [{ role: "assistant", content: "older turn", stopReason: "stop" }] }, h.ctx);
+  completeCompaction(h);
+  const visible = [{ role: "custom", ...h.sent[0].message }];
+  assert.equal(h.handlers.get("context")({ messages: visible }, h.ctx), undefined);
+  h.handlers.get("message_start")({ message: { role: "custom", ...h.sent[0].message } }, h.ctx);
+  await h.handlers.get("agent_end")({ messages: [...visible, { role: "assistant", stopReason: "aborted" }] }, h.ctx);
+  assert.equal(h.entries.at(-1).data.status, "failed");
+  assert.equal(h.entries.at(-1).data.reason, "provider_aborted");
+  assert.deepEqual(h.handlers.get("context")({ messages: visible }, h.ctx), { messages: [] });
+  assert.equal(h.getAborts(), 1);
+});
+
+test("terminal completion append failure leaves the durable boundary fail-closed", async () => {
+  const h = harness(); await request(h); completeCompaction(h);
+  const visible = [{ role: "custom", ...h.sent[0].message }];
+  assert.equal(h.handlers.get("context")({ messages: visible }, h.ctx), undefined);
+  h.handlers.get("message_start")({ message: { role: "custom", ...h.sent[0].message } }, h.ctx);
+  h.handlers.get("turn_end")({ message: { role: "assistant", stopReason: "stop" } }, h.ctx);
+  h.failAppendIn(1);
+  await h.handlers.get("agent_end")({ messages: [{ role: "assistant", stopReason: "stop" }] }, h.ctx);
+  assert.equal(h.entries.at(-1).data.status, "failed");
+  assert.equal(h.entries.at(-1).data.reason, "completion_state_append_failed");
+  assert.deepEqual(h.handlers.get("context")({ messages: visible }, h.ctx), { messages: [] });
+  assert.equal(h.getAborts(), 1);
+});
 
 test("records provider error after a durable prepare boundary without replay", async () => {
   const h = harness(); await request(h); completeCompaction(h);

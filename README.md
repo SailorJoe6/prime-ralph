@@ -11,11 +11,11 @@ When the user invokes `/reset`, the extension:
 1. reads only `.ralph/skills/prepare/SKILL.md` from the current project;
 2. validates the file before recording a reset boundary;
 3. appends a non-model-visible marker and asks Prime Agent to compact to that real entry ID;
-4. supplies an empty extension compaction, removes only its fixed wrapper, then schedules one hidden durable prepare message;
-5. uses the same prepare-message projection as an exactness guard and as the fallback when Prime Agent reports that the session is too short to compact; and
+4. supplies an empty extension compaction and then schedules one hidden durable prepare message;
+5. never rewrites a successful provider context; Prime Agent's native post-compaction context is authoritative; and
 6. leaves the host system prompt, session identity, JSONL history, and Prime Agent-owned REPL state unchanged.
 
-The exactness guard remains active through tool continuations and later conversation. It prevents Prime Agent-restored host artifacts as well as ordinary stale user, assistant, and tool messages from returning to the provider. Pending `/reset` commands follow Prime Agent's normal input-queue cancellation behavior; once the handler starts, reset wins that race.
+If Prime Agent reports that the session is too short to warrant compaction or was already compacted, `/reset` reports that no reset occurred and preserves the conversation unchanged. It never substitutes provider-only projection. A manual reset requested during active work waits until that work and its already-queued provider turns finish. A duplicate waiting request is coalesced into the same boundary.
 
 In specification phase, `/reset` remains prepare-only until an active specification appears; after that it delivers `prepare` followed by `spec-it-out` in `specification-reset-existing` mode. In planning phase, it delivers `prepare` followed by `plan` in the matching reset mode. The command preserves phase and never starts execution, a goal, or autonomous continuation.
 
@@ -29,7 +29,7 @@ In a real top-level session with no active specification, the extension delivers
 
 ## Slice 4 planning behavior
 
-A session that starts with an active specification enters interactive planning. It delivers one ordered `prepare`-then-`plan` message and supplies authoritative metadata for whether the exact active execution plan exists. An explicit `/plan` transition from specification phase uses the same clean context boundary. Once planning is established, `/plan` with an existing plan keeps the current conversation for discussion.
+A session that starts with an active specification enters interactive planning. It delivers one ordered `prepare`-then-`plan` message and supplies authoritative metadata for whether the exact active execution plan exists. An explicit `/plan` transition from specification phase uses the same real-compaction boundary. Once planning is established, `/plan` with an existing plan keeps the current conversation for discussion.
 
 The command handler never creates or edits an execution plan. The project `plan` skill owns creation, warnings, discussion, explicit update consent, and cancellation. Only the exact `.ralph/plans/EXECUTION_PLAN.md` regular file is active; nested and conflicting paths do not activate it. Control-path symlinks are detected without being followed and produce a path-specific error with replacement-or-removal guidance.
 
@@ -40,7 +40,7 @@ The command handler never creates or edits an execution plan. The project `plan`
 
 A valid `/execute` starts one automatic execution run only after its reset-flavor compaction succeeds and queues one clean `prepare`-then-`execute` boundary. Prime Agent's native goal starts later agent turns and waits for tracked RLM children. `prime-ralph` records which goal belongs to the run, the current logical cycle, and whether execution is running, waiting, or paused. The model must call the `ralph_lifecycle` tool to continue, wait, block, or complete; a normal response or `turn_end` is not treated as a decision.
 
-Each next cycle is held closed while one durable reset-flavor compaction runs. Success admits exactly one combined `prepare`-then-`execute` message. Automatic execution has no provider-context projection or short-session fallback; refusal, failure, interruption, or ambiguous delivery pauses without starting the cycle. Native goal pause/resume keeps the current iteration and all of its messages intact, with no compaction or skill reinjection. The Prime Agent session, JSONL history, and REPL remain intact. The execute skill sizes the cycle as one small publishable evidence increment, requires an exit condition and exclusions before edits, and reserves closeout budget rather than treating one broad feature as one task. Blocking moves the exact specification and plan together. If a user moves those files back manually, Ralph verifies them and guides the model through the original unblock condition instead of asking the user to move them again. Execution still restarts only through a later explicit `/execute`. See [`docs/execution.md`](docs/execution.md) for the work-unit sizing gate, state hierarchy, provider/tool loop, context boundaries, waiting, recovery, optional archival, and `.ralph/logs/EXECUTION_LOG.md`.
+Each next cycle is held closed while one durable reset-flavor compaction runs. Success admits exactly one combined `prepare`-then-`execute` message. Automatic execution has no provider-context projection or short-session fallback; refusal, failure, interruption, or ambiguous delivery pauses without starting the cycle. Native goal pause/resume keeps the current iteration and all of its messages intact, with no compaction or skill reinjection. The Prime Agent session, JSONL history, and REPL remain intact. The execute skill sizes the cycle as one small publishable evidence increment, requires an exit condition and exclusions before edits, and reserves closeout budget rather than treating one broad feature as one task. Blocking moves the exact specification and plan together, lets the execution pass give its final help request, then performs native compaction before admitting the hidden blocked instructions. After every visible native compaction boundary, ordinary conversation messages reach the LLM unchanged and in order; successful context hooks never filter or reorder them. If a user moves the files back manually, Ralph verifies them and guides the model through the original unblock condition instead of asking the user to move them again. Execution still restarts only through a later explicit `/execute`. See [`docs/execution.md`](docs/execution.md) for the work-unit sizing gate, state hierarchy, provider/tool loop, context boundaries, waiting, recovery, optional archival, and `.ralph/logs/EXECUTION_LOG.md`.
 
 ## Requirements
 
@@ -95,10 +95,6 @@ The package contains no host-specific repository, provider, deployment, or task 
 | Append-only execution log | `prime-ralph/execution-log` |
 | Reset extension factory | `prime-ralph/reset-extension` |
 | Prepare validation and injection | `prime-ralph/reset-skill` |
-| Provider-context projection | `prime-ralph/reset-context` |
-| Historical POC seams | Other exports listed in `package.json` |
-
-Historical lifecycle, compaction, continuation, phase, Beads, and transport modules remain POC evidence. They are not enabled by the default extension and are not implementation authority for the current workflow.
 
 ## Development and acceptance
 
@@ -148,13 +144,13 @@ npm run package:check
 npm pack --dry-run
 ```
 
-The reset disk-backed acceptance uses a deterministic provider and a real Prime Agent IPython kernel. It proves stale provider messages are removed while the session ID, JSONL path/history, system baseline, and REPL value survive. The specification acceptance uses a deterministic provider and real Prime Agent `0.9.1` extension lifecycle to prove startup ordering, reload suppression, context preservation, invocation modes, reset projection, and an unambiguous native command catalog without direct Ralph skill duplicates. Planning acceptance additionally proves startup and explicit transition, both planning reset branches, current-context existing-plan discussion, and plan protection. Execution acceptance and the dedicated pause/resume acceptance together prove native-goal-driven rounds, pause/resume continuity with feedback and acknowledgement, compaction-before-provider ordering, no automatic projection fallback, tracked-RLM deferral, completed-cycle logging, and stable session, JSONL, and REPL identity. The admission-failure acceptance injects execution-state append failures at both real Prime Agent pre-provider admission gates, restores storage, sends another user probe, and proves that the next-cycle provider request never starts. Blocked-recovery acceptance uses the real filesystem and Prime Agent lifecycle to prove manually restored files are verified without being moved again, old context stays excluded through tool results, and execution waits for a later `/execute`. The opt-in model acceptances are separate behavioral evidence and never run as part of `npm test`. The busy acceptance proves a reset queues behind active work and an existing follow-up, and that a duplicate pending request produces only one boundary.
+The reset disk-backed acceptance uses a deterministic provider and a real Prime Agent IPython kernel. It proves native compaction removes stale provider messages while the extension performs no successful context rewrite and the session ID, JSONL path/history, system baseline, and REPL value survive. The specification acceptance uses a deterministic provider and real Prime Agent `0.9.1` extension lifecycle to prove startup ordering, reload suppression, context preservation, invocation modes, physical reset boundaries, and an unambiguous native command catalog without direct Ralph skill duplicates. Planning acceptance additionally proves startup and explicit transition, both planning reset branches, current-context existing-plan discussion, and plan protection. Execution acceptance and the dedicated pause/resume acceptance together prove native-goal-driven rounds, pause/resume continuity with feedback and acknowledgement, compaction-before-provider ordering, no automatic projection fallback, tracked-RLM deferral, completed-cycle logging, and stable session, JSONL, and REPL identity. The admission-failure acceptance injects execution-state append failures at both real Prime Agent pre-provider admission gates, restores storage, sends another user probe, and proves that the next-cycle provider request never starts. Blocked-recovery acceptance uses the real filesystem and Prime Agent lifecycle to prove manually restored files are verified without being moved again, the complete visible history stays provider-visible through tool results, and execution waits for a later `/execute`. The opt-in model acceptances are separate behavioral evidence and never run as part of `npm test`. The busy acceptance proves a reset queues behind active work and an existing follow-up, and that a duplicate pending request produces only one boundary.
 
 ## Current public-API boundary
 
 Prime Agent `0.9.1` exposes `isIdle()`, `hasPendingMessages()`, and follow-up admission to extension commands. The extension uses the host queue instead of timing or response-text heuristics.
 
-Prime Agent checks “session too short” and “already compacted” before `session_before_compact`, and extension `sendMessage` has no awaited receipt. Automatic execution therefore fails closed instead of projecting or replaying: an unavailable compaction admits no cycle, and reload fails a still-pending boundary even when its message is durable, validates an already-admitted boundary, and never resends uncertain work.
+Prime Agent checks “session too short” and “already compacted” before `session_before_compact`, and extension `sendMessage` has no awaited receipt. Every reset-flavor transition therefore fails closed instead of projecting or replaying: an unavailable compaction changes no provider context, an automatic unavailable compaction admits no cycle, and reload never resends uncertain work.
 
 Prime Agent does not expose its stronger descendant-RLM quiescence barrier through `ExtensionCommandContext`. Therefore Slice 1 cannot yet prove that `/reset` waits for a still-running tracked RLM child when the parent session itself is idle. Arbitrary detached work is also outside automatic detection. See [`docs/reset.md`](docs/reset.md) for the exact evidence boundary.
 
@@ -165,7 +161,6 @@ Prime Agent does not expose its stronger descendant-RLM quiescence barrier throu
 - [`docs/execution.md`](docs/execution.md) — execution driver, lifecycle, waiting, blocked transactions, and logs
 - [`docs/reset.md`](docs/reset.md) — command contract, state and context design, tests, and known host API gap
 - [`docs/release-contract.md`](docs/release-contract.md) — package and validation contract
-- [`docs/research-slice-2.md`](docs/research-slice-2.md) — historical source observations and POCs
 - [`docs/native-transport-acceptance.md`](docs/native-transport-acceptance.md) — historical transport evidence and limits
 
 ## License

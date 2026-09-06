@@ -57,13 +57,13 @@ The default extension:
 2. validates the exact canonical project prepare skill before mutation;
 3. appends a bounded opaque marker and starts a matching public custom compaction;
 4. uses the marker's real entry ID and no summarization provider call;
-5. removes the fixed Ralph empty-summary wrapper and admits one hidden prepare follow-up;
-6. enforces the newest prepare boundary exactly, including for the short-session projection fallback; and
+5. preserves Prime Agent's natural post-compaction provider context and adds one hidden prepare follow-up;
+6. performs no successful provider-message filtering, replacement, or reordering; and
 7. records completion only for the matching reset turn.
 
-The extension preserves the current host system prompt and does not invoke session replacement, tree, goal, autonomous, phase, or REPL lifecycle operations. Persistent state contains only protocol status, bounded mode metadata, and opaque request or entry IDs, not transcript or skill content.
+If Prime Agent refuses compaction because the session is too short or already compacted, no reset occurs, the conversation remains unchanged, and no projection fallback is used. The exact short-session message is `No reset was performed because the session is too short to warrant compaction.`
 
-Historical lifecycle and coordination modules remain importable POC seams. Their old automatic compaction, continuation, phase, goal, and Beads assumptions are not enabled by the default extension and are not part of the Slice 1 production contract.
+The extension preserves the current host system prompt and does not invoke session replacement, tree, goal, autonomous, phase, or REPL lifecycle operations. Persistent state contains only protocol status, bounded mode metadata, and opaque request or entry IDs, not transcript or skill content. Research-only package APIs and POC executables are not shipped.
 
 ## Validation contract
 
@@ -113,6 +113,8 @@ PRIME_RALPH_REAL_MODEL_ACCEPTANCE=1 \
 PRIME_RALPH_ACCEPT_PROVIDER=<provider> \
 PRIME_RALPH_ACCEPT_MODEL=<model> \
 npm run accept:model:blocked-recovery -- --variant all
+npm run accept:native-rpc
+npm run accept:native-acp
 npm run package:check
 npm pack --dry-run
 ```
@@ -124,15 +126,15 @@ Then extract the produced tarball in a clean temporary directory, import `src/in
 ## Evidence boundaries
 
 - Unit tests and static prompt checks do not prove host lifecycle ordering or model behavior.
-- The specification lifecycle acceptance proves startup ordering, reload suppression, context retention, reset projection, and an unambiguous native extension-command catalog on Prime Agent `0.9.1`.
+- The specification lifecycle acceptance proves startup ordering, reload suppression, context retention, native reset boundaries, transcript transparency, and an unambiguous native extension-command catalog on Prime Agent `0.9.1`.
 - The planning lifecycle acceptance proves phase selection, ordered skill delivery, clean and current-context `/plan` paths, both planning reset branches, document protection, and no execution start.
 - The opt-in model matrices prove only the recorded provider/model outcomes under its restricted fixture tools; it covers new creation, the initial existing-spec menu, confirmed future creation, agreed active update, cancellation, and reset-existing behavior, and is not deterministic CI evidence.
 - The disk-backed execution acceptance proves successful reset-flavor compaction precedes each execute provider request, automatic projection is absent, pause/resume retains the complete current iteration, and JSONL, session identity, and REPL remain continuous on Prime Agent `0.9.1`.
-- The disk-backed blocked-recovery acceptance proves a real manually restored pair is verified and accepted without another move, the blocked context and current tool results remain visible through confirmation, execution does not restart automatically, and a later `/execute` creates a fresh run.
+- The disk-backed blocked-recovery acceptance proves a real manually restored pair is verified and accepted without another move, native compaction precedes the blocked pass and every post-boundary message remains visible unchanged through confirmation, execution does not restart automatically, and a later `/execute` creates a fresh run.
 - The busy acceptance proves ordering behind an active parent turn and existing follow-up.
 - The lifecycle acceptance proves durable custom-compaction resume, cancellation without partial prepare, provider-failure state, and safe retry.
 - The public extension API does not expose Prime Agent's strong descendant-RLM quiescence barrier. Slice 1 therefore does not claim that an idle parent with a running tracked RLM child is gated.
-- Historical native JSON, RPC, ACP, text, and daemon smokes do not yet prove `/reset` parity in every mode.
+- Native RPC and ACP acceptance proves transport admission and shutdown but does not by itself prove `/reset` parity in every mode.
 - Stable prompt-prefix bytes are not evidence of provider cache billing.
 
 A release must report the descendant-RLM gap rather than treating it as passed evidence.

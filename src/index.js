@@ -5,7 +5,6 @@ export { createWorkflowExtension };
 export { createResetExtension } from "./reset-extension.js";
 export { loadPrepareSkill, formatPrepareInjection, validateCanonicalSkill, PrepareSkillError } from "./reset-skill.js";
 export {
-  projectResetContext,
   resetCompactionInstructions,
   RESET_COMPACTION_INSTRUCTION_PREFIX,
   RESET_MARKER_TYPE,
@@ -13,13 +12,6 @@ export {
   RESET_PROTOCOL_VERSION,
   RESET_STATE_TYPE,
 } from "./reset-context.js";
-export { RalphCycleCoordinator } from "./cycle-coordinator.js";
-export { createContinuationAdapter } from "./continuation-adapter.js";
-export { discoverSkillConfig, loadSkillConfiguration, phaseIdentity, selectPhase } from "./skill-config.js";
-export { BeadsCoordinator, runQualityGates } from "./beads-coordination.js";
-export { GoalLifecycle } from "./goal-lifecycle.js";
-export { diagnosticSnapshot, isCompatiblePrimeAgent } from "./diagnostics.js";
-
 export {
   ACTIVE_SPECIFICATION_RELATIVE_PATH,
   SPEC_IT_OUT_SKILL_RELATIVE_PATH,

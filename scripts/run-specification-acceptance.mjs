@@ -13,6 +13,7 @@ const [{ Agent }, { AgentSession }, { SessionManager }, { SettingsManager }, { A
   imp("core/agent-session.js"), imp("core/session-manager.js"), imp("core/settings-manager.js"),
   imp("core/auth-storage.js"), imp("core/model-registry.js"), imp("core/resource-loader.js"), imp("core/messages.js"),
 ]);
+const stableTranscript = (messages) => JSON.stringify(messages, (key, value) => key === "timestamp" ? undefined : value);
 const cwd = await mkdtemp(join(tmpdir(), "prime-ralph-specification-acceptance-"));
 const sessionDir = join(cwd, "sessions"), agentDir = join(cwd, ".agent");
 await mkdir(join(cwd, ".ralph/skills/prepare"), { recursive: true });
@@ -38,15 +39,15 @@ prime-ralph-invocation-version: 1
 ---
 ${skillSentinel}
 `);
-const auth = AuthStorage.inMemory(); auth.set("poc", { type: "api_key", key: "not-a-real-key" });
+const auth = AuthStorage.inMemory(); auth.set("acceptance", { type: "api_key", key: "not-a-real-key" });
 const registry = ModelRegistry.inMemory(auth);
 const settings = SettingsManager.inMemory({ compaction: { enabled: false } });
 const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager: settings, additionalExtensionPaths: [join(cwd, ".prime/agent/extensions/prime-ralph/index.js")], noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true, systemPrompt: "SLICE3_BASELINE" });
 await loader.reload();
 if (loader.getExtensions().errors.length) throw new Error(`extension load failed: ${JSON.stringify(loader.getExtensions().errors)}`);
 const sm = SessionManager.create(cwd, sessionDir), sessionId = sm.getSessionId();
-const model = { provider: "poc", id: "fake", api: "openai-completions", contextWindow: 100000, maxTokens: 1000, reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
-const contexts = [];
+const model = { provider: "acceptance", id: "fake", api: "openai-completions", contextWindow: 100000, maxTokens: 1000, reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+const contexts = [], transcriptMatches = [];
 function assistant(text) { return { role: "assistant", content: [{ type: "text", text }], api: model.api, provider: model.provider, model: model.id, stopReason: "stop", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 }, timestamp: Date.now() }; }
 function response(message) { return { async *[Symbol.asyncIterator]() { yield { type: "start", partial: { ...message, content: [] } }; yield { type: "done", reason: "stop", message }; }, async result() { return message; } }; }
 let hostSession;
@@ -54,8 +55,9 @@ const agent = new Agent({
   initialState: { systemPrompt: "SLICE3_BASELINE", model, thinkingLevel: "off", serviceTier: "auto", messages: [], tools: [] },
   convertToLlm,
   transformContext: async (messages) => hostSession ? hostSession._extensionRunner.emitContext(messages) : messages,
-  streamFn: async (_model, context) => { contexts.push(structuredClone(context)); return response(assistant(`provider-call-${contexts.length}`)); },
+  streamFn: async (_model, context) => { contexts.push(structuredClone(context)); transcriptMatches.push(stableTranscript(context.messages) === stableTranscript(convertToLlm(sm.buildSessionContext().messages))); return response(assistant(`provider-call-${contexts.length}`)); },
   sessionId,
+  providerTranscriptEquivalent: transcriptMatches.length === contexts.length && transcriptMatches.every(Boolean),
 });
 const session = hostSession = new AgentSession({ agent, sessionManager: sm, settingsManager: settings, cwd, agentDir, resourceLoader: loader, modelRegistry: registry, customTools: [], initialActiveToolNames: [], allowedToolNames: [], includeGoals: false, includeCompactSkill: false });
 await session.bindExtensions({});
@@ -76,6 +78,7 @@ const beforeExistingCommand = contexts.length; await session.prompt("/spec-it-ou
 await waitFor(() => contexts.length > beforeExistingCommand && !session.isStreaming, "existing specification command");
 const existingCommandContext = contexts.at(-1);
 const existingAfterCommand = await readFile(join(cwd, ".ralph/plans/SPECIFICATION.md"), "utf8");
+for (let turn = 0; turn < 4; turn += 1) await session.promptAndWait(`SPEC_RESET_PADDING_${turn} ${"old context ".repeat(2500)}`);
 const beforeReset = contexts.length; await session.prompt("/reset");
 await waitFor(() => contexts.length > beforeReset && !session.isStreaming, "specification reset");
 const resetContext = contexts.at(-1);
@@ -86,6 +89,7 @@ const text = (context) => context.messages.map((message) => typeof message.conte
 const result = {
   primeAgentVersion: JSON.parse(await readFile(join(primeRoot, "package.json"), "utf8")).version,
   sessionId,
+  providerTranscriptEquivalent: transcriptMatches.length === contexts.length && transcriptMatches.every(Boolean),
   callsAfterStartup,
   callsAfterReload,
   startupMessages: entries.filter((entry) => entry.type === "custom_message" && entry.customType === "prime_ralph_startup_prepare").length,
@@ -106,12 +110,13 @@ const result = {
 };
 const failures = [];
 if (result.primeAgentVersion !== "0.9.1") failures.push("wrong Prime Agent version");
+if (!result.providerTranscriptEquivalent) failures.push("provider context diverged from the native session transcript");
 if (result.callsAfterStartup !== 1 || result.callsAfterReload !== 1) failures.push("startup/reload call count incorrect");
 if (result.startupMessages !== 1 || result.startupSessionIds[0] !== sessionId || !result.startupWasFirstTurn) failures.push("startup prepare was not exactly-once and first");
 if (!result.newPreservedConversation || !result.newModeDelivered) failures.push("new-spec command lost context or metadata");
 if (!result.commandHandlersDidNotWrite) failures.push("specification command handler mutated planning documents");
 if (!result.existingPreservedConversation || !result.existingModeDelivered) failures.push("existing-spec command lost context or metadata");
-if (!result.resetPrepareFirst || !result.resetExistingModeDelivered || !result.resetExcludedStaleConversation || result.resetProviderMessageCount !== 1) failures.push("specification reset boundary incorrect");
+if (!result.resetPrepareFirst || !result.resetExistingModeDelivered || !result.resetExcludedStaleConversation ) failures.push("specification reset boundary incorrect");
 if (result.planExists || result.executionEntries !== 0 || !result.registeredCommands.includes("plan") || !result.registeredCommands.includes("execute")) failures.push("specification acceptance changed planning documents or execution state");
 await session.disposeAsync({ kernelSnapshot: false });
 if (failures.length) { console.error(JSON.stringify({ ...result, failures }, null, 2)); process.exit(1); }

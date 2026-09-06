@@ -11,23 +11,38 @@ const imp = (path) => import(pathToFileURL(join(primeRoot, "dist", path)).href);
 const [{ Agent }, { AgentSession }, { SessionManager }, { SettingsManager }, { AuthStorage }, { ModelRegistry }, { DefaultResourceLoader }, { convertToLlm }, { createIpythonTool, IpythonKernelProvisioner }] = await Promise.all([
   import(pathToFileURL(join(coreRoot, "dist/agent.js")).href), imp("core/agent-session.js"), imp("core/session-manager.js"), imp("core/settings-manager.js"), imp("core/auth-storage.js"), imp("core/model-registry.js"), imp("core/resource-loader.js"), imp("core/messages.js"), imp("core/tools/index.js"),
 ]);
-const model = { provider: "poc", id: "fake", api: "openai-completions", contextWindow: 120000, maxTokens: 1000, reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+const model = { provider: "acceptance", id: "fake", api: "openai-completions", contextWindow: 120000, maxTokens: 1000, reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
 const assistant = (content, stopReason = "stop") => ({ role: "assistant", content: typeof content === "string" ? [{ type: "text", text: content }] : content, api: model.api, provider: model.provider, model: model.id, stopReason, usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 }, timestamp: Date.now() });
 const response = (message) => ({ async *[Symbol.asyncIterator]() { yield { type: "start", partial: { ...message, content: [] } }; yield { type: "done", reason: message.stopReason, message }; }, async result() { return message; } });
 const visibleText = (context) => context.messages.map((message) => typeof message.content === "string" ? message.content : Array.isArray(message.content) ? message.content.map((part) => part?.text ?? "").join("\n") : "").join("\n");
 const invocation = (value) => { const match = value.match(/<prime-ralph-invocation>(.*?)<\/prime-ralph-invocation>/s); return match ? JSON.parse(match[1]) : null; };
 const waitFor = async (predicate, label) => { const deadline = Date.now() + 20000; while (!predicate()) { if (Date.now() > deadline) throw new Error(`timeout waiting for ${label}`); await new Promise((resolve) => setTimeout(resolve, 10)); } };
+const stableTranscript = (messages) => JSON.stringify(messages, (key, value) => key === "timestamp" ? undefined : value);
 
 const cwd = await mkdtemp(join(tmpdir(), "prime-ralph-admission-failure-acceptance-")), sessionDir = join(cwd, "sessions"), agentDir = join(cwd, ".agent"), injector = join(cwd, "inject-admission-failure.mjs");
 for (const dir of [".ralph/skills/prepare", ".ralph/skills/spec-it-out", ".ralph/skills/plan", ".ralph/skills/execute", ".ralph/skills/blocked", ".ralph/plans/blocked", ".ralph/plans/archive", ".prime/agent/extensions", "sessions", ".agent"]) await mkdir(join(cwd, dir), { recursive: true });
 await symlink(new URL("../src", import.meta.url), join(cwd, ".prime/agent/extensions/prime-ralph"), "dir");
 await writeFile(injector, `export default function inject(pi) {
   pi.on("message_start", (event, ctx) => {
-    if (event.message?.customType !== "prime_ralph_reset_prepare" || event.message?.details?.command !== "execute-round" || ctx.sessionManager.__primeRalphFailureInjected) return;
-    ctx.sessionManager.__primeRalphFailureInjected = true;
+    if (event.message?.customType !== "prime_ralph_reset_prepare") return;
+    const command = event.message?.details?.command;
+    if (command === "execute" && !ctx.sessionManager.__primeRalphInitialFailureInjected) {
+      ctx.sessionManager.__primeRalphInitialFailureInjected = true;
+      ctx.sessionManager.__primeRalphRemainingFailures = 1;
+    } else if (command === "execute-round" && !ctx.sessionManager.__primeRalphRoundFailureInjected) {
+      ctx.sessionManager.__primeRalphRoundFailureInjected = true;
+      ctx.sessionManager.__primeRalphRemainingFailures = 2;
+    } else return;
+    if (ctx.sessionManager.__primeRalphAppendWrapped) return;
+    ctx.sessionManager.__primeRalphAppendWrapped = true;
     const original = ctx.sessionManager.appendCustomEntry.bind(ctx.sessionManager);
-    let remainingFailures = 2;
-    ctx.sessionManager.appendCustomEntry = (type, data) => { if (type === "prime_ralph_execution_state" && remainingFailures-- > 0) throw new Error("injected recovering execution-state append failure"); return original(type, data); };
+    ctx.sessionManager.appendCustomEntry = (type, data) => {
+      if (type === "prime_ralph_execution_state" && ctx.sessionManager.__primeRalphRemainingFailures > 0) {
+        ctx.sessionManager.__primeRalphRemainingFailures -= 1;
+        throw new Error("injected recovering execution-state append failure");
+      }
+      return original(type, data);
+    };
   });
 }
 `);
@@ -39,17 +54,19 @@ ${body}
 `);
 await writeFile(join(cwd, ".ralph/plans/SPECIFICATION.md"), "# failure fixture specification\n");
 await writeFile(join(cwd, ".ralph/plans/EXECUTION_PLAN.md"), "# failure fixture plan\n");
-const auth = AuthStorage.inMemory(); auth.set("poc", { type: "api_key", key: "not-a-real-key" });
+const auth = AuthStorage.inMemory(); auth.set("acceptance", { type: "api_key", key: "not-a-real-key" });
 const registry = ModelRegistry.inMemory(auth), settings = SettingsManager.inMemory({ compaction: { enabled: false }, goals: { enabled: true, maxContinuations: 10 } });
 const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager: settings, additionalExtensionPaths: [injector, join(cwd, ".prime/agent/extensions/prime-ralph/index.js")], noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true, systemPrompt: "FAIL_BASELINE" });
 await loader.reload(); if (loader.getExtensions().errors.length) throw new Error(JSON.stringify(loader.getExtensions().errors));
-const sm = SessionManager.create(cwd, sessionDir), contexts = [], stages = new Map();
+const sm = SessionManager.create(cwd, sessionDir), contexts = [], transcriptMatches = [], stages = new Map();
 const provisioner = new IpythonKernelProvisioner(cwd, { sessionId: sm.getSessionId() }), ipython = createIpythonTool(cwd, { provisioner });
 let session;
 const agent = new Agent({ initialState: { systemPrompt: "FAIL_BASELINE", model, thinkingLevel: "off", serviceTier: "auto", messages: [], tools: [] }, convertToLlm,
   transformContext: async (messages) => session ? session._extensionRunner.emitContext(messages) : messages,
   streamFn: async (_model, context) => {
-    const visible = visibleText(context); contexts.push(visible); const meta = invocation(visible);
+    const visible = visibleText(context); contexts.push(visible);
+    transcriptMatches.push(stableTranscript(context.messages) === stableTranscript(convertToLlm(sm.buildSessionContext().messages)));
+    const meta = invocation(visible);
     if (!meta || meta.skill !== "execute") return response(assistant("planning interaction"));
     const stage = stages.get(meta.cycle) ?? 0; stages.set(meta.cycle, stage + 1);
     if (meta.cycle === 1 && stage === 0) {
@@ -63,14 +80,23 @@ session = new AgentSession({ agent, sessionManager: sm, settingsManager: setting
 await session.bindExtensions({}); await waitFor(() => contexts.length >= 1 && !session.isStreaming, "planning startup");
 for (let turn = 1; turn <= 3; turn += 1) await session.promptAndWait(`OLD_FAILURE_CONTEXT_${turn}\n${"old context ".repeat(2500)}`);
 await session.prompt("/execute");
-await waitFor(() => sm.getEntries().some((entry) => entry.customType === RESET_STATE_TYPE && entry.data?.reason === "skill_admission_commit_failed") && !session.isStreaming, "fail-closed admission");
-await session.prompt("RECOVERED_STORAGE_PROVIDER_PROBE");
-await waitFor(() => sm.getEntries().filter((entry) => entry.customType === EXECUTION_STATE_ENTRY_TYPE).at(-1)?.data?.pendingRound?.stage === "failed" && !session.isStreaming, "recovered storage remains fail-closed");
-const entries = sm.getEntries(), states = entries.filter((entry) => entry.customType === EXECUTION_STATE_ENTRY_TYPE).map((entry) => entry.data), metas = contexts.map(invocation).filter(Boolean);
+await waitFor(() => sm.getEntries().some((entry) => entry.customType === RESET_STATE_TYPE && entry.data?.command === "execute" && entry.data?.reason === "skill_admission_commit_failed") && !session.isStreaming, "initial execute admission failure");
+for (let turn = 1; turn <= 3; turn += 1) {
+  try { await session.promptAndWait(`INITIAL_FAILURE_PROVIDER_PROBE_${turn}\n${"denied stale boundary context ".repeat(2500)}`); } catch {}
+  await waitFor(() => !session.isStreaming, `initial stale boundary probe denial ${turn}`);
+}
+await session.prompt("/execute");
+await waitFor(() => sm.getEntries().filter((entry) => entry.customType === RESET_STATE_TYPE && entry.data?.reason === "skill_admission_commit_failed").length >= 2 && sm.getEntries().filter((entry) => entry.customType === EXECUTION_STATE_ENTRY_TYPE).at(-1)?.data?.pendingRound?.stage === "failed" && !session.isStreaming, "automatic-round admission failure");
+try { await session.promptAndWait("RECOVERED_STORAGE_PROVIDER_PROBE"); } catch {}
+await waitFor(() => !session.isStreaming, "automatic-round stale boundary probe denial");
+const entries = sm.getEntries(), states = entries.filter((entry) => entry.customType === EXECUTION_STATE_ENTRY_TYPE).map((entry) => entry.data), resetFailures = entries.filter((entry) => entry.customType === RESET_STATE_TYPE && entry.data?.reason === "skill_admission_commit_failed"), metas = contexts.map(invocation).filter(Boolean);
 const checks = {
   primeAgentVersion: JSON.parse(await readFile(join(primeRoot, "package.json"), "utf8")).version === "0.9.1",
-  compactionCompleted: entries.some((entry) => entry.type === "compaction" && entry.details?.command === "execute-round"),
-  admissionFailureDurable: entries.some((entry) => entry.customType === RESET_STATE_TYPE && entry.data?.reason === "skill_admission_commit_failed"),
+  providerTranscriptEquivalent: transcriptMatches.length === contexts.length && transcriptMatches.every(Boolean),
+  initialCompactionCompleted: entries.some((entry) => entry.type === "compaction" && entry.details?.command === "execute"),
+  automaticCompactionCompleted: entries.some((entry) => entry.type === "compaction" && entry.details?.command === "execute-round"),
+  bothAdmissionFailuresDurable: resetFailures.some((entry) => entry.data.command === "execute") && resetFailures.some((entry) => entry.data.command === "execute-round"),
+  initialProbeDenied: !contexts.some((value) => value.includes("INITIAL_FAILURE_PROVIDER_PROBE_")),
   providerDenied: !metas.some((meta) => meta.cycle === 2) && !contexts.some((value) => value.includes("FORBIDDEN_NEXT_ROUND_PROVIDER_REQUEST")),
   cycleNotAdvanced: states.at(-1)?.cycle === 1 && states.at(-1)?.pendingRound?.stage === "failed" && states.at(-1)?.status === "paused",
   recoveredProbeDenied: !contexts.some((value) => value.includes("RECOVERED_STORAGE_PROVIDER_PROBE")),

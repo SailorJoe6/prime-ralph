@@ -7,9 +7,9 @@ if (typeof entry.default !== "function") throw new Error("default extension entr
 for (const mode of ["text", "json", "rpc", "acp", "daemon"]) {
   const commands = new Map(), tools = new Map();
   entry.default({ mode, registerTool: (tool) => tools.set(tool.name, tool), registerCommand: (name, command) => commands.set(name, command), on() {}, appendEntry() {}, sendMessage() {} });
-  if (JSON.stringify([...commands.keys()]) !== JSON.stringify(["reset", "spec-it-out", "plan", "execute"]) || commands.has("clear")) throw new Error(`Slice 5 command registration failed in ${mode} smoke`);
+  if (JSON.stringify([...commands.keys()]) !== JSON.stringify(["reset", "spec-it-out", "plan", "execute"]) || commands.has("clear")) throw new Error(`Slice 5 command registration failed in ${mode} acceptance`);
 }
-for (const exportName of ["observability", "ralph-context", "reset-context", "reset-extension", "reset-skill", "specification", "planning", "execution", "execution-log", "planning-transaction", "workflow-extension", "cycle-coordinator", "continuation-adapter", "skill-config", "phase-runtime", "beads-coordination", "coordination-runtime", "bd-cli-adapter", "goal-lifecycle", "cache-analysis", "diagnostics", "init", "cli"]) await import(new URL(`../src/${exportName}.js`, import.meta.url));
+for (const exportName of ["reset-context", "reset-extension", "reset-skill", "specification", "planning", "execution", "execution-log", "planning-transaction", "cycle-boundary", "workflow-extension", "init", "cli"]) await import(new URL(`../src/${exportName}.js`, import.meta.url));
 if (packageJson.bin?.["prime-ralph"] !== "bin/prime-ralph.js") throw new Error("initializer bin is not declared");
 await access(new URL("../bin/prime-ralph.js", import.meta.url), constants.X_OK);
 const forbiddenTerms = [
@@ -23,7 +23,7 @@ for (const variant of ["default", "beads"]) for (const skill of ["prepare", "spe
   if (!text.includes(`name: ${skill}`)) throw new Error(`invalid ${variant}/${skill} template`);
   if (forbiddenTerms.some((term) => text.toLowerCase().includes(term))) throw new Error(`non-independent ${variant}/${skill} template`);
 }
-console.log("mode/export smoke OK: text, json, rpc, acp, daemon");
+console.log("mode/export acceptance OK: text, json, rpc, acp, daemon");
 if (packageJson.peerDependencies?.["prime-agent"] !== "0.9.1") throw new Error("unsupported peer range");
 
 async function scanTree(url) {
