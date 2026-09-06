@@ -4,7 +4,8 @@ import { createWorkflowExtension } from "../src/workflow-extension.js";
 import { PLANNING_MESSAGE_TYPE, PLANNING_STARTUP_MESSAGE_TYPE } from "../src/planning.js";
 import { SPECIFICATION_MESSAGE_TYPE, STARTUP_PREPARE_MESSAGE_TYPE } from "../src/specification.js";
 import { RESET_MESSAGE_TYPE } from "../src/reset-context.js";
-import { BLOCKED_MESSAGE_TYPE, EXECUTION_MESSAGE_TYPE, EXECUTION_STATE_ENTRY_TYPE, latestExecutionState } from "../src/execution.js";
+import { executionCompactionInstructions } from "../src/execution-boundary-compaction.js";
+import { armExecutionBoundaryProjection, BLOCKED_MESSAGE_TYPE, EXECUTION_MESSAGE_TYPE, EXECUTION_STATE_ENTRY_TYPE, latestExecutionState } from "../src/execution.js";
 
 const prepare = { path: "/project/.ralph/skills/prepare/SKILL.md", text: "---\nname: prepare\ndescription: test\n---\nprepare body" };
 const specSkill = { path: "/project/.ralph/skills/spec-it-out/SKILL.md", text: "---\nname: spec-it-out\ndescription: test\nprime-ralph-invocation-version: 1\n---\nspec body" };
@@ -987,6 +988,153 @@ test("a /btw-shaped clone keeps the admitted boundary without consuming a newer 
   assert.equal(h.state().cycle, 3); assert.equal(h.state().admittedContinuation.identity, "goal-side:2"); assert.match(main.messages[0].content, /"cycle":3/);
 });
 
+
+
+async function armedProjectionHarness({ sessionId = "projection-consumption", appendFailureAt } = {}) {
+  const branch = [], logs = [];
+  const first = harness({ branch, sharedLogs: logs, specificationState: "existing", planState: "existing", sessionId });
+  const initial = await startExecution(first);
+  first.addGoal({ goalId: "goal-projection-consumption", status: "active", active: true });
+  await control(first, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 });
+  await first.emit("turn_end", finalEvent("pass one"));
+  const goalMessage = { role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: "goal-projection-consumption", continuationsUsed: 1 } };
+  await first.handlers.get("context").at(-1)({ messages: [{ role: "user", content: "stale" }, goalMessage] }, first.ctx);
+  const armed = armExecutionBoundaryProjection(first.state(), { requestId: "automatic-request" });
+  branch.push({ type: "custom", id: "armed-projection", customType: EXECUTION_STATE_ENTRY_TYPE, data: armed });
+  return { branch, logs, initial, goalMessage, current: harness({ branch, sharedLogs: logs, specificationState: "existing", planState: "existing", sessionId, appendFailureAt }) };
+}
+
+function automaticExecutionBoundary(state, overrides = {}) {
+  const admitted = state.admittedContinuation;
+  return { role: "custom", customType: EXECUTION_MESSAGE_TYPE, content: "execute", details: { source: "prime-ralph", protocolVersion: 1, requestId: "delivery", sessionId: state.sessionId, workflowPhase: "execution", invocationMode: admitted.mode, lifecycleId: state.lifecycleId, cycle: state.cycle, goalId: admitted.goalId, continuationsUsed: admitted.continuationsUsed, boundaryIdentity: admitted.identity, automaticCompactionRequestId: admitted.boundary.requestId, preserveTrigger: false, ...overrides } };
+}
+
+test("a steering-selected automatic boundary durably suppresses its later exact queued duplicate", async () => {
+  const { branch, logs, initial, current: h } = await armedProjectionHarness();
+  const summary = { role: "compactionSummary", summary: "", customInstructions: executionCompactionInstructions("automatic-request") };
+  const steering = { role: "user", content: "queued steering survives" };
+  await h.emit("before_agent_start", { prompt: "steering" });
+  await h.emit("message_start", { message: steering });
+  const projected = await h.handlers.get("context").at(-1)({ messages: [summary, steering] }, h.ctx);
+  assert.equal(h.state().admittedContinuation.boundary.stage, "projection-consumed");
+  assert.equal(projected.messages[0].customType, EXECUTION_MESSAGE_TYPE);
+  assert.equal(projected.messages[0].details.automaticCompactionRequestId, "automatic-request");
+  assert.equal(projected.messages[0].details.goalId, "goal-projection-consumption");
+  assert.equal(projected.messages[0].details.continuationsUsed, 1);
+  assert.deepEqual(projected.messages.slice(1), [steering]);
+  assert.equal(h.compactions.length, 0);
+  assert.equal(h.sent.length, 0);
+  const consumedTransition = h.state().transition;
+  const toolCall = { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "tool-1", name: "status", arguments: {} }] };
+  const toolResult = { role: "toolResult", toolCallId: "tool-1", content: [{ type: "text", text: "result" }] };
+  const repeated = await h.handlers.get("context").at(-1)({ messages: [summary, steering, toolCall, toolResult] }, h.ctx);
+  assert.equal(h.state().transition, consumedTransition);
+  assert.equal(repeated.messages[0].details.automaticCompactionRequestId, "automatic-request");
+  assert.deepEqual(repeated.messages.slice(1), [steering, toolCall, toolResult]);
+
+  const rebuiltProjection = harness({ branch, sharedLogs: logs, specificationState: "existing", planState: "existing", sessionId: "projection-consumption" });
+  const rebuiltRepeated = await rebuiltProjection.handlers.get("context").at(-1)({ messages: [summary, steering, toolCall, toolResult] }, rebuiltProjection.ctx);
+  assert.equal(rebuiltProjection.state().transition, consumedTransition);
+  assert.deepEqual(rebuiltRepeated.messages.slice(1), [steering, toolCall, toolResult]);
+
+  await control(h, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 2 });
+  await h.emit("turn_end", finalEvent("steered pass"));
+  const abortedBefore = h.aborted(), suppressionTransition = h.state().transition;
+  await h.emit("before_agent_start", { prompt: "queued boundary" });
+  await h.emit("message_start", { message: projected.messages[0] });
+  assert.equal(h.aborted(), abortedBefore + 1);
+  await h.emit("agent_end", { messages: [] });
+  assert.equal(h.state().transition, suppressionTransition);
+  assert.equal(h.state().status, "running");
+  assert.equal(h.state().pendingDecision.action, "continue");
+
+  const rebuilt = harness({ branch, sharedLogs: logs, specificationState: "existing", planState: "existing", sessionId: "projection-consumption" });
+  const rebuiltTransition = rebuilt.state().transition;
+  await rebuilt.emit("before_agent_start", { prompt: "queued boundary after reload" });
+  await rebuilt.emit("message_start", { message: projected.messages[0] });
+  assert.equal(rebuilt.aborted(), 1);
+  await rebuilt.emit("agent_end", { messages: [] });
+  assert.equal(rebuilt.state().transition, rebuiltTransition);
+  assert.equal(rebuilt.state().status, "running");
+  assert.equal(rebuilt.state().pendingDecision.action, "continue");
+});
+
+test("projection consumption append failure leaves the armed queued boundary authoritative under host hook order", async () => {
+  const { current: h } = await armedProjectionHarness({ sessionId: "projection-append-failure" });
+  const summary = { role: "compactionSummary", summary: "", customInstructions: executionCompactionInstructions("automatic-request") };
+  const steering = { role: "user", content: "steering" };
+  await h.emit("before_agent_start", { prompt: "steering" });
+  await h.emit("message_start", { message: steering });
+  const transition = h.state().transition;
+  h.failStateAppendIn(1);
+  const result = await h.handlers.get("context").at(-1)({ messages: [summary, steering] }, h.ctx);
+  assert.deepEqual(result.messages, []);
+  assert.equal(h.aborted(), 1);
+  await h.emit("agent_end", { messages: [] });
+  assert.equal(h.state().transition, transition);
+  assert.equal(h.state().status, "running");
+  assert.equal(h.state().admittedContinuation.boundary.stage, "armed");
+  assert.match(h.notices.at(-1)[0], /could not durably record/);
+});
+
+test("post-summary near-matching execution boundaries fail closed without pausing the armed lifecycle", async () => {
+  const mismatches = {
+    source: "other", protocolVersion: 2, sessionId: "other-session", lifecycleId: "other-life", cycle: 3,
+    goalId: "other-goal", continuationsUsed: 2, boundaryIdentity: "other-goal:2", automaticCompactionRequestId: "other-request",
+  };
+  for (const [field, value] of Object.entries(mismatches)) {
+    const sessionId = `projection-near-match-${field}`;
+    const { current: h } = await armedProjectionHarness({ sessionId });
+    const summary = { role: "compactionSummary", summary: "", customInstructions: executionCompactionInstructions("automatic-request") };
+    const nearMatch = automaticExecutionBoundary(h.state(), { [field]: value });
+    await h.emit("before_agent_start", { prompt: `near match ${field}` });
+    await h.emit("message_start", { message: nearMatch });
+    const transition = h.state().transition;
+    const result = await h.handlers.get("context").at(-1)({ messages: [summary, nearMatch, { role: "user", content: "steering" }] }, h.ctx);
+    assert.deepEqual(result.messages, [], field);
+    assert.equal(h.aborted(), 1, field);
+    await h.emit("agent_end", { messages: [] });
+    assert.equal(h.state().transition, transition, field);
+    assert.equal(h.state().status, "running", field);
+    assert.equal(h.state().admittedContinuation.boundary.stage, "armed", field);
+    assert.match(h.notices.at(-1)[0], /stale or mismatched execution boundary/, field);
+  }
+
+  const { current: duplicate } = await armedProjectionHarness({ sessionId: "projection-duplicate-exact" });
+  const summary = { role: "compactionSummary", summary: "", customInstructions: executionCompactionInstructions("automatic-request") };
+  const exact = automaticExecutionBoundary(duplicate.state());
+  await duplicate.emit("before_agent_start", { prompt: "duplicate exact boundary" });
+  await duplicate.emit("message_start", { message: exact });
+  const transition = duplicate.state().transition;
+  const result = await duplicate.handlers.get("context").at(-1)({ messages: [summary, exact, exact] }, duplicate.ctx);
+  assert.deepEqual(result.messages, []);
+  await duplicate.emit("agent_end", { messages: [] });
+  assert.equal(duplicate.state().transition, transition);
+  assert.equal(duplicate.state().status, "running");
+  assert.equal(duplicate.state().admittedContinuation.boundary.stage, "armed");
+});
+
+test("unarmed, mismatched, and already-present automatic boundaries are not consumed or suppressed", async () => {
+  const { current: armed } = await armedProjectionHarness({ sessionId: "projection-mismatch" });
+  const wrongSummary = { role: "compactionSummary", summary: "", customInstructions: executionCompactionInstructions("other-request") };
+  assert.equal(await armed.handlers.get("context").at(-1)({ messages: [wrongSummary, { role: "user", content: "steering" }] }, armed.ctx), undefined);
+  const exact = automaticExecutionBoundary(armed.state());
+  const alreadyPresent = await armed.handlers.get("context").at(-1)({ messages: [{ role: "compactionSummary", summary: "", customInstructions: executionCompactionInstructions("automatic-request") }, exact, { role: "user", content: "steering" }] }, armed.ctx);
+  assert.equal(armed.state().admittedContinuation.boundary.stage, "armed");
+  assert.deepEqual(alreadyPresent.messages, [exact, { role: "user", content: "steering" }]);
+  await armed.emit("message_start", { message: { ...exact, details: { ...exact.details, automaticCompactionRequestId: "other-request" } } });
+  assert.equal(armed.aborted(), 0);
+
+  const plain = harness({ specificationState: "existing", planState: "existing", sessionId: "projection-unarmed" });
+  const initial = await startExecution(plain);
+  plain.addGoal({ goalId: "goal-unarmed", status: "active", active: true });
+  await control(plain, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 });
+  await plain.emit("turn_end", finalEvent("pass one"));
+  const goalMessage = { role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: "goal-unarmed", continuationsUsed: 1 } };
+  const projected = await plain.handlers.get("context").at(-1)({ messages: [goalMessage] }, plain.ctx);
+  await plain.emit("message_start", { message: { ...projected.messages[0], details: { ...projected.messages[0].details, automaticCompactionRequestId: "automatic-request" } } });
+  assert.equal(plain.aborted(), 0);
+});
 
 test("stale or replaced native goal continuations fail closed", async () => {
   const h = harness({ specificationState: "existing", planState: "existing" }); await startExecution(h); h.addGoal({ goalId: "current", status: "active", active: true });

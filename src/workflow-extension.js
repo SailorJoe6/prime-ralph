@@ -13,9 +13,11 @@ import {
 import {
   BLOCKED_MESSAGE_TYPE, EXECUTION_MESSAGE_TYPE, EXECUTION_PROTOCOL_VERSION, EXECUTION_STATE_ENTRY_TYPE,
   RESTORED_BLOCKED_GUIDANCE,
-  beginExecution, executionContextProjection, formatBlockedInjection, formatExecutionInjection,
+  beginExecution, consumeExecutionBoundaryProjection, exactExecutionBoundaryCorrelation, executionContextProjection, formatBlockedInjection, formatExecutionInjection,
   latestExecutionState, latestGoalState, loadBlockedSkill, loadExecuteSkill, nextExecutionState, reconcileGoalState,
+  shouldSuppressExecutionBoundary,
 } from "./execution.js";
+import { isExecutionCompactionSummary } from "./execution-boundary-compaction.js";
 import { appendExecutionLogEntry } from "./execution-log.js";
 import {
   adoptRestoredPlanningDocuments, archivePlanningDocuments, blockPlanningDocuments,
@@ -142,6 +144,19 @@ export function createWorkflowExtension({
     };
     const persistExecution = (ctx, state) => {
       pi.appendEntry(EXECUTION_STATE_ENTRY_TYPE, state); executionStates.set(sessionId(ctx), state); return state;
+    };
+    const executionBoundaryMessage = (ctx, state, mode) => {
+      const id = sessionId(ctx), admitted = state.admittedContinuation, identity = admitted?.identity;
+      let message = executionRoundBoundaries.get(id)?.identity === identity ? executionRoundBoundaries.get(id).message : null;
+      if (!message) {
+        message = { role: "custom", customType: EXECUTION_MESSAGE_TYPE, content: executeContent(ctx, state, mode), display: false, details: { source: "prime-ralph", protocolVersion: EXECUTION_PROTOCOL_VERSION, requestId: createRequestId(), sessionId: id, workflowPhase: "execution", invocationMode: mode, lifecycleId: state.lifecycleId, cycle: state.cycle, goalId: admitted?.goalId, continuationsUsed: admitted?.continuationsUsed, boundaryIdentity: identity, preserveTrigger: false } };
+      }
+      const automaticCompactionRequestId = admitted?.boundary?.requestId;
+      if (automaticCompactionRequestId && message.details?.automaticCompactionRequestId !== automaticCompactionRequestId) {
+        message = { ...message, details: { ...message.details, automaticCompactionRequestId } };
+      }
+      executionRoundBoundaries.set(id, { identity, message });
+      return message;
     };
     const hasPendingTerminalLog = (state) => ["block", "complete"].includes(state.pendingDecision?.action);
     const finishPendingExecutionLog = (ctx, state) => {
@@ -496,11 +511,7 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
       const admitted = live.admittedContinuation;
       const admittedGoalIndex = admitted ? event.messages.findLastIndex((message) => message?.role === "custom" && message.customType === "goal_context" && message.details?.kind === "continuation" && message.details?.goalId === admitted.goalId && message.details?.continuationsUsed === admitted.continuationsUsed) : -1;
       if (live.phase === "execution" && live.status === "running" && admittedGoalIndex >= 0 && admitted?.cycle === live.cycle && (goalIndex === admittedGoalIndex || goalIndex < lastUserIndex)) {
-        let message = executionRoundBoundaries.get(id)?.identity === admitted.identity ? executionRoundBoundaries.get(id).message : null;
-        if (!message) {
-          message = { role: "custom", customType: EXECUTION_MESSAGE_TYPE, content: executeContent(ctx, live, admitted.mode), display: false, details: { source: "prime-ralph", protocolVersion: EXECUTION_PROTOCOL_VERSION, requestId: createRequestId(), sessionId: id, workflowPhase: "execution", invocationMode: admitted.mode, lifecycleId: live.lifecycleId, cycle: live.cycle, boundaryIdentity: admitted.identity, preserveTrigger: false } };
-          executionRoundBoundaries.set(id, { identity: admitted.identity, message });
-        }
+        const message = executionBoundaryMessage(ctx, live, admitted.mode);
         const tail = event.messages.slice(admittedGoalIndex + 1).filter((candidate) => candidate?.role !== "custom" || candidate.customType !== "goal_context" || candidate.details?.kind !== "continuation");
         return { messages: [message, ...tail] };
       }
@@ -512,12 +523,7 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
         }
         const boundaryIdentity = `${goalId}:${continuationsUsed}`;
         if (live.admittedContinuation?.identity === boundaryIdentity && live.admittedContinuation?.cycle === live.cycle) {
-          let message = executionRoundBoundaries.get(id)?.identity === boundaryIdentity ? executionRoundBoundaries.get(id).message : null;
-          if (!message) {
-            const mode = live.admittedContinuation.mode;
-            message = { role: "custom", customType: EXECUTION_MESSAGE_TYPE, content: executeContent(ctx, live, mode), display: false, details: { source: "prime-ralph", protocolVersion: EXECUTION_PROTOCOL_VERSION, requestId: createRequestId(), sessionId: id, workflowPhase: "execution", invocationMode: mode, lifecycleId: live.lifecycleId, cycle: live.cycle, boundaryIdentity, preserveTrigger: false } };
-            executionRoundBoundaries.set(id, { identity: boundaryIdentity, message });
-          }
+          const message = executionBoundaryMessage(ctx, live, live.admittedContinuation.mode);
           return { messages: [message, ...event.messages.slice(goalIndex + 1)] };
         }
         const resetForBoundary = live.resetRequested === true, resumedForBoundary = live.resumed === true;
@@ -553,9 +559,36 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
         }
         const mode = resetForBoundary ? "execution-reset-running" : resumedForBoundary ? "execution-resume" : "execution-continue";
         live = persistExecution(ctx, nextExecutionState(live, { admittedContinuation: { identity: boundaryIdentity, goalId, continuationsUsed, cycle: live.cycle, mode }, resumed: false }));
-        const message = { role: "custom", customType: EXECUTION_MESSAGE_TYPE, content: executeContent(ctx, resetForBoundary ? { ...live, resetRequested: true } : live, mode), display: false, details: { source: "prime-ralph", protocolVersion: EXECUTION_PROTOCOL_VERSION, requestId: createRequestId(), sessionId: id, workflowPhase: "execution", invocationMode: mode, lifecycleId: live.lifecycleId, cycle: live.cycle, boundaryIdentity, preserveTrigger: false } };
-        executionRoundBoundaries.set(id, { identity: boundaryIdentity, message });
+        const message = executionBoundaryMessage(ctx, resetForBoundary ? { ...live, resetRequested: true } : live, mode);
         return { messages: [message, ...event.messages.slice(goalIndex + 1)] };
+      }
+      const automaticBoundary = live.admittedContinuation?.boundary;
+      const automaticSummaryIndex = automaticBoundary ? event.messages.findLastIndex((message) => isExecutionCompactionSummary(message, automaticBoundary.requestId)) : -1;
+      if (live.phase === "execution" && live.status === "running" && ["armed", "projection-consumed"].includes(automaticBoundary?.stage) && automaticSummaryIndex >= 0) {
+        const tail = event.messages.slice(automaticSummaryIndex + 1).filter((candidate) => !isExecutionCompactionSummary(candidate, automaticBoundary.requestId));
+        const executionBoundaries = tail.filter((candidate) => candidate?.customType === EXECUTION_MESSAGE_TYPE);
+        const exactBoundaries = executionBoundaries.filter((candidate) => exactExecutionBoundaryCorrelation(live, candidate));
+        if (executionBoundaries.length > 0 && (executionBoundaries.length !== 1 || exactBoundaries.length !== 1)) {
+          activeLifecycleTurns.delete(id);
+          ctx.abort();
+          ctx.ui.notify("Ralph rejected a stale or mismatched execution boundary after automatic compaction.", "error");
+          return { messages: [] };
+        }
+        if (exactBoundaries.length === 0) {
+          const message = executionBoundaryMessage(ctx, live, live.admittedContinuation.mode);
+          if (automaticBoundary.stage === "armed") {
+            try {
+              live = persistExecution(ctx, consumeExecutionBoundaryProjection(live, message));
+            } catch (error) {
+              activeLifecycleTurns.delete(id);
+              ctx.abort();
+              ctx.ui.notify("Ralph could not durably record the projected execution boundary; the queued boundary remains authoritative.", "error");
+              return { messages: [] };
+            }
+          }
+          activeLifecycleTurns.set(id, { kind: "execute" });
+          return { messages: [message, ...tail] };
+        }
       }
       if (live.pendingDecision?.action === "continue" && typeof live.pendingDecision.finalAssistantMessage === "string" && lastUserIndex > goalIndex) return;
       const newestRalphPhase = [...event.messages].reverse().find((message) => message?.role === "custom" && message.details?.source === "prime-ralph" && [EXECUTION_MESSAGE_TYPE, BLOCKED_MESSAGE_TYPE, PLANNING_MESSAGE_TYPE, PLANNING_STARTUP_MESSAGE_TYPE, SPECIFICATION_MESSAGE_TYPE, STARTUP_PREPARE_MESSAGE_TYPE, RESET_MESSAGE_TYPE].includes(message.customType));
@@ -599,6 +632,11 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
 
     pi.on("message_start", (event, ctx) => {
       const message = event.message, id = sessionId(ctx), live = execution(ctx, { reconcile: false });
+      if (shouldSuppressExecutionBoundary(live, message)) {
+        activeLifecycleTurns.delete(id);
+        ctx.abort();
+        return;
+      }
       if ((message?.role === "user" && live.status === "waiting") || message?.customType === "goal_context" || message?.customType === EXECUTION_MESSAGE_TYPE || (message?.customType === RESET_MESSAGE_TYPE && message.details?.workflowPhase === "execution" && message.details?.invocationMode !== "execution-reset-paused")) {
         activeLifecycleTurns.set(id, { kind: "execute" });
       }

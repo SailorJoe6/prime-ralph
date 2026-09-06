@@ -170,7 +170,7 @@ export function nextExecutionState(current, patch) {
   return Object.freeze(next);
 }
 
-function exactExecutionBoundaryCorrelation(state, message) {
+export function exactExecutionBoundaryCorrelation(state, message) {
   const admitted = state?.admittedContinuation, boundary = admitted?.boundary, details = message?.details;
   return message?.customType === EXECUTION_MESSAGE_TYPE && boundary != null && details?.source === "prime-ralph" && details.protocolVersion === EXECUTION_PROTOCOL_VERSION &&
     details.sessionId === state.sessionId && details.lifecycleId === state.lifecycleId && details.cycle === state.cycle &&
