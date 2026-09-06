@@ -100,7 +100,7 @@ const result = {
 const failures = [];
 if (result.primeAgentVersion !== "0.9.1") failures.push("wrong Prime Agent version");
 if (!result.providerTranscriptEquivalent) failures.push("provider context diverged from the native session transcript");
-if (JSON.stringify(result.registeredCommands) !== JSON.stringify(["reset", "spec-it-out", "plan", "execute"])) failures.push("wrong command surface");
+if (JSON.stringify(result.registeredCommands) !== JSON.stringify(["reset", "spec-it-out", "plan", "ralph-recover", "execute"])) failures.push("wrong command surface");
 for (const key of ["startupOrdered", "startupNewMode", "startupSingleMessage", "existingStartupMode", "existingStartupProtected", "resetNewClean", "existingPlanCurrentContext", "existingPlanProtected", "resetExistingClean", "specificationPhasePreserved", "explicitPlanClean", "sameSessionTransition", "planHandlerDidNotWrite"]) if (!result[key]) failures.push(key);
 if (result.executionEntries !== 0) failures.push("execution state was introduced");
 await startup.session.disposeAsync({ kernelSnapshot: false }); await existingStartup.session.disposeAsync({ kernelSnapshot: false }); await transition.session.disposeAsync({ kernelSnapshot: false });

@@ -156,6 +156,12 @@ function validLifecycleState(value, sessionId) {
   if (value.status === "waiting" && (!value.wait || typeof value.wait.id !== "string" || !value.wait.id)) return false;
   if (value.status !== "waiting" && value.wait != null) return false;
   if (value.phase === "blocked" && (typeof value.provenanceId !== "string" || !value.provenanceId)) return false;
+  if (value.recoveryRequired != null) {
+    const recovery = value.recoveryRequired;
+    const validIdentity = (item) => typeof item === "string" && item.length > 0 && item.length <= 200;
+    if (typeof recovery !== "object" || recovery.protocolVersion !== 1 || !validIdentity(recovery.recoveryId) || !validIdentity(recovery.requestId) ||
+        !validIdentity(recovery.rootRequestId) || !validIdentity(recovery.anchorId) || !validIdentity(recovery.priorLeafId) || value.phase !== "planning" || value.status !== "inactive") return false;
+  }
   return true;
 }
 export class ExecutionStateRecoveryError extends Error {
@@ -241,7 +247,7 @@ export function admitPendingExecutionRound(current) {
 
 export function beginExecution(current, { lifecycleId, driverGoalId = null }) {
   if (current.status !== "inactive" || current.phase === "blocked") throw new Error(`cannot start execution while Ralph lifecycle is ${current.status} in ${current.phase} phase`);
-  return nextExecutionState(current, { phase: "execution", status: "running", lifecycleId, cycle: 1, driverGoalId, pendingDecision: null, pendingRound: null, compactionHalted: false, resumeBlocked: false, wait: null, provenanceId: null, forwardConfirmed: false, admittedContinuation: null });
+  return nextExecutionState(current, { phase: "execution", status: "running", lifecycleId, cycle: 1, driverGoalId, pendingDecision: null, pendingRound: null, compactionHalted: false, resumeBlocked: false, wait: null, provenanceId: null, forwardConfirmed: false, admittedContinuation: null, recoveryRequired: null });
 }
 
 export function reconcileGoalState(current, goal) {

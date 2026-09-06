@@ -8,7 +8,7 @@ This document defines the standalone package boundary and the checks required be
 - Peer dependency: Prime Agent `0.9.1`.
 - ESM package with the exports listed in `package.json`.
 - Package contents are limited to `bin/`, `src/`, `templates/`, `scripts/`, `docs/`, `README.md`, and `LICENSE`.
-- The default extension registers production `/reset`, `/spec-it-out`, `/plan`, and `/execute` behavior plus the internal `ralph_lifecycle` control, and does not register or shadow `/clear`.
+- The default extension registers production `/reset`, `/spec-it-out`, `/plan`, `/execute`, and provider-free `/ralph-recover` behavior plus the internal `ralph_lifecycle` control, and does not register or shadow `/clear`.
 
 The default extension does not start an agent, select a provider, execute shell commands, invoke Beads, choose a repository, or supply task criteria. The separate initializer performs only its explicit filesystem setup and, only with `--beads` and missing Beads state, invokes `bd init --skip-agents --skip-hooks`.
 
@@ -63,7 +63,11 @@ The default extension:
 
 If Prime Agent refuses compaction because the session is too short or already compacted, no reset occurs, the conversation remains unchanged, and no projection fallback is used. The exact short-session message is `No reset was performed because the session is too short to warrant compaction.`
 
-The extension preserves the current host system prompt and does not invoke session replacement, tree, goal, autonomous, phase, or REPL lifecycle operations. Persistent state contains only protocol status, bounded mode metadata, and opaque request or entry IDs, not transcript or skill content. Research-only package APIs and POC executables are not shipped.
+Ordinary reset preserves the current host system prompt and does not invoke session replacement, tree, goal, autonomous, phase, or REPL lifecycle operations. Persistent state contains only protocol status, bounded mode metadata, and opaque request or entry IDs, not transcript or skill content. Research-only package APIs and POC executables are not shipped.
+
+## Provider-free recovery contract
+
+`/ralph-recover` validates one exact provider-visible poisoned reset transaction. It uses only same-session `navigateTree(anchorId, { summarize: false })`, rejects edit-semantic anchors, verifies the exact new leaf and session identity, preserves the abandoned branch, and then appends sanitized provenance followed by an inactive `recoveryRequired` workflow state. It starts no provider, compaction, goal, driver, or automatic execution. Append uncertainty quarantines the current runtime until reload. `prime-ralph recover --project <path>` only prints the non-mutating `prime-agent --no-extensions --cwd <project>` fallback and never starts it.
 
 ## Validation contract
 
@@ -86,6 +90,9 @@ npm run accept:planning
 PRIME_AGENT_ROOT=/path/to/prime-agent \
 PRIME_AGENT_CORE_ROOT=/path/to/prime-agent/node_modules/@earendil-works/pi-agent-core \
 npm run accept:execution
+PRIME_AGENT_ROOT=/path/to/prime-agent \
+PRIME_AGENT_CORE_ROOT=/path/to/prime-agent/node_modules/@earendil-works/pi-agent-core \
+npm run accept:recovery
 npm run accept:execution-pause-resume
 npm run accept:execution-admission-failure
 PRIME_AGENT_ROOT=/path/to/prime-agent \
@@ -129,6 +136,7 @@ Then extract the produced tarball in a clean temporary directory, import `src/in
 - The specification lifecycle acceptance proves startup ordering, reload suppression, context retention, native reset boundaries, transcript transparency, and an unambiguous native extension-command catalog on Prime Agent `0.9.1`.
 - The planning lifecycle acceptance proves phase selection, ordered skill delivery, clean and current-context `/plan` paths, both planning reset branches, document protection, and no execution start.
 - The opt-in model matrices prove only the recorded provider/model outcomes under its restricted fixture tools; it covers new creation, the initial existing-spec menu, confirmed future creation, agreed active update, cancellation, and reset-existing behavior, and is not deterministic CI evidence.
+- The native recovery acceptance proves exact provider-free tree navigation, append-only JSONL prefix and abandoned-tail retention, same session and live REPL continuity, unchanged worktree, cancellation safety, and zero provider/goal/driver action.
 - The disk-backed execution acceptance proves successful reset-flavor compaction precedes each execute provider request, automatic projection is absent, pause/resume retains the complete current iteration, and JSONL, session identity, and REPL remain continuous on Prime Agent `0.9.1`.
 - The disk-backed blocked-recovery acceptance proves a real manually restored pair is verified and accepted without another move, native compaction precedes the blocked pass and every post-boundary message remains visible unchanged through confirmation, execution does not restart automatically, and a later `/execute` creates a fresh run.
 - The busy acceptance proves ordering behind an active parent turn and existing follow-up.

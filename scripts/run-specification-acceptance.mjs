@@ -105,7 +105,7 @@ const result = {
   resetExcludedStaleConversation: ![userSentinel, laterSentinel].some((sentinel) => text(resetContext).includes(sentinel)),
   resetProviderMessageCount: resetContext.messages.length,
   planExists: existsSync(join(cwd, ".ralph/plans/EXECUTION_PLAN.md")),
-  registeredCommands: [...loader.getExtensions().extensions[0].commands.keys()].filter((name) => ["reset", "spec-it-out", "plan", "execute"].includes(name)),
+  registeredCommands: [...loader.getExtensions().extensions[0].commands.keys()].filter((name) => ["reset", "spec-it-out", "plan", "ralph-recover", "execute"].includes(name)),
   executionEntries: entries.filter((entry) => /execute|goal|blocked/.test(entry.customType ?? "")).length,
 };
 const failures = [];
@@ -117,7 +117,7 @@ if (!result.newPreservedConversation || !result.newModeDelivered) failures.push(
 if (!result.commandHandlersDidNotWrite) failures.push("specification command handler mutated planning documents");
 if (!result.existingPreservedConversation || !result.existingModeDelivered) failures.push("existing-spec command lost context or metadata");
 if (!result.resetPrepareFirst || !result.resetExistingModeDelivered || !result.resetExcludedStaleConversation ) failures.push("specification reset boundary incorrect");
-if (result.planExists || result.executionEntries !== 0 || !result.registeredCommands.includes("plan") || !result.registeredCommands.includes("execute")) failures.push("specification acceptance changed planning documents or execution state");
+if (result.planExists || result.executionEntries !== 0 || !result.registeredCommands.includes("plan") || !result.registeredCommands.includes("execute") || !result.registeredCommands.includes("ralph-recover")) failures.push("specification acceptance changed planning documents or execution state");
 await session.disposeAsync({ kernelSnapshot: false });
 if (failures.length) { console.error(JSON.stringify({ ...result, failures }, null, 2)); process.exit(1); }
 console.log(JSON.stringify(result, null, 2));

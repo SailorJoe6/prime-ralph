@@ -2,7 +2,7 @@
 
 `prime-ralph` is a standalone, project-local [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent) extension for Ralph-style development workflows in one durable session.
 
-The current release implements interactive specification and planning plus a safe `/execute` lifecycle with native-goal continuation, waiting, pause/resume, blocked recovery, optional archival, and append-only execution logging.
+The current release implements interactive specification and planning plus a safe `/execute` lifecycle with native-goal continuation, waiting, pause/resume, blocked recovery, optional archival, append-only execution logging, and provider-free recovery from one exact poisoned boundary.
 
 ## Slice 1 behavior
 
@@ -33,7 +33,7 @@ A session that starts with an active specification enters interactive planning. 
 
 The command handler never creates or edits an execution plan. The project `plan` skill owns creation, warnings, discussion, explicit update consent, and cancellation. Only the exact `.ralph/plans/EXECUTION_PLAN.md` regular file is active; nested and conflicting paths do not activate it. Control-path symlinks are detected without being followed and produce a path-specific error with replacement-or-removal guidance.
 
-`/reset`, `/spec-it-out`, `/plan`, and `/execute` are registered. Execution remains inactive until a valid explicit `/execute`.
+`/reset`, `/spec-it-out`, `/plan`, `/execute`, and provider-free `/ralph-recover` are registered. Execution remains inactive until a valid explicit `/execute`.
 
 
 ## Slice 5 execution behavior
@@ -71,6 +71,8 @@ prime-ralph init --stealth
 
 `--beads` is the only way to select Beads-aware templates. `--stealth` adds only artifacts created by that invocation to the Git worktree's local exclude file. Repeated initialization preserves existing skills, plans, logs, links, extension entries, and other project content. Package updates never run initialization or refresh project files.
 
+When a poisoned boundary prevents ordinary provider interaction, use `/ralph-recover`. If the extension cannot load, `prime-ralph recover --project /path/to/project` prints a non-mutating fallback: stop the affected process and start a fresh `prime-agent --no-extensions --cwd <project>` session without `--continue`, `--resume`, or `--fork`. The helper does not start the command or edit project/session state.
+
 After initialization, start Prime Agent in the project. With no active specification, `prepare` runs automatically once. Use:
 
 ```text
@@ -78,6 +80,7 @@ After initialization, start Prime Agent in the project. With no active specifica
 /plan
 /execute
 /reset
+/ralph-recover
 ```
 
 The package contains no host-specific repository, provider, deployment, or task policy. Project skill files provide model instructions; the extension supplies mechanics only. See [`docs/initialization.md`](docs/initialization.md).
@@ -94,6 +97,7 @@ The package contains no host-specific repository, provider, deployment, or task 
 | Block, unblock, and archive transactions | `prime-ralph/planning-transaction` |
 | Append-only execution log | `prime-ralph/execution-log` |
 | Reset extension factory | `prime-ralph/reset-extension` |
+| Poisoned-boundary recovery validator | `prime-ralph/recovery` |
 | Prepare validation and injection | `prime-ralph/reset-skill` |
 
 ## Development and acceptance
@@ -113,6 +117,9 @@ npm run accept:planning
 PRIME_AGENT_ROOT=/path/to/prime-agent \
 PRIME_AGENT_CORE_ROOT=/path/to/prime-agent/node_modules/@earendil-works/pi-agent-core \
 npm run accept:execution
+PRIME_AGENT_ROOT=/path/to/prime-agent \
+PRIME_AGENT_CORE_ROOT=/path/to/prime-agent/node_modules/@earendil-works/pi-agent-core \
+npm run accept:recovery
 npm run accept:execution-pause-resume
 npm run accept:execution-admission-failure
 PRIME_AGENT_ROOT=/path/to/prime-agent \
@@ -144,7 +151,7 @@ npm run package:check
 npm pack --dry-run
 ```
 
-The reset disk-backed acceptance uses a deterministic provider and a real Prime Agent IPython kernel. It proves native compaction removes stale provider messages while the extension performs no successful context rewrite and the session ID, JSONL path/history, system baseline, and REPL value survive. The specification acceptance uses a deterministic provider and real Prime Agent `0.9.1` extension lifecycle to prove startup ordering, reload suppression, context preservation, invocation modes, physical reset boundaries, and an unambiguous native command catalog without direct Ralph skill duplicates. Planning acceptance additionally proves startup and explicit transition, both planning reset branches, current-context existing-plan discussion, and plan protection. Execution acceptance and the dedicated pause/resume acceptance together prove native-goal-driven rounds, pause/resume continuity with feedback and acknowledgement, compaction-before-provider ordering, no automatic projection fallback, tracked-RLM deferral, completed-cycle logging, and stable session, JSONL, and REPL identity. The admission-failure acceptance injects execution-state append failures at both real Prime Agent pre-provider admission gates, restores storage, sends another user probe, and proves that the next-cycle provider request never starts. Blocked-recovery acceptance uses the real filesystem and Prime Agent lifecycle to prove manually restored files are verified without being moved again, the complete visible history stays provider-visible through tool results, and execution waits for a later `/execute`. The opt-in model acceptances are separate behavioral evidence and never run as part of `npm test`. The busy acceptance proves a reset queues behind active work and an existing follow-up, and that a duplicate pending request produces only one boundary.
+The reset disk-backed acceptance uses a deterministic provider and a real Prime Agent IPython kernel. It proves native compaction removes stale provider messages while the extension performs no successful context rewrite and the session ID, JSONL path/history, system baseline, and REPL value survive. The specification acceptance uses a deterministic provider and real Prime Agent `0.9.1` extension lifecycle to prove startup ordering, reload suppression, context preservation, invocation modes, physical reset boundaries, and an unambiguous native command catalog without direct Ralph skill duplicates. Planning acceptance additionally proves startup and explicit transition, both planning reset branches, current-context existing-plan discussion, and plan protection. Execution acceptance and the dedicated pause/resume acceptance together prove native-goal-driven rounds, pause/resume continuity with feedback and acknowledgement, compaction-before-provider ordering, no automatic projection fallback, tracked-RLM deferral, completed-cycle logging, and stable session, JSONL, and REPL identity. The provider-free recovery acceptance uses a real Prime Agent `0.9.1` session tree and live IPython kernel to prove exact native navigation, append-only JSONL prefix retention, abandoned-tail retention, unchanged session/worktree identity, cancellation safety, zero provider/goal/driver action, and idempotence. The admission-failure acceptance injects execution-state append failures at both real Prime Agent pre-provider admission gates, restores storage, sends another user probe, and proves that the next-cycle provider request never starts. Blocked-recovery acceptance uses the real filesystem and Prime Agent lifecycle to prove manually restored files are verified without being moved again, the complete visible history stays provider-visible through tool results, and execution waits for a later `/execute`. The opt-in model acceptances are separate behavioral evidence and never run as part of `npm test`. The busy acceptance proves a reset queues behind active work and an existing follow-up, and that a duplicate pending request produces only one boundary.
 
 ## Current public-API boundary
 

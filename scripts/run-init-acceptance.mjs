@@ -18,7 +18,7 @@ if (loaded.errors.length !== 0) throw new Error(`initialized extension load fail
 if (loaded.extensions.length !== 1) throw new Error(`expected one initialized extension, got ${loaded.extensions.length}`);
 const extension = loaded.extensions[0];
 const commandNames = [...extension.commands.keys()];
-if (JSON.stringify(commandNames) !== JSON.stringify(["reset", "spec-it-out", "plan", "execute"]) || extension.commands.has("clear")) throw new Error("initialized extension command contract failed");
+if (JSON.stringify(commandNames) !== JSON.stringify(["reset", "spec-it-out", "plan", "ralph-recover", "execute"]) || extension.commands.has("clear")) throw new Error("initialized extension command contract failed");
 if (!extension.path.endsWith("/.prime/agent/extensions/prime-ralph/index.js")) throw new Error(`unexpected discovered path: ${extension.path}`);
 if (existsSync(join(cwd, ".agents"))) throw new Error("clean initialization exposed internal Ralph prompts under .agents");
 const initializedExecute = readFileSync(join(cwd, ".ralph/skills/execute/SKILL.md"), "utf8");
@@ -36,9 +36,9 @@ if (rpc.error) throw rpc.error;
 const rpcRecords = rpc.stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line));
 const rpcCommands = rpcRecords.find((record) => record.id === "commands")?.data?.commands ?? [];
 const ralphCatalog = rpcCommands.filter((command) => command.sourceInfo?.path?.startsWith(`${cwd}/`) &&
-  (command.name === "reset" || CANONICAL_COMMAND_NAMES.has(command.name) || command.name.startsWith("skill:") && CANONICAL_COMMAND_NAMES.has(command.name.slice(6))));
+  (command.name === "reset" || command.name === "ralph-recover" || CANONICAL_COMMAND_NAMES.has(command.name) || command.name.startsWith("skill:") && CANONICAL_COMMAND_NAMES.has(command.name.slice(6))));
 const catalogSummary = ralphCatalog.map(({ name, source }) => ({ name, source }));
-const expectedCatalog = [{ name: "reset", source: "extension" }, { name: "spec-it-out", source: "extension" }, { name: "plan", source: "extension" }, { name: "execute", source: "extension" }];
+const expectedCatalog = [{ name: "reset", source: "extension" }, { name: "spec-it-out", source: "extension" }, { name: "plan", source: "extension" }, { name: "ralph-recover", source: "extension" }, { name: "execute", source: "extension" }];
 if (rpc.status !== 0 || JSON.stringify(catalogSummary) !== JSON.stringify(expectedCatalog)) {
   throw new Error(`native Ralph command catalog failed: status=${rpc.status} expected=${JSON.stringify(expectedCatalog)} actual=${JSON.stringify(catalogSummary)}`);
 }

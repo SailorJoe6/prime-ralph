@@ -109,7 +109,7 @@ const result = {
   jsonlRetained: [userSentinel, assistantSentinel, toolSentinel].every((sentinel) => jsonl.includes(sentinel)),
   resetMessages: entries.filter((entry) => entry.type === "custom_message" && entry.customType === "prime_ralph_reset_prepare").length,
   resetModes: entries.filter((entry) => entry.type === "custom_message" && entry.customType === "prime_ralph_reset_prepare").map((entry) => entry.details?.mode),
-  resetCompactions: entries.filter((entry) => entry.type === "compaction" && entry.customInstructions?.startsWith("prime-ralph-reset:v2:")).length,
+  resetCompactions: entries.filter((entry) => entry.type === "compaction" && entry.customInstructions?.startsWith("prime-ralph-reset:v3:")).length,
   refusedResetPreservedProviderCount: call === callsBeforeRefusedReset,
   refusedResetState: entries.filter((entry) => entry.type === "custom" && entry.customType === "prime_ralph_reset_state").at(-1)?.data?.reason,
   goalsOrPhases: entries.filter((entry) => /goal|phase|execute|blocked/.test(entry.customType ?? "")).length,

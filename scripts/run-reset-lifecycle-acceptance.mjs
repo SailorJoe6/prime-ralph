@@ -22,7 +22,7 @@ await Promise.all([mkdir(join(cwd, ".ralph/skills/prepare"), { recursive: true }
 await symlink(new URL("../src", import.meta.url), join(extensionRoot, "prime-ralph"), "dir");
 const delayDir = join(extensionRoot, "delay-compaction");
 await mkdir(delayDir);
-await writeFile(join(delayDir, "index.js"), `export default function (pi) { pi.on("session_before_compact", async (event) => { if (event.customInstructions?.startsWith("prime-ralph-reset:v2:")) await new Promise((resolve) => setTimeout(resolve, 100)); }); }\n`);
+await writeFile(join(delayDir, "index.js"), `export default function (pi) { pi.on("session_before_compact", async (event) => { if (event.customInstructions?.startsWith("prime-ralph-reset:v3:")) await new Promise((resolve) => setTimeout(resolve, 100)); }); }\n`);
 const prepareSentinel = "LIFECYCLE_PREPARE_4d61";
 const staleSentinel = "LIFECYCLE_STALE_a90e";
 await writeFile(join(cwd, ".ralph/skills/prepare/SKILL.md"), `---\nname: prepare\ndescription: Lifecycle acceptance fixture\n---\n\n${prepareSentinel}\n`);
@@ -76,7 +76,7 @@ await afterResume.session.promptAndWait("AFTER_REOPEN");
 const resumedText = JSON.stringify(afterResume.contexts[0]);
 const resumeEvidence = {
   sameSession: afterResume.session.sessionId === resumeId && afterResume.session.sessionFile === resumeFile,
-  oneCompaction: preResumeEntries.filter((entry) => entry.type === "compaction" && entry.customInstructions?.startsWith("prime-ralph-reset:v2:")).length === 1,
+  oneCompaction: preResumeEntries.filter((entry) => entry.type === "compaction" && entry.customInstructions?.startsWith("prime-ralph-reset:v3:")).length === 1,
   staleExcluded: !resumedText.includes(staleSentinel),
   nativeTranscriptPreserved: afterResume.transcriptMatches[0] === true,
   prepareOnce: resumedText.split(prepareSentinel).length - 1 === 1,

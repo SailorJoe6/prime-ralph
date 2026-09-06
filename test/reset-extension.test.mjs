@@ -24,7 +24,7 @@ function harness({ branch = [], persistSent = true, sendError, appendError, spec
     appendEntry(customType, data) {
       appendCalls += 1;
       if (appendError || appendCalls === appendFailureAt) throw appendError ?? new Error("injected append failure");
-      const entry = { type: "custom", id: `e${++nextEntry}`, customType, data };
+      const entry = { type: "custom", id: `e${++nextEntry}`, parentId: branch.at(-1)?.id ?? null, customType, data };
       entries.push(entry); branch.push(entry);
     },
     sendMessage(message, options) {
@@ -227,13 +227,14 @@ test("admission callback failure keeps the durable boundary fail-closed for late
 
 test("reload rejects a persisted but unadmitted prepare boundary", () => {
   const branch = [
-    { type: "custom", id: "m", customType: RESET_MARKER_TYPE, data: { source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId: "r1" } },
-    { type: "custom", id: "s", customType: RESET_STATE_TYPE, data: { source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId: "r1", status: "prepare_pending" } },
-    { type: "custom_message", id: "p", customType: RESET_MESSAGE_TYPE, details: { source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId: "r1", mode: "compaction" } },
+    { type: "custom", id: "m", customType: RESET_MARKER_TYPE, data: { source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId: "r1", command: "plan", workflowPhase: "planning", invocationMode: "planning-new", sessionId: "session-1" } },
+    { type: "custom", id: "s", customType: RESET_STATE_TYPE, data: { source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId: "r1", status: "prepare_pending", command: "plan", workflowPhase: "planning", invocationMode: "planning-new", sessionId: "session-1" } },
+    { type: "custom_message", id: "p", customType: RESET_MESSAGE_TYPE, details: { source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId: "r1", mode: "compaction", command: "plan", workflowPhase: "planning", invocationMode: "planning-new", sessionId: "session-1" } },
   ];
   const h = harness({ branch }); h.handlers.get("session_start")({}, h.ctx);
   assert.equal(h.sent.length, 0); assert.equal(h.entries.at(-1).data.status, "interrupted");
   assert.equal(h.entries.at(-1).data.boundaryExists, true);
+  assert.deepEqual({ command: h.entries.at(-1).data.command, workflowPhase: h.entries.at(-1).data.workflowPhase, invocationMode: h.entries.at(-1).data.invocationMode, sessionId: h.entries.at(-1).data.sessionId }, { command: "plan", workflowPhase: "planning", invocationMode: "planning-new", sessionId: "session-1" });
   assert.deepEqual(h.handlers.get("context")({ messages: [{ role: "custom", ...branch[2] }] }, h.ctx), { messages: [] });
   assert.equal(h.getAborts(), 1);
 });

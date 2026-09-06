@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Type } from "typebox";
 import { createResetExtension } from "./reset-extension.js";
+import { RECOVERY_STATE_TYPE, RalphRecoveryError, branchForLeaf, planRalphRecovery, recoveryRecord } from "./recovery.js";
 import { formatPrepareInjection, loadPrepareSkill } from "./reset-skill.js";
 import {
   formatPlanningInjection, hasPlanningStartupBoundary, inspectActivePlan, inspectBlockedPlanningDocuments,
@@ -75,7 +76,7 @@ export function createWorkflowExtension({
   appendLog = appendExecutionLogEntry, createRequestId = randomUUID, now = () => new Date(), closeoutTimeoutMs = 30_000,
 } = {}) {
   return function workflowExtension(pi) {
-    const startupSessions = new Set(), sessionPhases = new Map(), executionStates = new Map(), activeLifecycleTurns = new Map(), activeBlockedTurns = new Set(), lifecycleCloseoutWaiters = new Map(), completedLifecycleCloseouts = new Map();
+    const startupSessions = new Set(), sessionPhases = new Map(), executionStates = new Map(), activeLifecycleTurns = new Map(), activeBlockedTurns = new Set(), lifecycleCloseoutWaiters = new Map(), completedLifecycleCloseouts = new Map(), recoveryTreeIntents = new Map(), recoveryQuarantinedSessions = new Set();
     const sessionId = (ctx) => ctx.sessionManager.getSessionId();
     const closeoutIdentity = (message) => JSON.stringify([message?.timestamp ?? null, message?.stopReason ?? null, createHash("sha256").update(assistantText(message)).digest("hex")]);
     const finalAssistantImmediatelyBefore = (messages, beforeIndex) => {
@@ -165,6 +166,52 @@ export function createWorkflowExtension({
       return reconcilePlanningLocation(ctx, reconciled);
     };
     const goal = (ctx) => latestGoalState(branch(ctx));
+    const recoverySnapshot = (ctx) => {
+      const id = sessionId(ctx), header = ctx.sessionManager.getHeader(), sessionFile = ctx.sessionManager.getSessionFile?.();
+      const entries = ctx.sessionManager.getEntries(), currentBranch = branch(ctx), leafId = ctx.sessionManager.getLeafId();
+      if (header?.id !== id || typeof sessionFile !== "string" || !sessionFile) throw new RalphRecoveryError("Ralph recovery requires one exact persisted session");
+      return { id, sessionFile, entries, branch: currentBranch, leafId, plan: planRalphRecovery({ branch: currentBranch, entries, sessionId: id, leafId }) };
+    };
+    const providerRecoveryBlocked = (ctx) => {
+      const id = sessionId(ctx);
+      if (recoveryQuarantinedSessions.has(id)) return true;
+      try {
+        const kind = recoverySnapshot(ctx).plan.kind;
+        if (["navigate", "append-provenance", "append-inactive"].includes(kind)) return true;
+      } catch {}
+      const currentBranch = branch(ctx);
+      const lastCompactionIndex = currentBranch.findLastIndex((entry) => entry?.type === "compaction");
+      const unsafeLegacyBoundary = currentBranch.some((entry, index) => {
+        if (index < lastCompactionIndex || entry?.type !== "custom_message" || entry.customType !== RESET_MESSAGE_TYPE || entry.details?.source !== "prime-ralph" || entry.details?.protocolVersion !== 2) return false;
+        const states = currentBranch.filter((candidate) => candidate?.type === "custom" && candidate.customType === RESET_STATE_TYPE && candidate.data?.source === "prime-ralph" && candidate.data?.protocolVersion === 2 && candidate.data?.requestId === entry.details?.requestId);
+        return states.at(-1)?.data?.status !== "completed";
+      });
+      if (unsafeLegacyBoundary) return true;
+      const latestWorkflowIndex = currentBranch.findLastIndex((entry) => entry?.type === "custom" && entry.customType === EXECUTION_STATE_ENTRY_TYPE && entry.data?.source === "prime-ralph" && entry.data?.sessionId === id);
+      const latestRecoveryIndex = currentBranch.findLastIndex((entry) => entry?.type === "custom" && entry.customType === RECOVERY_STATE_TYPE && entry.data?.source === "prime-ralph");
+      return latestRecoveryIndex > latestWorkflowIndex;
+    };
+    const rejectRecoveryProviderAdmission = (ctx) => {
+      if (!providerRecoveryBlocked(ctx)) return false;
+      ctx.abort();
+      ctx.ui.notify("Ralph recovery is poisoned, incomplete, or quarantined. No provider request was admitted; use /ralph-recover or reload after an uncertain append.", "error");
+      return true;
+    };
+    const ensureRecoveryAnchorHasNoLiveGoal = (entries, anchorId) => {
+      const anchorBranch = branchForLeaf(entries, anchorId), nativeGoal = latestGoalState(anchorBranch);
+      if (["active", "paused", "budget_limited"].includes(nativeGoal?.status)) throw new RalphRecoveryError("Ralph recovery anchor retains a live native goal");
+    };
+    const appendRecoveryInactive = (ctx, record) => {
+      const current = latestExecutionState(branch(ctx), sessionId(ctx));
+      const recovered = nextExecutionState(current, {
+        phase: "planning", status: "inactive", lifecycleId: null, cycle: 0, driverGoalId: null, pendingDecision: null, pendingRound: null,
+        admittedContinuation: null, compactionHalted: false, resumeBlocked: false, wait: null, pausedWait: null, pauseReason: null,
+        provenanceId: null, forwardConfirmed: false, resetRequested: false, block: null, blockedContextEstablished: false, blockedContextMode: null,
+        recovery: null, adoption: null, recoveryRequired: { protocolVersion: 1, recoveryId: record.recoveryId, requestId: record.requestId,
+          rootRequestId: record.rootRequestId, anchorId: record.anchorId, priorLeafId: record.priorLeafId },
+      });
+      return persistExecution(ctx, recovered);
+    };
     const exactPendingRoundBoundary = (state, message) => {
       const pending = state?.pendingRound, details = message?.details;
       return pending != null && message?.customType === RESET_MESSAGE_TYPE && details?.source === "prime-ralph" &&
@@ -490,6 +537,70 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
       },
     });
 
+    pi.registerCommand("ralph-recover", {
+      description: "Recover operator control from one exact poisoned Ralph boundary without a provider call",
+      handler: async (args, ctx) => {
+        if (args.trim()) throw new Error("Usage: /ralph-recover");
+        const commandSessionId = sessionId(ctx);
+        if (recoveryQuarantinedSessions.has(commandSessionId)) {
+          ctx.ui.notify("Ralph recovery is quarantined after an uncertain in-memory append. Reload or restart the affected Prime Agent process before retrying; no provider request was started.", "error"); return;
+        }
+        if (recoveryTreeIntents.has(commandSessionId)) { ctx.ui.notify("A Ralph recovery navigation is already active.", "warning"); return; }
+        let snapshot;
+        try { snapshot = recoverySnapshot(ctx); }
+        catch (error) {
+          const reason = error instanceof RalphRecoveryError ? error.message : "Ralph recovery evidence could not be validated";
+          ctx.ui.notify(`${reason}. No provider request, compaction, goal, or driver was started.`, "error"); return;
+        }
+        let { plan } = snapshot;
+        if (plan.kind === "completed") {
+          ctx.ui.notify("Ralph provider-free recovery is already complete. Inspect the worktree, planning documents, and issue state before a later explicit /execute.", "info"); return;
+        }
+        try {
+          if (["navigate", "append-provenance", "append-inactive"].includes(plan.kind)) ensureRecoveryAnchorHasNoLiveGoal(snapshot.entries, plan.candidate.anchorId);
+          if (plan.kind === "navigate") {
+            if (ctx.sessionManager.getLeafId() !== snapshot.leafId) throw new RalphRecoveryError("Ralph recovery leaf changed before navigation");
+            if (typeof ctx.navigateTree !== "function") throw new RalphRecoveryError("Prime Agent tree navigation is unavailable");
+            recoveryTreeIntents.set(snapshot.id, { oldLeafId: snapshot.leafId, targetId: plan.candidate.anchorId });
+            let result;
+            try { result = await ctx.navigateTree(plan.candidate.anchorId, { summarize: false }); }
+            finally { recoveryTreeIntents.delete(snapshot.id); }
+            if (result?.cancelled === true) {
+              if (ctx.sessionManager.getLeafId() !== snapshot.leafId || ctx.sessionManager.getSessionId() !== snapshot.id || ctx.sessionManager.getSessionFile?.() !== snapshot.sessionFile) {
+                recoveryQuarantinedSessions.add(snapshot.id); throw new RalphRecoveryError("cancelled recovery changed session or leaf identity");
+              }
+              throw new RalphRecoveryError("Ralph recovery tree navigation was cancelled");
+            }
+            if (ctx.sessionManager.getLeafId() !== plan.candidate.anchorId) { recoveryQuarantinedSessions.add(snapshot.id); throw new RalphRecoveryError("Ralph recovery navigation reached the wrong session leaf"); }
+            if (ctx.sessionManager.getSessionId() !== snapshot.id || ctx.sessionManager.getSessionFile?.() !== snapshot.sessionFile) { recoveryQuarantinedSessions.add(snapshot.id); throw new RalphRecoveryError("Ralph recovery changed session identity"); }
+            resetRuntime.relinquishAfterRecovery(plan.candidate.requestId);
+            plan = { kind: "append-provenance", candidate: plan.candidate, priorLeafId: snapshot.leafId };
+          }
+          let record = plan.record;
+          if (plan.kind === "append-provenance") {
+            const recoveryId = createRequestId();
+            record = recoveryRecord(plan.candidate, { recoveryId, sessionId: snapshot.id, priorLeafId: plan.priorLeafId });
+            pi.appendEntry(RECOVERY_STATE_TYPE, record);
+            const verified = recoverySnapshot(ctx).plan;
+            if (verified.kind !== "append-inactive" || verified.record?.recoveryId !== record.recoveryId) throw new RalphRecoveryError("Ralph recovery provenance append was not durably exact");
+            plan = { kind: "append-inactive", record };
+          }
+          if (plan.kind === "append-inactive") {
+            appendRecoveryInactive(ctx, record);
+            const verified = recoverySnapshot(ctx).plan;
+            if (verified.kind !== "completed" || verified.record?.recoveryId !== record.recoveryId) throw new RalphRecoveryError("Ralph recovery workflow-state append was not durably exact");
+          }
+          setPhase(ctx, "planning");
+          ctx.ui.notify("Ralph recovered operator control without a provider call. Execution remains inactive and recovery-required. Inspect the worktree, active planning documents, and issue state before a later explicit /execute.", "warning");
+        } catch (error) {
+          const afterNavigation = plan?.kind === "append-provenance" || plan?.kind === "append-inactive" || ctx.sessionManager.getLeafId() !== snapshot.leafId || ctx.sessionManager.getSessionId() !== snapshot.id || ctx.sessionManager.getSessionFile?.() !== snapshot.sessionFile;
+          if (afterNavigation) { recoveryQuarantinedSessions.add(snapshot.id); recoveryQuarantinedSessions.add(sessionId(ctx)); }
+          const reason = error instanceof RalphRecoveryError ? error.message : "Ralph recovery stopped during durable state commit";
+          ctx.ui.notify(`${reason}. Recovery remains fail-closed; no provider request, compaction, goal, or driver was started. Retry /ralph-recover or use the documented no-extensions fallback.`, "error");
+        }
+      },
+    });
+
     pi.registerCommand("execute", {
       description: "Start or resume the safe Ralph execution lifecycle",
       handler: async (args, ctx) => {
@@ -520,6 +631,7 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
     });
 
     pi.on("before_agent_start", (_event, ctx) => {
+      if (rejectRecoveryProviderAdmission(ctx)) return;
       const live = requireTerminalLogReady(execution(ctx)), id = sessionId(ctx);
       if (live.phase === "execution" && live.status === "running") activeLifecycleTurns.set(id, { kind: "execute" });
       else if (live.status === "waiting") activeLifecycleTurns.set(id, { kind: "waiting-check" });
@@ -533,6 +645,7 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
     });
 
     pi.on("context", async (event, ctx) => {
+      if (rejectRecoveryProviderAdmission(ctx)) return { messages: [] };
       let live = execution(ctx), id = sessionId(ctx);
       const lastUserIndex = event.messages.findLastIndex((message) => message?.role === "user");
       const goalIndex = event.messages.findLastIndex((message) => message?.role === "custom" && message.customType === "goal_context" && message.details?.kind === "continuation");
@@ -711,7 +824,21 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
       }
     });
 
+    pi.on("session_before_tree", (event, ctx) => {
+      const intent = recoveryTreeIntents.get(sessionId(ctx));
+      if (!intent) return;
+      if (event.signal?.aborted !== false || ctx.sessionManager.getLeafId() !== intent.oldLeafId || event.preparation?.targetId !== intent.targetId ||
+          event.preparation?.oldLeafId !== intent.oldLeafId || event.preparation?.commonAncestorId !== intent.targetId || event.preparation?.userWantsSummary !== false) return { cancel: true };
+    });
+
+    pi.on("session_tree", (_event, ctx) => {
+      const id = sessionId(ctx);
+      executionStates.delete(id); sessionPhases.delete(id); activeLifecycleTurns.delete(id); activeBlockedTurns.delete(id);
+      settleLifecycleCloseout(id);
+    });
+
     pi.on("session_shutdown", (event, ctx) => {
+      recoveryTreeIntents.delete(sessionId(ctx));
       settleLifecycleCloseout(sessionId(ctx));
       if (event.reason === "reload") return;
       const live = execution(ctx, { reconcile: false }); if (!["running", "waiting", "paused"].includes(live.status)) return;
@@ -722,7 +849,20 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
 
     pi.on("session_start", async (event, ctx) => {
       if ((ctx.sessionManager.getHeader()?.rlmDepth ?? 0) > 0) return;
-      const id = sessionId(ctx); let live;
+      const id = sessionId(ctx), currentBranch = branch(ctx);
+      let exactRecoveryPending = false;
+      try { exactRecoveryPending = ["navigate", "append-provenance", "append-inactive", "completed"].includes(recoverySnapshot(ctx).plan.kind); } catch {}
+      const latestWorkflowIndex = currentBranch.findLastIndex((entry) => entry?.type === "custom" && entry.customType === EXECUTION_STATE_ENTRY_TYPE && entry.data?.source === "prime-ralph" && entry.data?.sessionId === id);
+      const latestRecoveryIndex = currentBranch.findLastIndex((entry) => entry?.type === "custom" && entry.customType === RECOVERY_STATE_TYPE && entry.data?.source === "prime-ralph");
+      const recoveryRequired = latestWorkflowIndex >= 0 && currentBranch[latestWorkflowIndex]?.data?.recoveryRequired && typeof currentBranch[latestWorkflowIndex].data.recoveryRequired === "object";
+      const incompleteRecovery = latestRecoveryIndex > latestWorkflowIndex;
+      if (exactRecoveryPending || recoveryRequired || incompleteRecovery) {
+        ctx.ui.notify(recoveryRequired
+          ? "Ralph recovery is complete but execution remains inactive. Inspect durable project state before a later explicit /execute."
+          : "Ralph detected a poisoned or incomplete recovery boundary. Use /ralph-recover; no provider request was started.", "warning");
+        return;
+      }
+      let live;
       try { live = latestExecutionState(branch(ctx), id); }
       catch (error) { ctx.ui.notify(`Ralph could not recover lifecycle state safely. ${error.message}`, "error"); return; }
       executionStates.set(id, live);

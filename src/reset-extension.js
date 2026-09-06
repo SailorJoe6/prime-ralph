@@ -47,6 +47,7 @@ export function createResetExtension({
     const appendState = (status, requestId, details = {}) => pi.appendEntry(RESET_STATE_TYPE, {
       source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId, status, ...details,
     });
+    const correlationDetails = (details = {}) => Object.fromEntries(["workflowPhase", "invocationMode", "sessionId", "lifecycleId", "cycle", "provenanceId"].filter((key) => details[key] != null).map((key) => [key, details[key]]));
     const clearPending = () => { pending = undefined; activeRequestId = undefined; };
     const admittedQueuedToolHandoff = (event, ctx) => Boolean(
       pending?.stage === "context_admitted" && activeRequestId === pending.requestId &&
@@ -55,7 +56,7 @@ export function createResetExtension({
     const failPending = (reason, error) => {
       const request = pending;
       if (!request) return;
-      try { appendState("failed", request.requestId, { reason, command: request.command }); }
+      try { appendState("failed", request.requestId, { reason, command: request.command, ...request.identityDetails }); }
       finally {
         clearPending();
         try { request.onRejected?.({ requestId: request.requestId, markerId: request.markerId, command: request.command, reason, error }); } catch {}
@@ -72,7 +73,7 @@ export function createResetExtension({
         return;
       }
       const compactionExists = hasResetCompaction(entries, state.requestId);
-      appendState(boundaryExists ? "interrupted" : "recovered", state.requestId, { boundaryExists, compactionExists });
+      appendState(boundaryExists ? "interrupted" : "recovered", state.requestId, { boundaryExists, compactionExists, ...(state.command ? { command: state.command } : {}), ...correlationDetails(state) });
       clearPending();
       ctx.ui.notify(boundaryExists
         ? "An interrupted Ralph context boundary was not admitted; retry the command before continuing."
@@ -100,8 +101,9 @@ export function createResetExtension({
       if (typeof injection !== "string" || !injection.trim()) throw new TypeError("Ralph context reset requires a non-empty skill injection");
       const transitionDetails = typeof resolved === "object" && resolved?.details && typeof resolved.details === "object" ? resolved.details : {};
       const triggerTurn = typeof resolved === "object" && resolved?.triggerTurn === false ? false : true;
+      const identityDetails = correlationDetails(transitionDetails);
       pi.appendEntry(RESET_MARKER_TYPE, {
-        source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId, command,
+        source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId, command, ...identityDetails,
       });
       const marker = ctx.sessionManager.getBranch().at(-1);
       if (marker?.type !== "custom" || marker.customType !== RESET_MARKER_TYPE || marker.data?.requestId !== requestId || !marker.id) {
@@ -109,10 +111,10 @@ export function createResetExtension({
       }
 
       const customInstructions = resetCompactionInstructions(requestId);
-      pending = { requestId, markerId: marker.id, customInstructions, injection, command, transitionDetails, onBeforeAdmission, onAdmitted, onRejected, ignoreCurrentAbort: ignoreCurrentAbort === true, stage: "compacting" };
+      pending = { requestId, markerId: marker.id, customInstructions, injection, command, transitionDetails, identityDetails, onBeforeAdmission, onAdmitted, onRejected, ignoreCurrentAbort: ignoreCurrentAbort === true, stage: "compacting" };
       const rejectBoundary = (reason, error) => failPending(reason, error);
       try {
-        appendState("compacting", requestId, { markerId: marker.id, command });
+        appendState("compacting", requestId, { markerId: marker.id, command, ...identityDetails });
         await onMarker?.({ requestId, markerId: marker.id, command });
       } catch (error) {
         rejectBoundary("compaction_setup_failed", error);
@@ -135,7 +137,7 @@ export function createResetExtension({
           pending.stage = "prepare_pending";
           pending.cleanNextContext = true;
           pending.prepareMessage = skillMessage;
-          appendState("prepare_pending", requestId, { mode, command });
+          appendState("prepare_pending", requestId, { mode, command, ...pending.identityDetails });
           pi.sendMessage(skillMessage, { triggerTurn, deliverAs: "followUp" });
           if (!triggerTurn) {
             const durable = ctx.sessionManager.getBranch().filter((entry) => entry?.type === "custom_message" &&
@@ -145,7 +147,7 @@ export function createResetExtension({
               throw new Error("no-turn reset boundary was not durably observable");
             }
             onAdmitted?.(skillMessage);
-            appendState("completed", requestId, { mode: "no-turn", command });
+            appendState("completed", requestId, { mode: "no-turn", command, ...pending.identityDetails });
             clearPending();
           }
           const started = command === "plan" ? "Ralph planning started." : command === "execute" ? "Ralph execution started." : command === "execute-round" ? "Ralph next execution pass is ready." : command === "blocked-pass" ? "Ralph blocked interaction is ready." : "Ralph reset started.";
@@ -215,7 +217,7 @@ export function createResetExtension({
       if (!marker || marker.type !== "custom" || marker.customType !== RESET_MARKER_TYPE || marker.data?.requestId !== pending.requestId) return { cancel: true };
       return { compaction: {
         summary: "", firstKeptEntryId: marker.id, tokensBefore: event.preparation.tokensBefore,
-        details: { source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId: pending.requestId, command: pending.command },
+        details: { source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId: pending.requestId, command: pending.command, ...pending.identityDetails },
       } };
     });
     pi.on("context", (event, ctx) => {
@@ -284,7 +286,7 @@ export function createResetExtension({
       // Release the in-memory single-flight before a native goal continuation can
       // reach provider context. Keep the request identity so agent_end can append
       // terminal telemetry after all turn_end handlers have run.
-      settledAtTurnEnd = { requestId: pending.requestId, command: pending.command };
+      settledAtTurnEnd = { requestId: pending.requestId, command: pending.command, identityDetails: pending.identityDetails };
       clearPending();
     });
     pi.on("agent_end", async (event, ctx) => {
@@ -297,9 +299,9 @@ export function createResetExtension({
         const settled = settledAtTurnEnd;
         settledAtTurnEnd = undefined;
         activeRequestId = undefined;
-        try { appendState("completed", settled.requestId, { mode: "settled", command: settled.command }); }
+        try { appendState("completed", settled.requestId, { mode: "settled", command: settled.command, ...settled.identityDetails }); }
         catch (error) {
-          try { appendState("failed", settled.requestId, { reason: "completion_state_append_failed", boundaryExists: true, command: settled.command }); } catch {}
+          try { appendState("failed", settled.requestId, { reason: "completion_state_append_failed", boundaryExists: true, command: settled.command, ...settled.identityDetails }); } catch {}
           ctx.ui.notify("Ralph could not durably complete the context boundary; retry the command before continuing.", "error");
         }
         return;
@@ -321,7 +323,7 @@ export function createResetExtension({
       if (activeRequestId !== request.requestId && request.stage !== "context_admitted") return;
       try {
         const reason = finalAssistant?.stopReason === "aborted" ? "provider_aborted" : finalAssistant?.stopReason === "error" ? "provider_error" : "missing_normal_turn_end";
-        appendState("failed", request.requestId, { reason, boundaryExists: true, command: request.command });
+        appendState("failed", request.requestId, { reason, boundaryExists: true, command: request.command, ...request.identityDetails });
       } catch (error) {
         ctx.ui.notify("Ralph could not durably settle the context boundary; retry the command before continuing.", "error");
       } finally {
@@ -333,11 +335,16 @@ export function createResetExtension({
       waitingForInteractiveIdle = false;
       if (!pending) return;
       const request = pending;
-      try { appendState("interrupted", request.requestId, { reason: event.reason, command: request.command }); }
+      try { appendState("interrupted", request.requestId, { reason: event.reason, command: request.command, ...request.identityDetails }); }
       finally { clearPending(); activeRequestId = undefined; }
     });
 
-    return Object.freeze({ requestBoundary, requestBoundaryAtProviderBoundary, admittedQueuedToolHandoff });
+    const relinquishAfterRecovery = (requestId) => {
+      if (pending && pending.requestId !== requestId) throw new Error("Ralph recovery does not own the live reset request");
+      if (settledAtTurnEnd && settledAtTurnEnd.requestId !== requestId) throw new Error("Ralph recovery does not own the settling reset request");
+      waitingForInteractiveIdle = false; settledAtTurnEnd = undefined; clearPending();
+    };
+    return Object.freeze({ requestBoundary, requestBoundaryAtProviderBoundary, admittedQueuedToolHandoff, relinquishAfterRecovery });
   };
 }
 

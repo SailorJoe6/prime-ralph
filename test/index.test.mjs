@@ -6,7 +6,7 @@ test("exports the production Slice 5 workflow extension", () => {
   const commands = new Map(), handlers = new Map();
   const pi = { registerTool() {}, registerCommand(name, command) { commands.set(name, command); }, on(name, handler) { handlers.set(name, handler); }, appendEntry() {}, sendMessage() {} };
   assert.doesNotThrow(() => primeRalph(pi));
-  assert.deepEqual([...commands.keys()], ["reset", "spec-it-out", "plan", "execute"]);
+  assert.deepEqual([...commands.keys()], ["reset", "spec-it-out", "plan", "ralph-recover", "execute"]);
   assert.equal(handlers.has("context"), true);
 });
 

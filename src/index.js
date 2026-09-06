@@ -47,3 +47,5 @@ export {
 export * from "./execution.js";
 export * from "./execution-log.js";
 export * from "./planning-transaction.js";
+
+export * from "./recovery.js";

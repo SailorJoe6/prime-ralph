@@ -57,7 +57,7 @@ const { discoverAndLoadExtensions } = await import(pathToFileURL(join(primeRoot,
 const agentDir = join(temp, "agent"); mkdirSync(agentDir);
 const loaded = await discoverAndLoadExtensions([], project, agentDir);
 const commandNames = [...(loaded.extensions[0]?.commands?.keys() ?? [])];
-if (loaded.errors.length || loaded.extensions.length !== 1 || JSON.stringify(commandNames) !== JSON.stringify(["reset", "spec-it-out", "plan", "execute"])) throw new Error(`installed extension discovery failed: ${JSON.stringify(loaded.errors)}`);
+if (loaded.errors.length || loaded.extensions.length !== 1 || JSON.stringify(commandNames) !== JSON.stringify(["reset", "spec-it-out", "plan", "ralph-recover", "execute"])) throw new Error(`installed extension discovery failed: ${JSON.stringify(loaded.errors)}`);
 console.log(JSON.stringify({ packedFiles: packed.files.length, binInstalled: true, projectUnchangedByPackageUpdate: true, noDirectRalphSkills: true, legacyLinkMigrated: true, extensionLoaded: true, specificationPromptCompatible: true, planningPromptCompatible: true, executionPromptsCompatible: true, cycleSizedExecuteGate: true, beadsExecuteInitialized: true, registeredCommands: commandNames }, null, 2));
 rmSync(temp, { recursive: true, force: true });
 

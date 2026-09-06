@@ -11,11 +11,12 @@ test("CLI parses the exact initializer interface", () => {
   assert.deepEqual(parseCli(["init"]), { command: "init", options: {} });
   assert.deepEqual(parseCli(["init", "--project", "a path", "--beads", "--stealth"]), { command: "init", options: { project: "a path", beads: true, stealth: true } });
   assert.deepEqual(parseCli(["init", "--project=other"]), { command: "init", options: { project: "other" } });
+  assert.deepEqual(parseCli(["recover", "--project", "a path"]), { command: "recover", options: { project: "a path" } });
   assert.deepEqual(parseCli(["--help"]), { help: true });
 });
 
 test("CLI rejects unknown commands, flags, missing values, and duplicates", () => {
-  for (const argv of [["run"], ["init", "--unknown"], ["init", "--project"], ["init", "--project", "--beads"], ["init", "--beads", "--beads"], ["init", "--project=a", "--project=b"]]) {
+  for (const argv of [["run"], ["init", "--unknown"], ["init", "--project"], ["init", "--project", "--beads"], ["init", "--beads", "--beads"], ["init", "--project=a", "--project=b"], ["recover", "--beads"], ["recover", "--stealth"], ["recover", "--project=a", "--project=b"]]) {
     assert.throws(() => parseCli(argv));
   }
 });
@@ -40,4 +41,19 @@ test("CLI reports bounded legacy skill-link migration", () => {
   assert.equal(existsSync(link), false);
   assert.match(out.read(), /removed legacy link: \.agents\/skills\/spec-it-out/);
   assert.equal(err.read(), "");
+});
+
+
+test("recover prints exact shell-safe no-extensions guidance and performs no initialization", () => {
+  const out = sink(), err = sink(); let initialized = 0;
+  const code = runCli(["recover", "--project", "/tmp/a b'c"], { stdout: out.stream, stderr: err.stream }, { initializeProject: () => { initialized += 1; throw new Error("must not run"); } });
+  assert.equal(code, 0); assert.equal(initialized, 0); assert.equal(err.read(), "");
+  assert.equal(out.read(), `Provider-free offline inspection (this command starts and changes nothing):
+1. Stop the affected Prime Agent process.
+2. Start a fresh native session in a separate shell:
+   prime-agent --no-extensions --cwd '/tmp/a b'"'"'c'
+3. Do not add --continue, --resume, or --fork.
+4. Inspect the durable worktree, planning documents, Git state, and issue state before deciding whether to start new work.
+`);
+  assert.doesNotMatch(out.read(), /--continue .*prime-agent|--resume .*prime-agent|--fork .*prime-agent/);
 });

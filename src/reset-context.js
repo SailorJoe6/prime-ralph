@@ -1,8 +1,8 @@
 export const RESET_MESSAGE_TYPE = "prime_ralph_reset_prepare";
 export const RESET_STATE_TYPE = "prime_ralph_reset_state";
 export const RESET_MARKER_TYPE = "prime_ralph_reset_marker";
-export const RESET_PROTOCOL_VERSION = 2;
-export const RESET_COMPACTION_INSTRUCTION_PREFIX = "prime-ralph-reset:v2:";
+export const RESET_PROTOCOL_VERSION = 3;
+export const RESET_COMPACTION_INSTRUCTION_PREFIX = "prime-ralph-reset:v3:";
 
 export function resetCompactionInstructions(requestId) {
   return `${RESET_COMPACTION_INSTRUCTION_PREFIX}${requestId}`;

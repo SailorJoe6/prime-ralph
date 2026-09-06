@@ -16,7 +16,8 @@
     "./planning": "./src/planning.js",
     "./execution": "./src/execution.js",
     "./execution-log": "./src/execution-log.js",
-    "./planning-transaction": "./src/planning-transaction.js"
+    "./planning-transaction": "./src/planning-transaction.js",
+    "./recovery": "./src/recovery.js"
   },
   "files": [
     "bin",
@@ -48,7 +49,8 @@
     "accept:model:blocked-recovery": "node scripts/run-blocked-recovery-model-acceptance.mjs",
     "accept:native-acp": "node scripts/run-native-acp-acceptance.mjs",
     "accept:native-acp-prompt": "node scripts/run-native-acp-prompt-acceptance.mjs",
-    "accept:native-rpc": "node scripts/run-native-rpc-acceptance.mjs"
+    "accept:native-rpc": "node scripts/run-native-rpc-acceptance.mjs",
+    "accept:recovery": "node scripts/run-recovery-acceptance.mjs"
   },
   "engines": {
     "node": ">=20"

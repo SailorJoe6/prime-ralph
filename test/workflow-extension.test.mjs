@@ -3,27 +3,32 @@ import assert from "node:assert/strict";
 import { createWorkflowExtension } from "../src/workflow-extension.js";
 import { PLANNING_MESSAGE_TYPE, PLANNING_STARTUP_MESSAGE_TYPE } from "../src/planning.js";
 import { SPECIFICATION_MESSAGE_TYPE, STARTUP_PREPARE_MESSAGE_TYPE } from "../src/specification.js";
-import { RESET_MESSAGE_TYPE } from "../src/reset-context.js";
+import { RESET_MARKER_TYPE, RESET_MESSAGE_TYPE, RESET_PROTOCOL_VERSION, RESET_STATE_TYPE, resetCompactionInstructions } from "../src/reset-context.js";
 import { BLOCKED_MESSAGE_TYPE, EXECUTION_MESSAGE_TYPE, EXECUTION_STATE_ENTRY_TYPE, latestExecutionState } from "../src/execution.js";
+import { RECOVERY_STATE_TYPE, branchForLeaf } from "../src/recovery.js";
 
 const prepare = { path: "/project/.ralph/skills/prepare/SKILL.md", text: "---\nname: prepare\ndescription: test\n---\nprepare body" };
 const specSkill = { path: "/project/.ralph/skills/spec-it-out/SKILL.md", text: "---\nname: spec-it-out\ndescription: test\nprime-ralph-invocation-version: 1\n---\nspec body" };
 const planSkill = { path: "/project/.ralph/skills/plan/SKILL.md", text: "---\nname: plan\ndescription: test\nprime-ralph-invocation-version: 1\n---\nplan body" };
 const executeSkill = { path: "/project/.ralph/skills/execute/SKILL.md", text: "---\nname: execute\ndescription: test\nprime-ralph-invocation-version: 1\n---\nexecute body" };
 const blockedSkill = { path: "/project/.ralph/skills/blocked/SKILL.md", text: "---\nname: blocked\ndescription: test\nprime-ralph-invocation-version: 1\n---\nblocked body" };
-function harness({ specificationState = "absent", planState = "absent", branch = [], inspectSpecError, inspectPlanError, sendError, loadPrepareError, loadPlanError, loadExecuteError, blockedState = "absent", blockedProofState = "complete", restoredProofState = "unproven", appendFailureAt: initialAppendFailureAt, appendFailureFrom: initialAppendFailureFrom, logFailureAt, sessionId = "session-1", rlmDepth = 0, sharedLogs, closeoutTimeoutMs, signalAvailable = true } = {}) {
+function harness({ specificationState = "absent", planState = "absent", branch = [], inspectSpecError, inspectPlanError, sendError, loadPrepareError, loadPlanError, loadExecuteError, blockedState = "absent", blockedProofState = "complete", restoredProofState = "unproven", appendFailureAt: initialAppendFailureAt, appendFailureFrom: initialAppendFailureFrom, logFailureAt, sessionId = "session-1", rlmDepth = 0, sharedLogs, closeoutTimeoutMs, signalAvailable = true, treeEntries: initialTreeEntries, navigateMode = "normal" } = {}) {
   const runAbortController = new AbortController();
   const commands = new Map(), tools = new Map(), handlers = new Map(), sent = [], userMessages = [], notices = [], compactions = [], entries = [], logs = sharedLogs ?? [], transactions = [];
-  let spec = specificationState, plan = planState, blocked = blockedState, restored = restoredProofState, blockedLifecycle = [...branch].reverse().find((entry) => entry?.data?.provenanceId)?.data.provenanceId ?? "blocked-life", nextEntry = branch.length, pending = false, idle = true, aborted = 0, appendCalls = 0, appendFailureAt = initialAppendFailureAt, appendFailureFrom = initialAppendFailureFrom, logCalls = 0;
+  const treeEntries = initialTreeEntries ?? [...branch];
+  let leafId = branch.at(-1)?.id ?? null;
+  const appendTreeEntry = (entry) => { branch.push(entry); treeEntries.push(entry); leafId = entry.id; };
+  let liveSessionId = sessionId, liveSessionFile = `/sessions/${sessionId}.jsonl`;
+  let spec = specificationState, plan = planState, blocked = blockedState, restored = restoredProofState, blockedLifecycle = [...branch].reverse().find((entry) => entry?.data?.provenanceId)?.data.provenanceId ?? "blocked-life", nextEntry = treeEntries.length, pending = false, idle = true, aborted = 0, idleWaits = 0, appendCalls = 0, appendFailureAt = initialAppendFailureAt, appendFailureFrom = initialAppendFailureFrom, logCalls = 0;
   const pi = {
     registerCommand(name, command) { commands.set(name, command); },
     registerTool(tool) { tools.set(tool.name, tool); },
     on(name, handler) { const values = handlers.get(name) ?? []; values.push(handler); handlers.set(name, values); },
-    appendEntry(customType, data) { appendCalls += 1; if (appendCalls === appendFailureAt || (appendFailureFrom && appendCalls >= appendFailureFrom)) throw new Error("injected state append failure"); const entry = { type: "custom", id: `e${++nextEntry}`, customType, data }; entries.push(entry); branch.push(entry); },
+    appendEntry(customType, data) { appendCalls += 1; if (appendCalls === appendFailureAt || (appendFailureFrom && appendCalls >= appendFailureFrom)) throw new Error("injected state append failure"); const entry = { type: "custom", id: `e${++nextEntry}`, parentId: leafId, timestamp: new Date().toISOString(), customType, data }; entries.push(entry); appendTreeEntry(entry); },
     sendUserMessage(message, options) { userMessages.push({ message, options }); },
     sendMessage(message, options) {
       if (sendError) throw sendError;
-      sent.push({ message, options }); branch.push({ type: "custom_message", id: `e${++nextEntry}`, ...message });
+      sent.push({ message, options }); appendTreeEntry({ type: "custom_message", id: `e${++nextEntry}`, parentId: leafId, timestamp: new Date().toISOString(), ...message });
     },
   };
   createWorkflowExtension({
@@ -54,13 +59,27 @@ function harness({ specificationState = "absent", planState = "absent", branch =
     ...(closeoutTimeoutMs === undefined ? {} : { closeoutTimeoutMs }),
   })(pi);
   const ctx = {
-    cwd: "/project", waitForIdle: async () => {}, isIdle: () => idle,
+    cwd: "/project", waitForIdle: async () => { idleWaits += 1; }, isIdle: () => idle,
     hasPendingMessages: () => pending, signal: signalAvailable ? runAbortController.signal : undefined, abort: () => { aborted += 1; },
     compact: (options) => compactions.push(options),
-    sessionManager: { getBranch: () => branch, getHeader: () => ({ rlmDepth }), getSessionId: () => sessionId },
+    sessionManager: { getBranch: () => branch, getEntries: () => treeEntries, getEntry: (id) => treeEntries.find((entry) => entry.id === id), getLeafId: () => leafId, getHeader: () => ({ id: liveSessionId, rlmDepth }), getSessionFile: () => liveSessionFile, getSessionId: () => liveSessionId },
     ui: { notify: (...args) => notices.push(args) },
   };
-  const emit = async (name, event) => { for (const handler of handlers.get(name) ?? []) await handler(event, ctx); };
+  const emitResults = async (name, event) => { const results = []; for (const handler of handlers.get(name) ?? []) results.push(await handler(event, ctx)); return results; };
+  const emit = async (name, event) => { await emitResults(name, event); };
+  ctx.navigateTree = async (targetId, options) => {
+    if (navigateMode === "changed-before") leafId = targetId;
+    if (["cancel-session", "throw-session"].includes(navigateMode)) { liveSessionId = "changed-session"; liveSessionFile = "/sessions/changed-session.jsonl"; }
+    const treeAbort = new AbortController(); if (navigateMode === "aborted-signal") treeAbort.abort();
+    const results = await emitResults("session_before_tree", { preparation: { targetId, oldLeafId: leafId, userWantsSummary: options?.summarize ?? false, entriesToSummarize: [], commonAncestorId: navigateMode === "wrong-common" ? null : targetId }, signal: treeAbort.signal });
+    if (["cancel", "cancel-session"].includes(navigateMode) || results.some((result) => result?.cancel === true)) return { cancelled: true };
+    if (["throw", "throw-session"].includes(navigateMode)) throw new Error("injected navigation failure");
+    const oldLeafId = leafId, targetBranch = branchForLeaf(treeEntries, targetId);
+    branch.splice(0, branch.length, ...targetBranch); leafId = navigateMode === "wrong-leaf" ? oldLeafId : targetId;
+    if (navigateMode === "wrong-leaf") branch.splice(0, branch.length, ...branchForLeaf(treeEntries, oldLeafId));
+    await emit("session_tree", { newLeafId: leafId, oldLeafId, fromExtension: false });
+    return { cancelled: false };
+  };
   const settle = async () => {
     const message = sent.at(-1)?.message;
     await emit("message_start", { message: { role: "custom", ...message } });
@@ -68,13 +87,139 @@ function harness({ specificationState = "absent", planState = "absent", branch =
     await emit("turn_end", { message: { role: "assistant", content: [{ type: "text", text: "settled" }], stopReason: "stop" } });
     await emit("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] });
   };
-  return { commands, tools, handlers, sent, userMessages, notices, branch, entries, compactions, logs, transactions, ctx, emit, settle, state: () => latestExecutionState(branch, sessionId), addGoal: (data) => branch.push({ type: "custom", customType: "thread_goal_state", data }), setPending: (value) => { pending = value; }, abortRun: () => runAbortController.abort(), setIdle: (value) => { idle = value; }, aborted: () => aborted, setSpecification: (value) => { spec = value; }, setPlan: (value) => { plan = value; }, setRestored: (value) => { restored = value; }, setBlocked: (value) => { blocked = value; }, failStateAppendIn: (offset) => { appendFailureAt = appendCalls + offset; }, failAllStateAppends: () => { appendFailureFrom = appendCalls + 1; }, restoreStateAppends: () => { appendFailureAt = undefined; appendFailureFrom = undefined; }, logAttempts: () => logCalls };
+  return { commands, tools, handlers, sent, userMessages, notices, branch, entries, compactions, logs, transactions, ctx, emit, settle, state: () => latestExecutionState(branch, sessionId), treeEntries, navigationLeaf: () => leafId, idleWaits: () => idleWaits, addGoal: (data) => appendTreeEntry({ type: "custom", id: `e${++nextEntry}`, parentId: leafId, timestamp: new Date().toISOString(), customType: "thread_goal_state", data }), setPending: (value) => { pending = value; }, abortRun: () => runAbortController.abort(), setIdle: (value) => { idle = value; }, aborted: () => aborted, setSpecification: (value) => { spec = value; }, setPlan: (value) => { plan = value; }, setRestored: (value) => { restored = value; }, setBlocked: (value) => { blocked = value; }, failStateAppendIn: (offset) => { appendFailureAt = appendCalls + offset; }, failAllStateAppends: () => { appendFailureFrom = appendCalls + 1; }, restoreStateAppends: () => { appendFailureAt = undefined; appendFailureFrom = undefined; }, logAttempts: () => logCalls };
+}
+
+function poisonedRecoveryFixture({ sessionId = "session-1", phase = "planning", command = "plan" } = {}) {
+  const entries = []; let parentId = null, n = 0;
+  const add = (entry) => { const value = { id: `r${++n}`, parentId, timestamp: `2026-09-06T00:00:${String(n).padStart(2, "0")}.000Z`, ...entry }; entries.push(value); parentId = value.id; return value; };
+  const anchor = add({ type: "custom", customType: "recovery_anchor", data: {} });
+  const requestId = "poison-request", lifecycleId = phase === "execution" ? "poison-life" : null, cycle = phase === "execution" ? 1 : null;
+  const invocationMode = phase === "execution" ? "execution-start" : command === "plan" ? "planning-new" : `${phase}-reset`;
+  const identity = { workflowPhase: phase, invocationMode, sessionId, ...(phase === "execution" ? { lifecycleId, cycle } : {}) };
+  const marker = add({ type: "custom", customType: RESET_MARKER_TYPE, data: { source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId, command, ...identity } });
+  add({ type: "custom", customType: RESET_STATE_TYPE, data: { source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId, status: "compacting", markerId: marker.id, command, ...identity } });
+  add({ type: "compaction", summary: "", firstKeptEntryId: marker.id, tokensBefore: 99, customInstructions: resetCompactionInstructions(requestId), details: { source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId, command, ...identity } });
+  add({ type: "custom", customType: RESET_STATE_TYPE, data: { source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId, status: "prepare_pending", mode: "compaction", command, ...identity } });
+  add({ type: "custom_message", customType: RESET_MESSAGE_TYPE, content: "<skill>poison</skill>", display: false, details: { source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId, command, ...identity } });
+  if (phase === "execution") add({ type: "custom", customType: EXECUTION_STATE_ENTRY_TYPE, data: { source: "prime-ralph", protocolVersion: 1, sessionId, transition: 1, phase: "execution", status: "running", lifecycleId, cycle, driverGoalId: "driver", pendingDecision: null, wait: null, provenanceId: null, forwardConfirmed: false } });
+  add({ type: "message", message: { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "goal-complete", name: "goal", arguments: { action: "complete" } }] } });
+  add({ type: "custom", customType: RESET_STATE_TYPE, data: { source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId, status: "failed", reason: "missing_normal_turn_end", boundaryExists: true, command, ...identity } });
+  if (phase === "execution") add({ type: "custom", customType: EXECUTION_STATE_ENTRY_TYPE, data: { source: "prime-ralph", protocolVersion: 1, sessionId, transition: 2, phase: "execution", status: "paused", lifecycleId, cycle, driverGoalId: "driver", pendingDecision: null, wait: null, provenanceId: null, forwardConfirmed: false, pauseReason: "execution agent ended without normal closeout" } });
+  return { entries, branch: [...entries], anchor, priorLeafId: entries.at(-1).id, requestId };
 }
 
 test("registers the complete Slice 5 command and lifecycle-control surface", () => {
   const h = harness();
-  assert.deepEqual([...h.commands.keys()], ["reset", "spec-it-out", "plan", "execute"]);
+  assert.deepEqual([...h.commands.keys()], ["reset", "spec-it-out", "plan", "ralph-recover", "execute"]);
   assert.deepEqual([...h.tools.keys()], ["ralph_lifecycle"]);
+});
+
+test("provider-free recovery navigates exactly, preserves the abandoned branch, and requires explicit later execute", async () => {
+  const fixture = poisonedRecoveryFixture({ phase: "execution", command: "execute" });
+  const prefix = structuredClone(fixture.entries);
+  const h = harness({ specificationState: "existing", planState: "existing", branch: [...fixture.branch], treeEntries: [...fixture.entries] });
+  const poisonedMessage = fixture.entries.find((entry) => entry.type === "custom_message");
+  const abortsBefore = h.aborted();
+  await h.emit("context", { messages: [{ role: "custom", ...poisonedMessage }, { role: "user", content: "ordinary probe" }] });
+  assert.ok(h.aborted() > abortsBefore);
+  const before = { sent: h.sent.length, compactions: h.compactions.length, goals: h.treeEntries.filter((entry) => entry.customType === "thread_goal_state").length, priorLeaf: h.navigationLeaf() };
+  await h.commands.get("ralph-recover").handler("", h.ctx);
+  assert.equal(h.idleWaits(), 0);
+  assert.equal(h.navigationLeaf(), h.branch.at(-1).id);
+  assert.equal(h.branch[0].id, fixture.anchor.id);
+  assert.equal(h.branch.some((entry) => entry.id === fixture.priorLeafId), false);
+  assert.ok(h.treeEntries.some((entry) => entry.id === fixture.priorLeafId));
+  assert.deepEqual(h.treeEntries.slice(0, prefix.length), prefix);
+  const provenance = h.branch.find((entry) => entry.customType === RECOVERY_STATE_TYPE);
+  assert.equal(provenance.data.status, "navigation-verified");
+  const state = h.state();
+  assert.equal(state.phase, "planning"); assert.equal(state.status, "inactive"); assert.equal(state.lifecycleId, null); assert.equal(state.driverGoalId, null);
+  assert.equal(state.recoveryRequired.recoveryId, provenance.data.recoveryId);
+  assert.deepEqual({ sent: h.sent.length, compactions: h.compactions.length, goals: h.treeEntries.filter((entry) => entry.customType === "thread_goal_state").length, priorLeaf: before.priorLeaf }, before);
+  assert.match(h.notices.at(-1)[0], /Inspect the worktree, active planning documents, and issue state/);
+  const entriesAfter = h.treeEntries.length;
+  await h.commands.get("ralph-recover").handler("", h.ctx);
+  assert.equal(h.treeEntries.length, entriesAfter); assert.match(h.notices.at(-1)[0], /already complete/);
+  await h.emit("session_start", { reason: "reload" });
+  assert.equal(h.sent.length, 0);
+  const aborts = h.aborted();
+  await h.emit("context", { messages: [{ role: "user", content: "inspect status" }] });
+  assert.equal(h.aborted(), aborts);
+  await h.commands.get("execute").handler("", h.ctx);
+  assert.equal(h.compactions.length, 1); assert.ok(h.state().recoveryRequired);
+  await completeLatestResetCompaction(h);
+  assert.equal(h.state().status, "running"); assert.equal(h.state().recoveryRequired, null);
+  const noticesAfterFreshExecute = h.notices.length;
+  await h.emit("session_start", { reason: "reload" });
+  assert.equal(h.notices.slice(noticesAfterFreshExecute).some(([message]) => /Recovery remains required|recovery boundary/i.test(message)), false);
+});
+
+test("legacy v2 poisoned execution suppresses ordinary provider admission before recovery", async () => {
+  const fixture = poisonedRecoveryFixture({ phase: "execution", command: "execute" });
+  for (const entry of fixture.entries) {
+    const evidence = entry.type === "custom_message" ? entry.details : entry.type === "compaction" ? entry.details : entry.data;
+    if (evidence?.requestId !== fixture.requestId) continue;
+    evidence.protocolVersion = 2;
+    if (entry.type !== "custom_message") for (const field of ["workflowPhase", "invocationMode", "sessionId", "lifecycleId", "cycle", "provenanceId"]) delete evidence[field];
+    if (entry.type === "compaction") entry.customInstructions = `prime-ralph-reset:v2:${fixture.requestId}`;
+  }
+  const h = harness({ branch: [...fixture.branch], treeEntries: [...fixture.entries] }), before = h.aborted();
+  await h.emit("before_agent_start", {});
+  await h.emit("context", { messages: [{ role: "user", content: "must not reach provider" }] });
+  assert.ok(h.aborted() > before); assert.equal(h.sent.length, 0); assert.equal(h.compactions.length, 0);
+  assert.match(h.notices.at(-1)[0], /No provider request was admitted/);
+  const malformedEntries = structuredClone(fixture.entries), malformedBranch = structuredClone(fixture.branch);
+  for (const collection of [malformedEntries, malformedBranch]) collection.find((entry) => entry.customType === RESET_STATE_TYPE && entry.data?.status === "compacting").data.markerId = "wrong-marker";
+  const malformed = harness({ branch: malformedBranch, treeEntries: malformedEntries }), malformedBefore = malformed.aborted();
+  await malformed.emit("context", { messages: [{ role: "user", content: "malformed legacy must remain denied" }] });
+  assert.ok(malformed.aborted() > malformedBefore); assert.equal(malformed.sent.length, 0);
+});
+
+test("navigation cancellation, failure, wrong leaf, and concurrent leaf all fail before recovery append", async (t) => {
+  for (const mode of ["cancel", "cancel-session", "throw", "throw-session", "wrong-leaf", "changed-before", "aborted-signal", "wrong-common"]) await t.test(mode, async () => {
+    const fixture = poisonedRecoveryFixture();
+    const h = harness({ specificationState: "existing", planState: "existing", branch: [...fixture.branch], treeEntries: [...fixture.entries], navigateMode: mode });
+    const beforeEntries = h.treeEntries.length, beforeSent = h.sent.length, beforeCompactions = h.compactions.length;
+    await h.commands.get("ralph-recover").handler("", h.ctx);
+    assert.equal(h.treeEntries.filter((entry) => entry.customType === RECOVERY_STATE_TYPE).length, 0);
+    assert.equal(h.treeEntries.length, beforeEntries); assert.equal(h.sent.length, beforeSent); assert.equal(h.compactions.length, beforeCompactions);
+    assert.match(h.notices.at(-1)[0], /no provider request|No provider request/);
+  });
+});
+
+test("each post-navigation append failure quarantines the runtime and reload resumes exactly", async (t) => {
+  for (const offset of [1, 2]) await t.test(`append ${offset}`, async () => {
+    const fixture = poisonedRecoveryFixture();
+    const first = harness({ specificationState: "existing", planState: "existing", branch: [...fixture.branch], treeEntries: [...fixture.entries] });
+    first.failStateAppendIn(offset);
+    await first.commands.get("ralph-recover").handler("", first.ctx);
+    assert.equal(first.sent.length, 0); assert.equal(first.compactions.length, 0);
+    const afterFailure = first.treeEntries.length, abortsBeforeProbe = first.aborted();
+    await first.emit("before_agent_start", {});
+    await first.emit("context", { messages: [{ role: "user", content: "must not reach provider" }] });
+    assert.ok(first.aborted() > abortsBeforeProbe); assert.equal(first.sent.length, 0); assert.equal(first.compactions.length, 0);
+    await first.commands.get("ralph-recover").handler("", first.ctx);
+    assert.equal(first.treeEntries.length, afterFailure); assert.match(first.notices.at(-1)[0], /quarantined/);
+    const reloaded = harness({ specificationState: "existing", planState: "existing", branch: [...first.branch], treeEntries: [...first.treeEntries] });
+    await reloaded.emit("session_start", { reason: "reload" });
+    assert.equal(reloaded.sent.length, 0);
+    const reloadAborts = reloaded.aborted();
+    await reloaded.emit("context", { messages: [{ role: "user", content: "must remain provider-free" }] });
+    assert.ok(reloaded.aborted() > reloadAborts);
+    await reloaded.commands.get("ralph-recover").handler("", reloaded.ctx);
+    assert.equal(reloaded.state().recoveryRequired?.protocolVersion, 1);
+    assert.match(reloaded.notices.at(-1)[0], /recovered operator control/);
+  });
+});
+
+test("recovery rejects arguments and malformed poison without tree or provider mutation", async () => {
+  const fixture = poisonedRecoveryFixture(); fixture.branch.find((entry) => entry.type === "compaction").details.command = "wrong";
+  const h = harness({ branch: [...fixture.branch], treeEntries: [...fixture.entries] });
+  await assert.rejects(h.commands.get("ralph-recover").handler("later", h.ctx), /Usage/);
+  await h.commands.get("ralph-recover").handler("", h.ctx);
+  assert.equal(h.sent.length, 0); assert.equal(h.compactions.length, 0); assert.equal(h.treeEntries.filter((entry) => entry.customType === RECOVERY_STATE_TYPE).length, 0);
+  assert.match(h.notices.at(-1)[0], /mismatched reset command evidence/);
 });
 
 test("delivers no-spec startup prepare once and suppresses reload replay", async () => {
