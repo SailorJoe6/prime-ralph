@@ -14,7 +14,7 @@ try {
   process.exit(2);
 }
 
-if (packageJson.version !== "0.9.1") {
+if (packageJson.version !== "0.9.3") {
   console.error(`unsupported Prime Agent version: ${packageJson.version}`);
   process.exit(1);
 }

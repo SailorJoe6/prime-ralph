@@ -109,7 +109,7 @@ const result = {
   executionEntries: entries.filter((entry) => /execute|goal|blocked/.test(entry.customType ?? "")).length,
 };
 const failures = [];
-if (result.primeAgentVersion !== "0.9.1") failures.push("wrong Prime Agent version");
+if (result.primeAgentVersion !== "0.9.3") failures.push("wrong Prime Agent version");
 if (!result.providerTranscriptEquivalent) failures.push("provider context diverged from the native session transcript");
 if (result.callsAfterStartup !== 1 || result.callsAfterReload !== 1) failures.push("startup/reload call count incorrect");
 if (result.startupMessages !== 1 || result.startupSessionIds[0] !== sessionId || !result.startupWasFirstTurn) failures.push("startup prepare was not exactly-once and first");

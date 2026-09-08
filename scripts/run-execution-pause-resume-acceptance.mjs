@@ -83,7 +83,7 @@ const metas = contexts.map(invocation).filter((meta) => meta?.skill === "execute
 const autoCompactions = entries.filter((entry) => entry.type === "compaction" && entry.details?.command === "execute-round");
 const workflowSource = await readFile(new URL("../src/workflow-extension.js", import.meta.url), "utf8"), executionSource = await readFile(new URL("../src/execution.js", import.meta.url), "utf8");
 const checks = {
-  primeAgentVersion: JSON.parse(await readFile(join(primeRoot, "package.json"), "utf8")).version === "0.9.1",
+  primeAgentVersion: JSON.parse(await readFile(join(primeRoot, "package.json"), "utf8")).version === "0.9.3",
   providerTranscriptEquivalent: transcriptMatches.length === contexts.length && transcriptMatches.every(Boolean),
   sameLifecycleAndTwoCycles: new Set(metas.map((meta) => meta.lifecycleId)).size === 1 && [1, 2].every((cycle) => metas.some((meta) => meta.cycle === cycle)),
   pauseResumeCounterUnchanged: counterBeforeResume === counterAfterResume,

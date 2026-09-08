@@ -108,7 +108,7 @@ pi.registerTool({ name: "update_execution_plan", label: "Update approved executi
   const mutationCalls = calls.filter((call) => call.name === "write_execution_plan" || call.name === "update_execution_plan");
   const planPath = join(cwd, ".ralph/plans/EXECUTION_PLAN.md"), planExists = existsSync(planPath), planContent = planExists ? readFileSync(planPath, "utf8") : "", after = manifest(cwd), changed = changedPaths(baseline, after), assertions = [];
   const check = (name, pass) => assertions.push({ name, pass: Boolean(pass) });
-  check("process succeeded", run.status === 0 && !run.signal); check("Prime Agent 0.9.1 recorded", primeAgentVersion === "0.9.1"); check("terminal assistant response", finalMessage && !["error", "aborted", "length"].includes(finalMessage.stopReason));
+  check("process succeeded", run.status === 0 && !run.signal); check("Prime Agent 0.9.3 recorded", primeAgentVersion === "0.9.3"); check("terminal assistant response", finalMessage && !["error", "aborted", "length"].includes(finalMessage.stopReason));
   check("selected provider observed", messages.every((message) => message.provider === provider)); check("selected model observed", messages.every((message) => message.model === model || message.responseModel === model));
   check("active specification unchanged", after[".ralph/plans/SPECIFICATION.md"]?.sha256 === baseline[".ralph/plans/SPECIFICATION.md"]?.sha256);
   const planUnchanged = after[".ralph/plans/EXECUTION_PLAN.md"]?.sha256 === baseline[".ralph/plans/EXECUTION_PLAN.md"]?.sha256;

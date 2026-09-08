@@ -24,7 +24,7 @@ for (const variant of ["default", "beads"]) for (const skill of ["prepare", "spe
   if (forbiddenTerms.some((term) => text.toLowerCase().includes(term))) throw new Error(`non-independent ${variant}/${skill} template`);
 }
 console.log("mode/export acceptance OK: text, json, rpc, acp, daemon");
-if (packageJson.peerDependencies?.["prime-agent"] !== "0.9.1") throw new Error("unsupported peer range");
+if (packageJson.peerDependencies?.["prime-agent"] !== "0.9.3") throw new Error("unsupported peer range");
 
 async function scanTree(url) {
   for (const entry of await readdir(url, { withFileTypes: true })) {

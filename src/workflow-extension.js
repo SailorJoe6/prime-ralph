@@ -35,6 +35,14 @@ function assistantText(message) {
   if (typeof message.content === "string") return message.content.trim();
   return Array.isArray(message.content) ? message.content.filter((part) => part?.type === "text").map((part) => part.text).join("\n").trim() : "";
 }
+function isPrimaryTurnInput(message) {
+  if (message?.role === "user") return true;
+  if (message?.role !== "custom") return false;
+  if (message.customType === "goal_context") return true;
+  if (message.customType === "heartbeat_prompt") return typeof message.details?.jobId === "string";
+  if (["rlm_child_failure", "rlm_child_terminal_notice"].includes(message.customType)) return typeof message.details?.childId === "string" && typeof message.details?.sessionName === "string";
+  return message.customType === "agent_message" && typeof message.details?.id === "string" && typeof message.details?.message === "string";
+}
 function latestSessionPhase(entries, sessionId) {
   const execution = latestExecutionState(entries, sessionId);
   if (execution.phase === "execution" && execution.status !== "inactive") return "execution";
@@ -164,6 +172,21 @@ export function createWorkflowExtension({
       const goalReconciled = reconcileGoalState(current, latestGoalState(branch(ctx)));
       const reconciled = goalReconciled === current ? current : persistExecution(ctx, goalReconciled);
       return reconcilePlanningLocation(ctx, reconciled);
+    };
+    const activateLifecycleTurn = (ctx, kind, details = {}) => {
+      const id = sessionId(ctx), live = execution(ctx, { reconcile: false });
+      activeLifecycleTurns.set(id, {
+        kind, sessionId: id,
+        lifecycleId: details.lifecycleId ?? live.lifecycleId,
+        cycle: details.cycle ?? live.cycle,
+      });
+    };
+    const hasExactActiveLifecycleTurn = (ctx, identity) => {
+      const id = sessionId(ctx), active = activeLifecycleTurns.get(id), live = execution(ctx, { reconcile: false });
+      const durable = branch(ctx).findLast((entry) => entry?.type === "custom" && entry.customType === EXECUTION_STATE_ENTRY_TYPE && entry.data?.sessionId === id)?.data;
+      return active != null && identity?.sessionId === id && identity.lifecycleId === active.lifecycleId && identity.cycle === active.cycle &&
+        live.lifecycleId === active.lifecycleId && live.cycle === active.cycle &&
+        durable?.lifecycleId === active.lifecycleId && durable?.cycle === active.cycle;
     };
     const goal = (ctx) => latestGoalState(branch(ctx));
     const recoverySnapshot = (ctx) => {
@@ -328,7 +351,8 @@ export function createWorkflowExtension({
     let resetRuntime;
     resetRuntime = createResetExtension({
       loadPrepare, loadSpecItOut, inspectSpecification, createRequestId,
-      hasActiveWorkflowTurn: (ctx) => activeLifecycleTurns.has(sessionId(ctx)),
+      hasActiveWorkflowTurn: (ctx, identity) => hasExactActiveLifecycleTurn(ctx, identity),
+      deferHandoffEventFinish: true,
       handleReset: async ({ ctx }) => {
         const state = requireTerminalLogReady(execution(ctx));
         if (state.phase === "execution" && state.status === "running") {
@@ -442,7 +466,7 @@ Condition required before execution can restart: ${condition}`, { state });
             status: "running", driverGoalId: nativeGoal.goalId, pauseReason: null, resumed: true,
             pendingDecision: { action: "recover-driver", cycle: state.cycle },
           }));
-          activeLifecycleTurns.set(sessionId(ctx), { kind: "execute" });
+          activateLifecycleTurn(ctx, "execute", state);
           return result("The exact terminal ready-driver failure was recovered. The same lifecycle and open cycle may resume once this recovery turn closes.", { action: "recover-driver", state });
         }
         if (params.action === "continue") {
@@ -643,8 +667,8 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
     pi.on("before_agent_start", (_event, ctx) => {
       if (rejectRecoveryProviderAdmission(ctx)) return;
       const live = requireTerminalLogReady(execution(ctx)), id = sessionId(ctx);
-      if (live.phase === "execution" && live.status === "running") activeLifecycleTurns.set(id, { kind: "execute" });
-      else if (live.status === "waiting") activeLifecycleTurns.set(id, { kind: "waiting-check" });
+      if (live.phase === "execution" && live.status === "running") activateLifecycleTurn(ctx, "execute", live);
+      else if (live.status === "waiting") activateLifecycleTurn(ctx, "waiting-check", live);
       if (live.phase === "blocked") {
         if (live.blockedContextEstablished === true) activeBlockedTurns.add(id);
         else {
@@ -658,6 +682,7 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
       if (rejectRecoveryProviderAdmission(ctx)) return { messages: [] };
       let live = execution(ctx), id = sessionId(ctx);
       const lastUserIndex = event.messages.findLastIndex((message) => message?.role === "user");
+      const lastPrimaryInputIndex = event.messages.findLastIndex(isPrimaryTurnInput);
       const goalIndex = event.messages.findLastIndex((message) => message?.role === "custom" && message.customType === "goal_context" && message.details?.kind === "continuation");
       const admitted = live.admittedContinuation;
       if (live.pendingRound) {
@@ -676,7 +701,10 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
         ctx.abort();
         return { messages: [] };
       }
-      if (live.phase === "execution" && live.status === "running" && goalIndex > lastUserIndex) {
+      // A goal continuation owns this provider turn only when it is the newest
+      // recognized primary input. Auxiliary before_agent_start custom messages
+      // cannot hide a stale goal, while a later host handoff makes it historical.
+      if (live.phase === "execution" && live.status === "running" && goalIndex >= 0 && goalIndex === lastPrimaryInputIndex) {
         const goalMessage = event.messages[goalIndex], goalId = goalMessage.details?.goalId, continuationsUsed = goalMessage.details?.continuationsUsed;
         if (!goalId || goalId !== live.driverGoalId || !Number.isInteger(continuationsUsed)) {
           ctx.abort(); persistExecution(ctx, nextExecutionState(live, { status: "paused", pendingDecision: null, wait: null, pauseReason: "stale or mismatched native goal continuation" }));
@@ -808,7 +836,7 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
         }
       }
       if ((message?.role === "user" && live.status === "waiting") || message?.customType === "goal_context" || message?.customType === EXECUTION_MESSAGE_TYPE || (message?.customType === RESET_MESSAGE_TYPE && message.details?.workflowPhase === "execution" && message.details?.invocationMode !== "execution-reset-paused")) {
-        activeLifecycleTurns.set(id, { kind: "execute" });
+        activateLifecycleTurn(ctx, "execute", message.details);
       }
       if (message?.customType === BLOCKED_MESSAGE_TYPE || (message?.customType === RESET_MESSAGE_TYPE && message.details?.workflowPhase === "blocked")) {
         activeBlockedTurns.add(id);
@@ -817,21 +845,23 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
     });
 
     pi.on("agent_end", async (event, ctx) => {
-      const id = sessionId(ctx);
-      const hadActiveLifecycleTurn = activeLifecycleTurns.has(id);
-      if (hadActiveLifecycleTurn && resetRuntime.admittedQueuedToolHandoff(event, ctx)) return;
-      activeBlockedTurns.delete(id);
-      let live = execution(ctx, { reconcile: false });
-      if (hadActiveLifecycleTurn) {
-        try {
-          if (live.phase === "execution" && live.status === "running" && !live.pendingRound) persistExecution(ctx, nextExecutionState(live, { status: "paused", pendingDecision: null, wait: null, pauseReason: "execution agent ended without normal closeout" }));
-        } finally { activeLifecycleTurns.delete(id); settleLifecycleCloseout(id); }
-      } else settleLifecycleCloseout(id);
-      live = execution(ctx, { reconcile: false });
-      if (live.phase === "blocked" && live.blockedContextEstablished !== true) {
-        requireTerminalLogReady(live);
-        await requestBlockedPassBoundary(ctx, live);
-      }
+      try {
+        const id = sessionId(ctx);
+        const hadActiveLifecycleTurn = activeLifecycleTurns.has(id);
+        if (hadActiveLifecycleTurn && resetRuntime.admittedQueuedToolHandoff(event, ctx)) return;
+        activeBlockedTurns.delete(id);
+        let live = execution(ctx, { reconcile: false });
+        if (hadActiveLifecycleTurn) {
+          try {
+            if (live.phase === "execution" && live.status === "running" && !live.pendingRound) persistExecution(ctx, nextExecutionState(live, { status: "paused", pendingDecision: null, wait: null, pauseReason: "execution agent ended without normal closeout" }));
+          } finally { activeLifecycleTurns.delete(id); settleLifecycleCloseout(id); }
+        } else settleLifecycleCloseout(id);
+        live = execution(ctx, { reconcile: false });
+        if (live.phase === "blocked" && live.blockedContextEstablished !== true) {
+          requireTerminalLogReady(live);
+          await requestBlockedPassBoundary(ctx, live);
+        }
+      } finally { resetRuntime.finishAgentEnd(event); }
     });
 
     pi.on("session_before_tree", (event, ctx) => {

@@ -25,7 +25,7 @@ Initialization creates only missing entries:
 .ralph/logs/
 ```
 
-The extension uses a directory symlink because Prime Agent `0.9.1` discovers its `index.js` through that directory and resolves the package's relative modules and dependencies from their installed location. A direct file symlink to `src/index.js` does not preserve that resolution behavior and is not used.
+The extension uses a directory symlink because Prime Agent `0.9.3` discovers its `index.js` through that directory and resolves the package's relative modules and dependencies from their installed location. A direct file symlink to `src/index.js` does not preserve that resolution behavior and is not used.
 
 Canonical Ralph prompts are internal plugin inputs and are not linked into `.agents/skills/`. This avoids duplicate autocomplete entries and prevents `/skill:<name>` from bypassing the extension's authoritative invocation metadata and preconditions. On repeated initialization, an exact legacy `.agents/skills/<skill>` symlink resolving to `.ralph/skills/<skill>` is removed and reported. Renamed links, dangling links, links to other targets, files, directories, parent directories, and unrelated content are preserved. Parent path symlinks are not followed. Repeating initialization, including with different flags, does not refresh an existing canonical skill.
 

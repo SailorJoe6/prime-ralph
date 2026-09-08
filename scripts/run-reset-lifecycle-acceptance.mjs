@@ -121,7 +121,7 @@ await cancelRuntime.session.disposeAsync({ kernelSnapshot: false });
 const evidence = { primeAgentVersion: JSON.parse(await (await import("node:fs/promises")).readFile(join(primeRoot, "package.json"), "utf8")).version, resumeEvidence, cancelEvidence, providerFailureEvidence, retryEvidence };
 const failures = [];
 for (const [section, values] of Object.entries({ resumeEvidence, cancelEvidence, providerFailureEvidence, retryEvidence })) for (const [name, passed] of Object.entries(values)) if (!passed) failures.push(`${section}.${name}`);
-if (evidence.primeAgentVersion !== "0.9.1") failures.push("primeAgentVersion");
+if (evidence.primeAgentVersion !== "0.9.3") failures.push("primeAgentVersion");
 if (failures.length) { console.error(JSON.stringify({ ...evidence, failures }, null, 2)); process.exit(1); }
 console.log(JSON.stringify(evidence, null, 2));
 process.exit(0);

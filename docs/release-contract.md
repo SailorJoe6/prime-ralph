@@ -5,7 +5,7 @@ This document defines the standalone package boundary and the checks required be
 ## Package contract
 
 - Node.js 20 or newer.
-- Peer dependency: Prime Agent `0.9.1`.
+- Peer dependency: Prime Agent `0.9.3`.
 - ESM package with the exports listed in `package.json`.
 - Package contents are limited to `bin/`, `src/`, `templates/`, `scripts/`, `docs/`, `README.md`, and `LICENSE`.
 - The default extension registers production `/reset`, `/spec-it-out`, `/plan`, `/execute`, and provider-free `/ralph-recover` behavior plus the internal `ralph_lifecycle` control, and does not register or shadow `/clear`.
@@ -92,6 +92,9 @@ PRIME_AGENT_CORE_ROOT=/path/to/prime-agent/node_modules/@earendil-works/pi-agent
 npm run accept:execution
 PRIME_AGENT_ROOT=/path/to/prime-agent \
 PRIME_AGENT_CORE_ROOT=/path/to/prime-agent/node_modules/@earendil-works/pi-agent-core \
+npm run accept:execution-ready-handoff
+PRIME_AGENT_ROOT=/path/to/prime-agent \
+PRIME_AGENT_CORE_ROOT=/path/to/prime-agent/node_modules/@earendil-works/pi-agent-core \
 npm run accept:recovery
 npm run accept:execution-pause-resume
 npm run accept:execution-admission-failure
@@ -133,11 +136,11 @@ Then extract the produced tarball in a clean temporary directory, import `src/in
 ## Evidence boundaries
 
 - Unit tests and static prompt checks do not prove host lifecycle ordering or model behavior.
-- The specification lifecycle acceptance proves startup ordering, reload suppression, context retention, native reset boundaries, transcript transparency, and an unambiguous native extension-command catalog on Prime Agent `0.9.1`.
+- The specification lifecycle acceptance proves startup ordering, reload suppression, context retention, native reset boundaries, transcript transparency, and an unambiguous native extension-command catalog on Prime Agent `0.9.3`.
 - The planning lifecycle acceptance proves phase selection, ordered skill delivery, clean and current-context `/plan` paths, both planning reset branches, document protection, and no execution start.
 - The opt-in model matrices prove only the recorded provider/model outcomes under its restricted fixture tools; it covers new creation, the initial existing-spec menu, confirmed future creation, agreed active update, cancellation, and reset-existing behavior, and is not deterministic CI evidence.
 - The native recovery acceptance proves exact provider-free tree navigation and lossless in-place post-compaction repair, append-only JSONL prefix and active/abandoned branch retention, compacted-summary, conversation, unrelated-goal, same-session, live-REPL, and worktree continuity, cancellation safety, reload idempotence, and zero provider/compaction/goal/driver action.
-- The disk-backed execution acceptance proves successful reset-flavor compaction precedes each execute provider request, automatic projection is absent, pause/resume retains the complete current iteration, and JSONL, session identity, and REPL remain continuous on Prime Agent `0.9.1`.
+- The disk-backed execution acceptances prove successful reset-flavor compaction precedes each execute provider request, automatic projection is absent, a newer child custom handoff cannot make a historical goal continuation abort a readied replacement driver, pause/resume retains the complete current iteration, and JSONL, session identity, and REPL remain continuous on Prime Agent `0.9.3`.
 - The disk-backed blocked-recovery acceptance proves a real manually restored pair is verified and accepted without another move, native compaction precedes the blocked pass and every post-boundary message remains visible unchanged through confirmation, execution does not restart automatically, and a later `/execute` creates a fresh run.
 - The busy acceptance proves ordering behind an active parent turn and existing follow-up.
 - The lifecycle acceptance proves durable custom-compaction resume, cancellation without partial prepare, provider-failure state, and safe retry.

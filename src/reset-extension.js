@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { isQueuedToolHandoff } from "./cycle-boundary.js";
+import { createQueuedToolHandoffTracker } from "./cycle-boundary.js";
 import { formatPrepareInjection, loadPrepareSkill } from "./reset-skill.js";
 import { formatSpecificationInjection, inspectActiveSpecification, loadSpecItOutSkill } from "./specification.js";
 import {
@@ -15,6 +15,21 @@ import {
 } from "./reset-context.js";
 
 const TERMINAL_STATES = new Set(["completed", "interrupted", "failed", "recovered"]);
+
+function hasExactAdmittedBoundary(event, request) {
+  const expected = request?.prepareMessage;
+  if (!expected || !Array.isArray(event?.messages)) return false;
+  return event.messages.some((message) => {
+    if (message?.role !== expected.role || message.customType !== expected.customType || message.content !== expected.content) return false;
+    const actualDetails = message.details;
+    const expectedDetails = expected.details;
+    if (!actualDetails || !expectedDetails || typeof actualDetails !== "object" || typeof expectedDetails !== "object") return false;
+    const actualKeys = Object.keys(actualDetails).sort();
+    const expectedKeys = Object.keys(expectedDetails).sort();
+    return actualKeys.length === expectedKeys.length && actualKeys.every((key, index) =>
+      key === expectedKeys[index] && Object.is(actualDetails[key], expectedDetails[key]));
+  });
+}
 
 function defaultResetInjection({ ctx, loadPrepare, loadSpecItOut, inspectSpecification }) {
   const specification = inspectSpecification({ cwd: ctx.cwd });
@@ -38,21 +53,48 @@ export function createResetExtension({
   handleReset,
   createRequestId = randomUUID,
   hasActiveWorkflowTurn = () => false,
+  queuedToolHandoffTracker,
+  deferHandoffEventFinish = false,
 } = {}) {
   return function resetExtension(pi) {
     let pending;
     let activeRequestId;
     let settledAtTurnEnd;
+    const handoffTracker = queuedToolHandoffTracker ?? createQueuedToolHandoffTracker();
+    const ignoredOriginAgentEnds = new WeakSet();
+    const finishAgentEnd = (event) => {
+      const preserveRun = event != null && typeof event === "object" && ignoredOriginAgentEnds.delete(event);
+      handoffTracker.finish(event, { preserveRun });
+    };
 
     const appendState = (status, requestId, details = {}) => pi.appendEntry(RESET_STATE_TYPE, {
       source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId, status, ...details,
     });
     const correlationDetails = (details = {}) => Object.fromEntries(["workflowPhase", "invocationMode", "sessionId", "lifecycleId", "cycle", "provenanceId"].filter((key) => details[key] != null).map((key) => [key, details[key]]));
-    const clearPending = () => { pending = undefined; activeRequestId = undefined; };
-    const admittedQueuedToolHandoff = (event, ctx) => Boolean(
-      pending?.stage === "context_admitted" && activeRequestId === pending.requestId &&
-      hasActiveWorkflowTurn(ctx) === true && isQueuedToolHandoff(event, ctx)
-    );
+    const clearPending = () => { pending = undefined; activeRequestId = undefined; handoffTracker.invalidate(); };
+    const handoffRequestKey = () => pending ? JSON.stringify([
+      pending.requestId, pending.markerId, pending.command,
+      ...["workflowPhase", "invocationMode", "sessionId", "lifecycleId", "cycle", "provenanceId"].map((key) => pending.identityDetails?.[key] ?? null),
+    ]) : undefined;
+    const handoffIdentity = (ctx) => ({
+      requestKey: handoffRequestKey(),
+      admitted: pending?.stage === "context_admitted" && activeRequestId === pending.requestId && hasActiveWorkflowTurn(ctx, pending.identityDetails) === true,
+    });
+    const admittedQueuedToolHandoff = (event, ctx) => {
+      if (event != null && typeof event === "object" && ignoredOriginAgentEnds.has(event)) return true;
+      try {
+        const latestDurableAssistant = ctx?.sessionManager?.getBranch?.().findLast((entry) => entry?.type === "message" && entry.message?.role === "assistant")?.message;
+        if (["error", "aborted"].includes(latestDurableAssistant?.stopReason)) {
+          handoffTracker.invalidate();
+          return false;
+        }
+        return handoffTracker.classify(event, ctx, handoffIdentity(ctx));
+      } catch { handoffTracker.invalidate(); return false; }
+    };
+    const recordQueuedToolResult = (event, ctx) => {
+      try { return handoffTracker.record(event, ctx, handoffIdentity(ctx)); }
+      catch { handoffTracker.invalidate(); return false; }
+    };
     const failPending = (reason, error) => {
       const request = pending;
       if (!request) return;
@@ -275,10 +317,12 @@ export function createResetExtension({
       }
       return;
     });
+    pi.on("agent_start", () => handoffTracker.beginRun());
     pi.on("message_start", (event) => {
       if (!pending || event.message?.customType !== RESET_MESSAGE_TYPE) return;
       if (event.message.details?.requestId === pending.requestId) activeRequestId = pending.requestId;
     });
+    pi.on("tool_result", (event, ctx) => recordQueuedToolResult(event, ctx));
     pi.on("turn_end", (event) => {
       if (!pending || activeRequestId !== pending.requestId) return;
       const message = event?.message;
@@ -290,50 +334,59 @@ export function createResetExtension({
       clearPending();
     });
     pi.on("agent_end", async (event, ctx) => {
-      if (waitingForInteractiveIdle && !ctx.hasPendingMessages()) {
-        waitingForInteractiveIdle = false;
-        try { await runInteractiveReset(ctx); }
-        catch (error) { ctx.ui.notify(`Ralph context reset could not start after active work: ${error.message}`, "error"); }
-      }
-      if (settledAtTurnEnd) {
-        const settled = settledAtTurnEnd;
-        settledAtTurnEnd = undefined;
-        activeRequestId = undefined;
-        try { appendState("completed", settled.requestId, { mode: "settled", command: settled.command, ...settled.identityDetails }); }
-        catch (error) {
-          try { appendState("failed", settled.requestId, { reason: "completion_state_append_failed", boundaryExists: true, command: settled.command, ...settled.identityDetails }); } catch {}
-          ctx.ui.notify("Ralph could not durably complete the context boundary; retry the command before continuing.", "error");
-        }
-        return;
-      }
-      if (!pending) return;
-      const request = pending;
-      const finalAssistant = [...(event.messages ?? [])].reverse().find((message) => message?.role === "assistant");
-      if (request.ignoreCurrentAbort) {
-        // The caller requested this boundary from a provider context that it
-        // immediately aborted. Its agent_end is always the first one observed
-        // for this transaction, even when no new aborted assistant was stored.
-        request.ignoreCurrentAbort = false;
-        return;
-      }
-      // Prime Agent ends the current Agent run after a tool batch when queued
-      // steering is ready. Preserve this exact admitted request for the next run;
-      // a later normal turn_end remains the only successful settlement.
-      if (admittedQueuedToolHandoff(event, ctx)) return;
-      if (activeRequestId !== request.requestId && request.stage !== "context_admitted") return;
+      const queuedToolHandoff = admittedQueuedToolHandoff(event, ctx);
       try {
-        const reason = finalAssistant?.stopReason === "aborted" ? "provider_aborted" : finalAssistant?.stopReason === "error" ? "provider_error" : "missing_normal_turn_end";
-        appendState("failed", request.requestId, { reason, boundaryExists: true, command: request.command, ...request.identityDetails });
-      } catch (error) {
-        ctx.ui.notify("Ralph could not durably settle the context boundary; retry the command before continuing.", "error");
+        if (waitingForInteractiveIdle && !ctx.hasPendingMessages()) {
+          waitingForInteractiveIdle = false;
+          try { await runInteractiveReset(ctx); }
+          catch (error) { ctx.ui.notify(`Ralph context reset could not start after active work: ${error.message}`, "error"); }
+        }
+        if (settledAtTurnEnd) {
+          const settled = settledAtTurnEnd;
+          settledAtTurnEnd = undefined;
+          activeRequestId = undefined;
+          try { appendState("completed", settled.requestId, { mode: "settled", command: settled.command, ...settled.identityDetails }); }
+          catch (error) {
+            try { appendState("failed", settled.requestId, { reason: "completion_state_append_failed", boundaryExists: true, command: settled.command, ...settled.identityDetails }); } catch {}
+            ctx.ui.notify("Ralph could not durably complete the context boundary; retry the command before continuing.", "error");
+          }
+          return;
+        }
+        if (!pending) return;
+        const request = pending;
+        const finalAssistant = [...(event.messages ?? [])].reverse().find((message) => message?.role === "assistant");
+        if (request.ignoreCurrentAbort) {
+          // The origin run cannot contain the exact boundary that starts its
+          // replacement. Once that boundary is visible, this is replacement-run
+          // evidence and abort/error must fail closed even before its first tool.
+          request.ignoreCurrentAbort = false;
+          if (!hasExactAdmittedBoundary(event, request)) {
+            if (event != null && typeof event === "object") ignoredOriginAgentEnds.add(event);
+            return;
+          }
+        }
+        // Prime Agent ends the current Agent run after a tool batch when queued
+        // steering is ready. Preserve this exact admitted request for the next run;
+        // a later normal turn_end remains the only successful settlement.
+        if (queuedToolHandoff) return;
+        if (activeRequestId !== request.requestId && request.stage !== "context_admitted") return;
+        try {
+          const reason = finalAssistant?.stopReason === "aborted" ? "provider_aborted" : finalAssistant?.stopReason === "error" ? "provider_error" : "missing_normal_turn_end";
+          appendState("failed", request.requestId, { reason, boundaryExists: true, command: request.command, ...request.identityDetails });
+        } catch (error) {
+          ctx.ui.notify("Ralph could not durably settle the context boundary; retry the command before continuing.", "error");
+        } finally {
+          clearPending();
+          activeRequestId = undefined;
+        }
       } finally {
-        clearPending();
-        activeRequestId = undefined;
+        if (!deferHandoffEventFinish) finishAgentEnd(event);
       }
     });
+    pi.on("session_tree", () => handoffTracker.invalidate());
     pi.on("session_shutdown", (event) => {
       waitingForInteractiveIdle = false;
-      if (!pending) return;
+      if (!pending) { handoffTracker.invalidate(); return; }
       const request = pending;
       try { appendState("interrupted", request.requestId, { reason: event.reason, command: request.command, ...request.identityDetails }); }
       finally { clearPending(); activeRequestId = undefined; }
@@ -344,7 +397,7 @@ export function createResetExtension({
       if (settledAtTurnEnd && settledAtTurnEnd.requestId !== requestId) throw new Error("Ralph recovery does not own the settling reset request");
       waitingForInteractiveIdle = false; settledAtTurnEnd = undefined; clearPending();
     };
-    return Object.freeze({ requestBoundary, requestBoundaryAtProviderBoundary, admittedQueuedToolHandoff, relinquishAfterRecovery });
+    return Object.freeze({ requestBoundary, requestBoundaryAtProviderBoundary, admittedQueuedToolHandoff, finishAgentEnd, relinquishAfterRecovery });
   };
 }
 

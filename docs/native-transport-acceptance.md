@@ -1,6 +1,6 @@
 # Native transport acceptance
 
-These checks prove that the packaged extension is admitted through real Prime Agent `0.9.1` transports. They are narrower than the unit and deterministic lifecycle suites.
+These checks prove that the packaged extension is admitted through real Prime Agent `0.9.3` transports. They are narrower than the unit and deterministic lifecycle suites.
 
 ## Committed checks
 

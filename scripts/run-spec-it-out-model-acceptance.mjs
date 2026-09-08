@@ -78,7 +78,7 @@ for (const variant of variants) for (const caseName of cases) {
   const futurePath = join(cwd, ".ralph/plans/future/export-errors/SPECIFICATION.md"), futureExists = existsSync(futurePath), futureContent = futureExists ? readFileSync(futurePath, "utf8") : "";
   const after = manifest(cwd), changed = changedPaths(baseline, after), assertions = [];
   const check = (name, pass) => assertions.push({ name, pass: Boolean(pass) });
-  check("process succeeded", run.status === 0 && !run.signal); check("Prime Agent 0.9.1 recorded", primeAgentVersion === "0.9.1");
+  check("process succeeded", run.status === 0 && !run.signal); check("Prime Agent 0.9.3 recorded", primeAgentVersion === "0.9.3");
   check("terminal assistant response", finalMessage && !["error", "aborted", "length"].includes(finalMessage.stopReason));
   check("selected provider observed", messages.every((message) => message.provider === provider)); check("selected model observed", messages.every((message) => message.model === model || message.responseModel === model));
   check("no planning or execution artifact", !existsSync(join(cwd, ".ralph/plans/EXECUTION_PLAN.md")));

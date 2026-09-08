@@ -58,14 +58,21 @@ const auth = AuthStorage.inMemory(); auth.set("acceptance", { type: "api_key", k
 const registry = ModelRegistry.inMemory(auth), settings = SettingsManager.inMemory({ compaction: { enabled: false }, goals: { enabled: true, maxContinuations: 10 } });
 const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager: settings, additionalExtensionPaths: [injector, join(cwd, ".prime/agent/extensions/prime-ralph/index.js")], noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true, systemPrompt: "FAIL_BASELINE" });
 await loader.reload(); if (loader.getExtensions().errors.length) throw new Error(JSON.stringify(loader.getExtensions().errors));
-const sm = SessionManager.create(cwd, sessionDir), contexts = [], transcriptMatches = [], stages = new Map();
+const sm = SessionManager.create(cwd, sessionDir), contexts = [], transcriptMatches = [], transformRecords = [], stages = new Map();
 const provisioner = new IpythonKernelProvisioner(cwd, { sessionId: sm.getSessionId() }), ipython = createIpythonTool(cwd, { provisioner });
 let session;
 const agent = new Agent({ initialState: { systemPrompt: "FAIL_BASELINE", model, thinkingLevel: "off", serviceTier: "auto", messages: [], tools: [] }, convertToLlm,
-  transformContext: async (messages) => session ? session._extensionRunner.emitContext(messages) : messages,
+  transformContext: async (messages) => {
+    const transformed = session ? await session._extensionRunner.emitContext(messages) : messages;
+    transformRecords.push({ after: stableTranscript(convertToLlm(transformed)), transparent: stableTranscript(messages) === stableTranscript(transformed), consumed: false });
+    return transformed;
+  },
   streamFn: async (_model, context) => {
+    const contextKey = stableTranscript(context.messages);
+    const transform = transformRecords.findLast((record) => !record.consumed && record.after === contextKey);
+    if (transform) transform.consumed = true;
+    transcriptMatches.push(transform?.transparent === true);
     const visible = visibleText(context); contexts.push(visible);
-    transcriptMatches.push(stableTranscript(context.messages) === stableTranscript(convertToLlm(sm.buildSessionContext().messages)));
     const meta = invocation(visible);
     if (!meta || meta.skill !== "execute") return response(assistant("planning interaction"));
     const stage = stages.get(meta.cycle) ?? 0; stages.set(meta.cycle, stage + 1);
@@ -91,7 +98,7 @@ try { await session.promptAndWait("RECOVERED_STORAGE_PROVIDER_PROBE"); } catch {
 await waitFor(() => !session.isStreaming, "automatic-round stale boundary probe denial");
 const entries = sm.getEntries(), states = entries.filter((entry) => entry.customType === EXECUTION_STATE_ENTRY_TYPE).map((entry) => entry.data), resetFailures = entries.filter((entry) => entry.customType === RESET_STATE_TYPE && entry.data?.reason === "skill_admission_commit_failed"), metas = contexts.map(invocation).filter(Boolean);
 const checks = {
-  primeAgentVersion: JSON.parse(await readFile(join(primeRoot, "package.json"), "utf8")).version === "0.9.1",
+  primeAgentVersion: JSON.parse(await readFile(join(primeRoot, "package.json"), "utf8")).version === "0.9.3",
   providerTranscriptEquivalent: transcriptMatches.length === contexts.length && transcriptMatches.every(Boolean),
   initialCompactionCompleted: entries.some((entry) => entry.type === "compaction" && entry.details?.command === "execute"),
   automaticCompactionCompleted: entries.some((entry) => entry.type === "compaction" && entry.details?.command === "execute-round"),

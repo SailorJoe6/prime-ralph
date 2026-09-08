@@ -94,7 +94,7 @@ ${body}
 const success = await fixture();
 const successEntries = success.sm.getEntries(), successBranch = success.sm.getBranch(), recovery = successBranch.find((entry) => entry.customType === RECOVERY_STATE_TYPE), recoveredState = successBranch.at(-1)?.data;
 const successChecks = {
-  primeAgentVersion: JSON.parse(await readFile(join(primeRoot, "package.json"), "utf8")).version === "0.9.1",
+  primeAgentVersion: JSON.parse(await readFile(join(primeRoot, "package.json"), "utf8")).version === "0.9.3",
   commandRegistered: success.commandSurface.some((command) => command.name === "ralph-recover"),
   exactCandidate: success.preflight?.kind === "navigate" && success.preflight.candidate.anchorId === success.anchorId && success.preflight.priorLeafId === success.priorLeafId,
   appendOnlyPrefix: success.afterBytes.subarray(0, success.beforeBytes.length).equals(success.beforeBytes),

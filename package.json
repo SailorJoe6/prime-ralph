@@ -42,6 +42,7 @@
     "accept:planning": "node scripts/run-planning-acceptance.mjs",
     "accept:model:plan": "node scripts/run-plan-model-acceptance.mjs",
     "accept:execution": "node scripts/run-execution-acceptance.mjs",
+    "accept:execution-ready-handoff": "node scripts/run-execution-ready-handoff-acceptance.mjs",
     "accept:execution-pause-resume": "node scripts/run-execution-pause-resume-acceptance.mjs",
     "accept:execution-admission-failure": "node scripts/run-execution-admission-failure-acceptance.mjs",
     "accept:blocked-recovery": "node scripts/run-blocked-recovery-acceptance.mjs",
@@ -56,7 +57,7 @@
     "node": ">=20"
   },
   "peerDependencies": {
-    "prime-agent": "0.9.1"
+    "prime-agent": "0.9.3"
   },
   "license": "MIT",
   "dependencies": {

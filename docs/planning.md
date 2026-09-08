@@ -8,7 +8,7 @@ The production extension registers `/reset`, `/spec-it-out`, `/plan`, and `/exec
 
 A normal top-level session with an exact active `.ralph/plans/SPECIFICATION.md` starts in planning. The extension validates `prepare`, the exact active-plan state, and the project `plan` skill before admitting one hidden message. That message contains `prepare` first and the plan invocation second. An absent active specification retains the specification startup behavior. RLM child sessions (`rlmDepth > 0`) skip this automatic planning turn so the explicit RLM spawn task runs first.
 
-Prime Agent `0.9.1` does not expose a reliable conditional command-registration predicate. `/plan` is therefore registered consistently and uses the specified fallback when the active specification is absent: it reports the required path and makes no context or document change.
+Prime Agent `0.9.3` does not expose a reliable conditional command-registration predicate. `/plan` is therefore registered consistently and uses the specified fallback when the active specification is absent: it reports the required path and makes no context or document change.
 
 ## Active plan and trusted invocation facts
 
@@ -47,6 +47,6 @@ Neither path creates or edits planning documents, invokes `/execute`, starts a g
 ## Evidence
 
 - `npm test` covers exact path and type classification, prompt validation, bounded invocation metadata, session-scoped phase reconstruction, startup deduplication, missing-spec fallback, both `/plan` context branches, both planning reset modes, and failure-before-boundary behavior.
-- `npm run accept:planning` uses a deterministic provider and real Prime Agent `0.9.1`. It proves ordered startup, clean explicit transition, specification/planning reset distinction, current-context existing-plan discussion, plan protection, stable session identity, and zero execution state.
+- `npm run accept:planning` uses a deterministic provider and real Prime Agent `0.9.3`. It proves ordered startup, clean explicit transition, specification/planning reset distinction, current-context existing-plan discussion, plan protection, stable session identity, and zero execution state.
 - `npm run accept:model:plan` is an explicit real-model behavioral matrix for both default and Beads prompts. It tests new plan creation, existing-plan warning and choices, explicit update, cancellation, and both reset modes with narrow plan-only tools. Its sanitized artifact is `docs/acceptance/plan-model-acceptance.json`.
 - Initialization acceptance inspects the native command catalog after a fresh host lifecycle and rejects direct `skill:plan` duplicates.

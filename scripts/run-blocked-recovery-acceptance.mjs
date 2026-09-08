@@ -77,7 +77,7 @@ await session.prompt("/execute");
 await waitFor(() => { const state = sm.getEntries().filter((entry) => entry.customType === EXECUTION_STATE_ENTRY_TYPE).at(-1)?.data; return executeCalls >= 2 && state?.pendingDecision === null && state?.phase === "planning" && !session.isStreaming; }, "fresh explicit execution");
 const states = sm.getEntries().filter((entry) => entry.customType === EXECUTION_STATE_ENTRY_TYPE).map((entry) => entry.data), started = states.find((state) => state.phase === "execution" && state.status === "running");
 const checks = {
-  primeAgentVersion: JSON.parse(await readFile(join(primeRoot, "package.json"), "utf8")).version === "0.9.1",
+  primeAgentVersion: JSON.parse(await readFile(join(primeRoot, "package.json"), "utf8")).version === "0.9.3",
   providerTranscriptEquivalent: transcriptMatches.length >= 5 && transcriptMatches.every(Boolean),
   restoredPromptOnce: blockedCalls === 3 && recoveryContexts.every((value) => value.includes("RECOVERY_BLOCKED")),
   userResponsePreserved: recoveryContexts.every((value) => value.includes("BLOCKED_RECOVERY_USER_RESPONSE")),

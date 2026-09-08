@@ -23,7 +23,7 @@ After the latest visible native compaction boundary, every ordinary user, assist
 
 ## Refusal and failure
 
-Prime Agent `0.9.1` can refuse before `session_before_compact`:
+Prime Agent `0.9.3` can refuse before `session_before_compact`:
 
 - `Already compacted` means the branch's latest durable entry is already a compaction.
 - `Session is too short to compact` means newer branch content exists but Prime Agent does not consider it sufficient for another summary boundary.
@@ -50,7 +50,7 @@ A second, narrower mode applies only when the latest compaction after the failed
 
 Both modes append sanitized mode-bound provenance followed by one explicit clean `planning/inactive` workflow state containing a `recoveryRequired` record. The clean state has null lifecycle and driver, cycle zero, false reset request, and no pause, pending decision/round, wait, admitted continuation, or block. No success notice appears before both records are durable. The user must inspect the worktree, active planning documents, Git state, and issue state before a later explicit `/execute`; recovery never invokes `/execute` itself.
 
-A crash after navigation but before either append is recovered by finding the one abandoned poison branch rooted at the current anchor. For either mode, a provenance-only reload appends only the missing inactive state. Completed recovery remains idempotent after reload and after later non-Ralph conversation or goal-accounting entries. Because Prime Agent `0.9.1` can advance in-memory entry state before an append error is known to be durable, an append error quarantines same-process recovery. Reload or restart the affected process before retrying.
+A crash after navigation but before either append is recovered by finding the one abandoned poison branch rooted at the current anchor. For either mode, a provenance-only reload appends only the missing inactive state. Completed recovery remains idempotent after reload and after later non-Ralph conversation or goal-accounting entries. Because Prime Agent `0.9.3` can advance in-memory entry state before an append error is known to be durable, an append error quarantines same-process recovery. Reload or restart the affected process before retrying.
 
 If the extension cannot load, stop the affected process and run `prime-ralph recover --project <path>` to print the shell-safe offline inspection command. The helper changes and starts nothing. Its native fallback is a fresh `prime-agent --no-extensions --cwd <project>` process without `--continue`, `--resume`, or `--fork`.
 ## Phase behavior
@@ -68,7 +68,7 @@ Execution-to-execution and execution-to-blocked automatic pass boundaries use th
 
 `npm test` covers marker correlation, custom results, honest refusal, exact admission, no successful context rewrite, duplicate handling, ordinary-compaction isolation, failure, reload, and interruption.
 
-`npm run accept:reset`, `accept:reset-busy`, and `accept:reset-lifecycle` exercise real Prime Agent `0.9.1` session behavior with deterministic provider capture. Execution and blocked-recovery acceptance cover automatic pass-boundary use of the same transaction.
+`npm run accept:reset`, `accept:reset-busy`, and `accept:reset-lifecycle` exercise real Prime Agent `0.9.3` session behavior with deterministic provider capture. Execution and blocked-recovery acceptance cover automatic pass-boundary use of the same transaction.
 
 ## Public-API boundary
 

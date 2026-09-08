@@ -115,7 +115,7 @@ const result = {
   goalsOrPhases: entries.filter((entry) => /goal|phase|execute|blocked/.test(entry.customType ?? "")).length,
 };
 const failures = [];
-if (result.primeAgentVersion !== "0.9.1") failures.push("wrong Prime Agent version");
+if (result.primeAgentVersion !== "0.9.3") failures.push("wrong Prime Agent version");
 if (JSON.stringify(identityBefore) !== JSON.stringify(identityAfter) || JSON.stringify(identityBefore) !== JSON.stringify(identityFinal)) failures.push("session identity changed");
 if (result.providerCalls !== 7) failures.push("unexpected provider call count");
 if (!result.providerTranscriptEquivalent) failures.push("provider context diverged from the native session transcript");

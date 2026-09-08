@@ -12,8 +12,8 @@ import {
   resetCompactionInstructions,
 } from "../src/reset-context.js";
 
-function harness({ branch = [], persistSent = true, sendError, appendError, specificationState = "absent", idle = true, pendingMessages = false, signalAvailable = true, activeWorkflowTurn = false } = {}) {
-  let runtimeIdle = idle, runtimePendingMessages = pendingMessages;
+function harness({ branch = [], persistSent = true, sendError, appendError, specificationState = "absent", idle = true, pendingMessages = false, signalAvailable = true, activeWorkflowTurn = false, activeWorkflowIdentity } = {}) {
+  let runtimeIdle = idle, runtimePendingMessages = pendingMessages, runtimeSignalAvailable = signalAvailable, runtimeActiveWorkflowTurn = activeWorkflowTurn, runtimeActiveWorkflowIdentity = activeWorkflowIdentity;
   const runAbortController = new AbortController();
   const handlers = new Map(), commands = new Map(), sent = [], entries = [], notices = [], compactions = [];
   let aborts = 0, appendCalls = 0, appendFailureAt;
@@ -38,13 +38,13 @@ function harness({ branch = [], persistSent = true, sendError, appendError, spec
     loadSpecItOut: ({ cwd }) => ({ path: `${cwd}/.ralph/skills/spec-it-out/SKILL.md`, text: "---\nname: spec-it-out\ndescription: test\n---\nspec body" }),
     inspectSpecification: () => ({ state: specificationState, relativePath: ".ralph/plans/SPECIFICATION.md" }),
     createRequestId: (() => { let id = 0; return () => `r${++id}`; })(),
-    hasActiveWorkflowTurn: () => activeWorkflowTurn,
+    hasActiveWorkflowTurn: (_ctx, identity) => runtimeActiveWorkflowTurn && (runtimeActiveWorkflowIdentity === undefined || JSON.stringify(identity) === JSON.stringify(runtimeActiveWorkflowIdentity)),
   })(pi);
   const ctx = {
     cwd: "/project",
     isIdle: () => runtimeIdle,
     hasPendingMessages: () => runtimePendingMessages,
-    signal: signalAvailable ? runAbortController.signal : undefined,
+    get signal() { return runtimeSignalAvailable ? runAbortController.signal : undefined; },
     waitForIdle: async () => {},
     compact: (options) => compactions.push(options),
     abort: () => { aborts += 1; },
@@ -57,7 +57,7 @@ function harness({ branch = [], persistSent = true, sendError, appendError, spec
     branchEntries: branch,
     signal: new AbortController().signal,
   }, ctx);
-  return { handlers, commands, sent, entries, branch, notices, compactions, ctx, runtime, beforeCompact, getAborts: () => aborts, setIdle: (value) => { runtimeIdle = value; }, setPendingMessages: (value) => { runtimePendingMessages = value; }, abortRun: () => runAbortController.abort(), failAppendIn: (offset) => { appendFailureAt = appendCalls + offset; } };
+  return { handlers, commands, sent, entries, branch, notices, compactions, ctx, runtime, beforeCompact, getAborts: () => aborts, setIdle: (value) => { runtimeIdle = value; }, setPendingMessages: (value) => { runtimePendingMessages = value; }, setSignalAvailable: (value) => { runtimeSignalAvailable = value; }, setActiveWorkflowIdentity: (value) => { runtimeActiveWorkflowIdentity = value; }, setActiveWorkflowTurn: (value) => { runtimeActiveWorkflowTurn = value; }, abortRun: () => runAbortController.abort(), failAppendIn: (offset) => { appendFailureAt = appendCalls + offset; } };
 }
 
 async function request(h) { await h.commands.get("reset").handler("", h.ctx); }
@@ -252,24 +252,85 @@ test("reload reports a compacted request whose prepare was not admitted", () => 
 
 
 test("automatic boundary ignores only the originating provider end after replacement admission", async () => {
-  const h = harness();
+  const h = harness({ activeWorkflowTurn: true });
+  h.handlers.get("agent_start")({}, h.ctx);
   await h.runtime.requestBoundaryAtProviderBoundary({
     ctx: h.ctx, command: "execute-round", ignoreCurrentAbort: true,
     resolveInjection: () => ({ content: "next pass" }),
   });
   completeCompaction(h);
   const visible = [{ role: "custom", ...h.sent[0].message }];
+  h.handlers.get("agent_start")({}, h.ctx);
   assert.equal(h.handlers.get("context")({ messages: visible }, h.ctx), undefined);
   h.handlers.get("message_start")({ message: { role: "custom", ...h.sent[0].message } }, h.ctx);
-  await h.handlers.get("agent_end")({ messages: [...visible, { role: "assistant", stopReason: "aborted" }] }, h.ctx);
+  const originEnd = { messages: [{ role: "assistant", stopReason: "aborted" }] };
+  await h.handlers.get("agent_end")(originEnd, h.ctx);
   assert.equal(h.entries.at(-1).data.status, "prepare_pending");
+
+  const toolUse = { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "replacement-call", name: "goal", arguments: {} }] };
+  const toolResult = { role: "toolResult", toolCallId: "replacement-call", toolName: "goal", content: [{ type: "text", text: "done" }], isError: false };
+  h.handlers.get("tool_result")({ type: "tool_result", toolCallId: toolResult.toolCallId, toolName: toolResult.toolName, input: {}, content: toolResult.content, isError: false }, h.ctx);
+  h.handlers.get("turn_end")({ message: toolUse }, h.ctx);
+  h.setPendingMessages(true);
+  h.setSignalAvailable(false);
+  await h.handlers.get("agent_end")({ messages: [...visible, toolUse, toolResult] }, h.ctx);
+  assert.equal(h.entries.at(-1).data.status, "prepare_pending");
+  assert.equal(h.entries.some((entry) => entry.customType === RESET_STATE_TYPE && entry.data.status === "failed"), false);
+
+  h.setPendingMessages(false);
+  h.setSignalAvailable(true);
+  h.handlers.get("agent_start")({}, h.ctx);
   h.handlers.get("turn_end")({ message: { role: "assistant", stopReason: "stop" } }, h.ctx);
   await h.handlers.get("agent_end")({ messages: [...visible, { role: "assistant", stopReason: "stop" }] }, h.ctx);
   assert.equal(h.entries.at(-1).data.status, "completed");
 });
 
+test("automatic boundary rejects a replacement-run failure that overtakes its origin without a tool witness", async () => {
+  const h = harness({ activeWorkflowTurn: true });
+  h.handlers.get("agent_start")({}, h.ctx);
+  await h.runtime.requestBoundaryAtProviderBoundary({
+    ctx: h.ctx, command: "execute-round", ignoreCurrentAbort: true,
+    resolveInjection: () => ({ content: "next pass" }),
+  });
+  completeCompaction(h);
+  const visible = [{ role: "custom", ...h.sent[0].message }];
+  h.handlers.get("agent_start")({}, h.ctx);
+  assert.equal(h.handlers.get("context")({ messages: visible }, h.ctx), undefined);
+  h.handlers.get("message_start")({ message: { role: "custom", ...h.sent[0].message } }, h.ctx);
+
+  const replacementEnd = { messages: [...visible, { role: "assistant", stopReason: "aborted" }] };
+  await h.handlers.get("agent_end")(replacementEnd, h.ctx);
+
+  assert.equal(h.entries.at(-1).data.status, "failed");
+  assert.equal(h.entries.at(-1).data.reason, "provider_aborted");
+  assert.equal(h.runtime.admittedQueuedToolHandoff(replacementEnd, h.ctx), false);
+});
+
+test("automatic boundary does not ignore a replacement-run failure after a successful tool witness", async () => {
+  const h = harness({ activeWorkflowTurn: true });
+  h.handlers.get("agent_start")({}, h.ctx);
+  await h.runtime.requestBoundaryAtProviderBoundary({
+    ctx: h.ctx, command: "execute-round", ignoreCurrentAbort: true,
+    resolveInjection: () => ({ content: "next pass" }),
+  });
+  completeCompaction(h);
+  const visible = [{ role: "custom", ...h.sent[0].message }];
+  h.handlers.get("agent_start")({}, h.ctx);
+  assert.equal(h.handlers.get("context")({ messages: visible }, h.ctx), undefined);
+  h.handlers.get("message_start")({ message: { role: "custom", ...h.sent[0].message } }, h.ctx);
+  const toolUse = { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "replacement-call", name: "goal", arguments: {} }] };
+  const toolResult = { role: "toolResult", toolCallId: "replacement-call", toolName: "goal", content: [{ type: "text", text: "done" }], isError: false };
+  h.handlers.get("tool_result")({ type: "tool_result", toolCallId: toolResult.toolCallId, toolName: toolResult.toolName, input: {}, content: toolResult.content, isError: false }, h.ctx);
+  const replacementEnd = { messages: [...visible, toolUse, toolResult, { role: "assistant", stopReason: "aborted" }] };
+  await h.handlers.get("agent_end")(replacementEnd, h.ctx);
+  assert.equal(h.entries.at(-1).data.status, "failed");
+  assert.equal(h.entries.at(-1).data.reason, "provider_aborted");
+  assert.equal(h.runtime.admittedQueuedToolHandoff(replacementEnd, h.ctx), false);
+});
+
 test("automatic boundary consumes an origin end without a new assistant before admission", async () => {
   const h = harness();
+  h.handlers.get("agent_start")({}, h.ctx);
   await h.runtime.requestBoundaryAtProviderBoundary({
     ctx: h.ctx, command: "execute-round", ignoreCurrentAbort: true,
     resolveInjection: () => ({ content: "next pass" }),
@@ -277,6 +338,7 @@ test("automatic boundary consumes an origin end without a new assistant before a
   await h.handlers.get("agent_end")({ messages: [{ role: "assistant", content: "older turn", stopReason: "stop" }] }, h.ctx);
   completeCompaction(h);
   const visible = [{ role: "custom", ...h.sent[0].message }];
+  h.handlers.get("agent_start")({}, h.ctx);
   assert.equal(h.handlers.get("context")({ messages: visible }, h.ctx), undefined);
   h.handlers.get("message_start")({ message: { role: "custom", ...h.sent[0].message } }, h.ctx);
   await h.handlers.get("agent_end")({ messages: [...visible, { role: "assistant", stopReason: "aborted" }] }, h.ctx);
@@ -322,20 +384,66 @@ test("preserves an exact admitted boundary across a queued current tool handoff"
   const h = harness({ activeWorkflowTurn: true }); await request(h); completeCompaction(h);
   const visible = [{ role: "custom", ...h.sent[0].message }];
   assert.equal(h.handlers.get("context")({ messages: visible }, h.ctx), undefined);
+  h.handlers.get("agent_start")({}, h.ctx);
   h.handlers.get("message_start")({ message: { role: "custom", ...h.sent[0].message } }, h.ctx);
   const toolUse = { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "goal-complete", name: "goal", arguments: { action: "complete" } }] };
+  const toolResult = { role: "toolResult", toolCallId: "goal-complete", toolName: "goal", content: [], isError: false };
+  h.handlers.get("tool_result")({ type: "tool_result", toolCallId: "goal-complete", toolName: "goal", input: {}, content: toolResult.content, isError: false }, h.ctx);
   h.handlers.get("turn_end")({ message: toolUse }, h.ctx);
   h.setPendingMessages(true);
-  await h.handlers.get("agent_end")({ messages: [toolUse] }, h.ctx);
+  h.setSignalAvailable(false);
+  await h.handlers.get("agent_end")({ messages: [toolUse, toolResult] }, h.ctx);
   assert.equal(h.entries.some((entry) => entry.customType === RESET_STATE_TYPE && entry.data.status === "failed"), false);
   assert.equal(h.handlers.get("context")({ messages: [...visible, { role: "custom", customType: "agent_message", content: "child result" }] }, h.ctx), undefined);
   h.setPendingMessages(false);
+  h.setSignalAvailable(true);
+  h.handlers.get("agent_start")({}, h.ctx);
   const final = { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "waiting" }] };
   h.handlers.get("turn_end")({ message: final }, h.ctx);
   await h.handlers.get("agent_end")({ messages: [final] }, h.ctx);
   assert.equal(h.entries.filter((entry) => entry.customType === RESET_STATE_TYPE && entry.data.status === "completed").length, 1);
   assert.equal(h.entries.some((entry) => entry.customType === RESET_STATE_TYPE && entry.data.status === "failed"), false);
 });
+
+test("a transcript tool result without the synchronous callback witness fails closed", async () => {
+  const h = harness({ activeWorkflowTurn: true }); await request(h); completeCompaction(h);
+  const visible = [{ role: "custom", ...h.sent[0].message }];
+  assert.equal(h.handlers.get("context")({ messages: visible }, h.ctx), undefined);
+  h.handlers.get("agent_start")({}, h.ctx);
+  h.handlers.get("message_start")({ message: { role: "custom", ...h.sent[0].message } }, h.ctx);
+  const toolUse = { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "goal-complete", name: "goal", arguments: { action: "complete" } }] };
+  const transcriptResult = { role: "toolResult", toolCallId: "goal-complete", toolName: "goal", content: [{ type: "text", text: "Goal completed" }], isError: false };
+  h.setPendingMessages(true);
+  h.setSignalAvailable(false);
+  await h.handlers.get("agent_end")({ messages: [toolUse, transcriptResult] }, h.ctx);
+  assert.equal(h.entries.at(-1).data.status, "failed");
+  assert.equal(h.entries.at(-1).data.reason, "missing_normal_turn_end");
+});
+
+
+test("a changed current workflow identity rejects an otherwise exact retained witness", async () => {
+  const admittedIdentity = { workflowPhase: "execution", invocationMode: "execution-start", sessionId: "session-1", lifecycleId: "life-1", cycle: 1 };
+  const h = harness({ activeWorkflowTurn: true, activeWorkflowIdentity: admittedIdentity });
+  await h.runtime.requestBoundaryAtProviderBoundary({
+    ctx: h.ctx, command: "execute",
+    resolveInjection: () => ({ content: "execute", details: admittedIdentity }),
+  });
+  completeCompaction(h);
+  const visible = [{ role: "custom", ...h.sent[0].message }];
+  assert.equal(h.handlers.get("context")({ messages: visible }, h.ctx), undefined);
+  h.handlers.get("agent_start")({}, h.ctx);
+  h.handlers.get("message_start")({ message: { role: "custom", ...h.sent[0].message } }, h.ctx);
+  const toolUse = { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "goal-complete", name: "goal", arguments: {} }] };
+  const toolResult = { role: "toolResult", toolCallId: "goal-complete", toolName: "goal", content: [], isError: false };
+  h.handlers.get("tool_result")({ type: "tool_result", toolCallId: toolResult.toolCallId, toolName: toolResult.toolName, input: {}, content: toolResult.content, isError: false }, h.ctx);
+  h.handlers.get("turn_end")({ message: toolUse }, h.ctx);
+  h.setActiveWorkflowIdentity({ ...admittedIdentity, cycle: 2 });
+  h.setPendingMessages(true); h.setSignalAvailable(false);
+  await h.handlers.get("agent_end")({ messages: [toolUse, toolResult] }, h.ctx);
+  assert.equal(h.entries.at(-1).data.status, "failed");
+  assert.equal(h.entries.at(-1).data.reason, "missing_normal_turn_end");
+});
+
 
 test("does not preserve an admitted queued tool end without active workflow ownership", async () => {
   const h = harness(); await request(h); completeCompaction(h);

@@ -20,6 +20,7 @@ function harness({ specificationState = "absent", planState = "absent", branch =
   const appendTreeEntry = (entry) => { branch.push(entry); treeEntries.push(entry); leafId = entry.id; };
   let liveSessionId = sessionId, liveSessionFile = `/sessions/${sessionId}.jsonl`;
   let spec = specificationState, plan = planState, blocked = blockedState, restored = restoredProofState, blockedLifecycle = [...branch].reverse().find((entry) => entry?.data?.provenanceId)?.data.provenanceId ?? "blocked-life", nextEntry = treeEntries.length, pending = false, idle = true, aborted = 0, idleWaits = 0, appendCalls = 0, appendFailureAt = initialAppendFailureAt, appendFailureFrom = initialAppendFailureFrom, logCalls = 0;
+  let runtimeSignalAvailable = signalAvailable, signalSequence, signalReads = 0, pendingSequence, pendingReads = 0;
   const pi = {
     registerCommand(name, command) { commands.set(name, command); },
     registerTool(tool) { tools.set(tool.name, tool); },
@@ -60,7 +61,9 @@ function harness({ specificationState = "absent", planState = "absent", branch =
   })(pi);
   const ctx = {
     cwd: "/project", waitForIdle: async () => { idleWaits += 1; }, isIdle: () => idle,
-    hasPendingMessages: () => pending, signal: signalAvailable ? runAbortController.signal : undefined, abort: () => { aborted += 1; },
+    hasPendingMessages: () => { const value = pendingSequence ? pendingSequence[Math.min(pendingReads, pendingSequence.length - 1)] : pending; pendingReads += 1; return value; },
+    get signal() { const value = signalSequence ? signalSequence[Math.min(signalReads, signalSequence.length - 1)] : runtimeSignalAvailable ? runAbortController.signal : undefined; signalReads += 1; return value; },
+    abort: () => { aborted += 1; },
     compact: (options) => compactions.push(options),
     sessionManager: { getBranch: () => branch, getEntries: () => treeEntries, getEntry: (id) => treeEntries.find((entry) => entry.id === id), getLeafId: () => leafId, getHeader: () => ({ id: liveSessionId, rlmDepth }), getSessionFile: () => liveSessionFile, getSessionId: () => liveSessionId },
     ui: { notify: (...args) => notices.push(args) },
@@ -87,7 +90,9 @@ function harness({ specificationState = "absent", planState = "absent", branch =
     await emit("turn_end", { message: { role: "assistant", content: [{ type: "text", text: "settled" }], stopReason: "stop" } });
     await emit("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] });
   };
-  return { commands, tools, handlers, sent, userMessages, notices, branch, entries, compactions, logs, transactions, ctx, emit, settle, state: () => latestExecutionState(branch, sessionId), treeEntries, navigationLeaf: () => leafId, idleWaits: () => idleWaits, addGoal: (data) => appendTreeEntry({ type: "custom", id: `e${++nextEntry}`, parentId: leafId, timestamp: new Date().toISOString(), customType: "thread_goal_state", data }), setPending: (value) => { pending = value; }, abortRun: () => runAbortController.abort(), setIdle: (value) => { idle = value; }, aborted: () => aborted, setSpecification: (value) => { spec = value; }, setPlan: (value) => { plan = value; }, setRestored: (value) => { restored = value; }, setBlocked: (value) => { blocked = value; }, failStateAppendIn: (offset) => { appendFailureAt = appendCalls + offset; }, failAllStateAppends: () => { appendFailureFrom = appendCalls + 1; }, restoreStateAppends: () => { appendFailureAt = undefined; appendFailureFrom = undefined; }, logAttempts: () => logCalls };
+  return { commands, tools, handlers, sent, userMessages, notices, branch, entries, compactions, logs, transactions, ctx, emit, settle, state: () => latestExecutionState(branch, sessionId), treeEntries, navigationLeaf: () => leafId, idleWaits: () => idleWaits, addGoal: (data) => appendTreeEntry({ type: "custom", id: `e${++nextEntry}`, parentId: leafId, timestamp: new Date().toISOString(), customType: "thread_goal_state", data }), setPending: (value) => { pending = value; pendingSequence = undefined; pendingReads = 0; }, setPendingSequence: (values) => { pendingSequence = [...values]; pendingReads = 0; }, pendingReads: () => pendingReads,
+    setSignalAvailable: (value) => { runtimeSignalAvailable = value; signalSequence = undefined; signalReads = 0; }, setSignalSequence: (values) => { signalSequence = [...values]; signalReads = 0; }, signalReads: () => signalReads,
+    abortRun: () => runAbortController.abort(), setIdle: (value) => { idle = value; }, aborted: () => aborted, setSpecification: (value) => { spec = value; }, setPlan: (value) => { plan = value; }, setRestored: (value) => { restored = value; }, setBlocked: (value) => { blocked = value; }, failStateAppendIn: (offset) => { appendFailureAt = appendCalls + offset; }, failAllStateAppends: () => { appendFailureFrom = appendCalls + 1; }, restoreStateAppends: () => { appendFailureAt = undefined; appendFailureFrom = undefined; }, logAttempts: () => logCalls };
 }
 
 function poisonedRecoveryFixture({ sessionId = "session-1", phase = "planning", command = "plan" } = {}) {
@@ -475,6 +480,7 @@ async function completeLatestResetCompaction(h) {
   const sent = h.sent.at(-1);
   const admitted = sent.message;
   if (sent.options?.triggerTurn !== false) {
+    await h.emit("agent_start", {});
     await h.emit("message_start", { message: { role: "custom", ...admitted } });
     await h.emit("context", { messages: [{ role: "custom", ...admitted }] });
   }
@@ -502,6 +508,7 @@ async function completeAutomaticRoundCompaction(h) {
   const boundary = h.sent.at(-1).message;
   assert.equal(boundary.customType, RESET_MESSAGE_TYPE);
   assert.equal(boundary.details.command, "execute-round");
+  await h.emit("agent_start", {});
   await h.emit("message_start", { message: { role: "custom", ...boundary } });
   assert.equal(h.state().pendingRound?.stage, "admission-requested");
   await h.emit("context", { messages: [{ role: "custom", ...boundary }] });
@@ -585,6 +592,101 @@ test("continue compacts before it admits the next clean cycle", async () => {
   const transition = h.state().transition, sentCount = h.sent.length;
   h.compactions.at(-1).onComplete({ summary: "", firstKeptEntryId: h.branch[markerIndex].id });
   assert.equal(h.state().transition, transition); assert.equal(h.sent.length, sentCount);
+});
+
+
+test("workflow ignores the originating end after automatic replacement admission", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" });
+  const initial = await startExecution(h);
+  h.addGoal({ goalId: "goal-late-origin", status: "active", active: true });
+  await control(h, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 });
+  const cycleOne = finalEvent("cycle one complete");
+  await h.emit("turn_end", cycleOne);
+  await h.emit("agent_end", { messages: [cycleOne.message] });
+  const goalMessage = { role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: "goal-late-origin", continuationsUsed: 1 } };
+  await h.emit("agent_start", {});
+  await h.emit("message_start", { message: goalMessage });
+  await h.handlers.get("context").at(-1)({ messages: [goalMessage] }, h.ctx);
+  const pending = h.state().pendingRound;
+  const marker = [...h.branch].reverse().find((entry) => entry?.customType === RESET_MARKER_TYPE && entry.data?.requestId === pending.requestId);
+  h.compactions.at(-1).onComplete({ summary: "", firstKeptEntryId: marker.id });
+  const boundary = h.sent.at(-1).message;
+  await h.emit("agent_start", {});
+  await h.emit("message_start", { message: { role: "custom", ...boundary } });
+  await h.emit("context", { messages: [{ role: "custom", ...boundary }] });
+  assert.equal(h.state().cycle, 2); assert.equal(h.state().status, "running");
+
+  await h.emit("agent_end", { messages: [{ role: "assistant", stopReason: "aborted", content: [] }] });
+  assert.equal(h.state().cycle, 2); assert.equal(h.state().status, "running");
+  assert.equal(h.state().pauseReason ?? null, null);
+
+  const toolUse = { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "replacement-tool", name: "goal", arguments: {} }] };
+  const toolResult = { role: "toolResult", toolCallId: "replacement-tool", toolName: "goal", content: [], isError: false };
+  await h.emit("tool_result", { type: "tool_result", toolCallId: toolResult.toolCallId, toolName: toolResult.toolName, input: {}, content: toolResult.content, isError: false });
+  await h.emit("turn_end", { message: toolUse });
+  h.setPending(true); h.setSignalAvailable(false);
+  await h.emit("agent_end", { messages: [{ role: "custom", ...boundary }, toolUse, toolResult] });
+  assert.equal(h.state().cycle, 2); assert.equal(h.state().status, "running");
+  assert.equal(h.branch.some((entry) => entry?.customType === RESET_STATE_TYPE && entry.data?.status === "failed" && entry.data?.requestId === pending.requestId), false);
+});
+
+
+test("workflow rejects an overtaking replacement abort before any tool witness or delayed origin end", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" });
+  const initial = await startExecution(h);
+  h.addGoal({ goalId: "goal-overtaking-replacement", status: "active", active: true });
+  await control(h, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 });
+  const cycleOne = finalEvent("cycle one complete");
+  await h.emit("turn_end", cycleOne);
+  await h.emit("agent_end", { messages: [cycleOne.message] });
+  const goalMessage = { role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: "goal-overtaking-replacement", continuationsUsed: 1 } };
+  await h.emit("agent_start", {});
+  await h.emit("message_start", { message: goalMessage });
+  await h.handlers.get("context").at(-1)({ messages: [goalMessage] }, h.ctx);
+  const pending = h.state().pendingRound;
+  const marker = [...h.branch].reverse().find((entry) => entry?.customType === RESET_MARKER_TYPE && entry.data?.requestId === pending.requestId);
+  h.compactions.at(-1).onComplete({ summary: "", firstKeptEntryId: marker.id });
+  const boundary = h.sent.at(-1).message;
+  await h.emit("agent_start", {});
+  await h.emit("message_start", { message: { role: "custom", ...boundary } });
+  await h.emit("context", { messages: [{ role: "custom", ...boundary }] });
+  assert.equal(h.state().cycle, 2); assert.equal(h.state().status, "running");
+
+  await h.emit("agent_end", { messages: [{ role: "custom", ...boundary }, { role: "assistant", stopReason: "aborted", content: [] }] });
+
+  const reset = [...h.branch].reverse().find((entry) => entry?.customType === RESET_STATE_TYPE && entry.data?.requestId === pending.requestId)?.data;
+  assert.equal(reset.status, "failed"); assert.equal(reset.reason, "provider_aborted");
+  assert.equal(h.state().status, "paused"); assert.match(h.state().pauseReason, /without normal closeout/);
+});
+
+
+test("workflow consumes an origin end before admission and rejects a later replacement abort", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" });
+  const initial = await startExecution(h);
+  h.addGoal({ goalId: "goal-early-origin", status: "active", active: true });
+  await control(h, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 });
+  const cycleOne = finalEvent("cycle one complete");
+  await h.emit("turn_end", cycleOne);
+  await h.emit("agent_end", { messages: [cycleOne.message] });
+  const goalMessage = { role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: "goal-early-origin", continuationsUsed: 1 } };
+  await h.emit("agent_start", {});
+  await h.emit("message_start", { message: goalMessage });
+  await h.handlers.get("context").at(-1)({ messages: [goalMessage] }, h.ctx);
+  const pending = h.state().pendingRound;
+  await h.emit("agent_end", { messages: [{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "older history" }] }] });
+  assert.equal(h.state().pendingRound.stage, "compacting"); assert.equal(h.state().status, "running");
+
+  const marker = [...h.branch].reverse().find((entry) => entry?.customType === RESET_MARKER_TYPE && entry.data?.requestId === pending.requestId);
+  h.compactions.at(-1).onComplete({ summary: "", firstKeptEntryId: marker.id });
+  const boundary = h.sent.at(-1).message;
+  await h.emit("agent_start", {});
+  await h.emit("message_start", { message: { role: "custom", ...boundary } });
+  await h.emit("context", { messages: [{ role: "custom", ...boundary }] });
+  assert.equal(h.state().cycle, 2); assert.equal(h.state().status, "running");
+  await h.emit("agent_end", { messages: [{ role: "custom", ...boundary }, { role: "assistant", stopReason: "aborted", content: [] }] });
+  const reset = [...h.branch].reverse().find((entry) => entry?.customType === RESET_STATE_TYPE && entry.data?.requestId === pending.requestId)?.data;
+  assert.equal(reset.status, "failed"); assert.equal(reset.reason, "provider_aborted");
+  assert.equal(h.state().status, "paused"); assert.match(h.state().pauseReason, /without normal closeout/);
 });
 
 
@@ -824,6 +926,28 @@ test("waiting completes the native driver, preserves the open cycle, and resumes
   assert.equal(projected, undefined); assert.equal(h.state().admittedContinuation.identity, "goal-2:1");
 });
 
+test("a newer custom turn input prevents historical goal continuation misclassification after ready", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" });
+  const initial = await startExecution(h);
+  const historicalGoal = { role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: "goal-before-wait", continuationsUsed: 2 } };
+  h.addGoal({ goalId: "goal-before-wait", status: "complete", active: false });
+  const waited = await control(h, { action: "wait", lifecycleId: initial.lifecycleId, cycle: 1, reason: "review", readiness: "review finishes" });
+  await h.emit("turn_end", finalEvent("waiting for review"));
+  await h.emit("before_agent_start", { prompt: "review child handoff" });
+  h.addGoal({ goalId: "replacement-goal", status: "active", active: true });
+  await control(h, { action: "ready", lifecycleId: initial.lifecycleId, cycle: 1, waitId: waited.details.waitId });
+
+  const childHandoff = { role: "custom", customType: "agent_message", content: "review complete", details: { id: "agentmsg_review", message: "review complete", fromRelationship: "child" } };
+  const projected = await h.handlers.get("context").at(-1)({ messages: [{ role: "user", content: "earlier request" }, historicalGoal, childHandoff] }, h.ctx);
+  assert.equal(projected, undefined);
+  assert.equal(h.aborted(), 0);
+  assert.equal(h.state().status, "running");
+  assert.equal(h.state().driverGoalId, "replacement-goal");
+  assert.equal(h.state().pendingDecision.action, "ready");
+  await h.emit("turn_end", finalEvent("readiness accepted"));
+  assert.equal(h.state().pendingDecision, null);
+});
+
 test("recover-driver resumes one exact post-ready terminal-driver mismatch without closing the cycle", async () => {
   const h = harness({ specificationState: "existing", planState: "existing" });
   const initial = await reachReadyDriverMismatch(h);
@@ -969,9 +1093,12 @@ test("queued goal-complete tool handoff preserves the admitted pass until wait c
   const toolUse = { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "goal-complete", name: "goal", arguments: { action: "complete" } }] };
   const toolResult = { role: "toolResult", toolCallId: "goal-complete", toolName: "goal", content: [{ type: "text", text: "Goal completed" }], isError: false };
   const before = { sent: h.sent.length, compactions: h.compactions.length, transition: h.state().transition, lifecycleId: h.state().lifecycleId, cycle: h.state().cycle, driverGoalId: h.state().driverGoalId, goals: h.branch.filter((entry) => entry?.customType === "thread_goal_state").length };
+  await h.emit("tool_result", { type: "tool_result", toolCallId: toolResult.toolCallId, toolName: toolResult.toolName, input: {}, content: toolResult.content, isError: false });
   await h.emit("turn_end", { message: toolUse });
-  h.setPending(true);
+  h.setPendingSequence([true, false]);
+  h.setSignalSequence([undefined, new AbortController().signal]);
   await h.emit("agent_end", { messages: [{ role: "custom", ...boundary }, toolUse, toolResult] });
+  assert.equal(h.pendingReads(), 1); assert.equal(h.signalReads(), 1);
   assert.deepEqual({ sent: h.sent.length, compactions: h.compactions.length, transition: h.state().transition, lifecycleId: h.state().lifecycleId, cycle: h.state().cycle, driverGoalId: h.state().driverGoalId, goals: h.branch.filter((entry) => entry?.customType === "thread_goal_state").length }, before);
   assert.equal(h.state().status, "running");
   assert.equal(h.state().pendingDecision, null);
@@ -981,6 +1108,7 @@ test("queued goal-complete tool handoff preserves the admitted pass until wait c
   h.setPending(false);
   const childMessage = { role: "custom", customType: "agent_message", content: "child result", details: { source: "agent_message" } };
   await h.emit("before_agent_start", { prompt: "[from child:auditor] result" });
+  await h.emit("agent_start", {});
   await h.emit("message_start", { message: childMessage });
   const resumedMessages = [{ role: "custom", ...boundary }, toolUse, toolResult, childMessage];
   for (const context of h.handlers.get("context")) assert.equal(await context({ messages: resumedMessages }, h.ctx), undefined);
@@ -1011,14 +1139,17 @@ test("queued goal-complete tool handoff preserves block and complete closeout ex
       const toolUse = { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: `goal-${scenario.action}`, name: "goal", arguments: { action: "complete" } }] };
       const toolResult = { role: "toolResult", toolCallId: `goal-${scenario.action}`, toolName: "goal", content: [{ type: "text", text: "Goal completed" }], isError: false };
       const before = { sent: h.sent.length, compactions: h.compactions.length, transition: h.state().transition, lifecycleId: h.state().lifecycleId, cycle: h.state().cycle, driverGoalId: h.state().driverGoalId };
+      await h.emit("tool_result", { type: "tool_result", toolCallId: toolResult.toolCallId, toolName: toolResult.toolName, input: {}, content: toolResult.content, isError: false });
       await h.emit("turn_end", { message: toolUse });
       h.setPending(true);
+      h.setSignalAvailable(false);
       await h.emit("agent_end", { messages: [{ role: "custom", ...boundary }, toolUse, toolResult] });
       assert.equal(h.state().status, "running");
       assert.deepEqual({ sent: h.sent.length, compactions: h.compactions.length, transition: h.state().transition, lifecycleId: h.state().lifecycleId, cycle: h.state().cycle, driverGoalId: h.state().driverGoalId }, before);
       h.setPending(false);
       const childMessage = { role: "custom", customType: "agent_message", content: `${scenario.action} child result` };
       await h.emit("before_agent_start", { prompt: childMessage.content });
+      await h.emit("agent_start", {});
       await h.emit("message_start", { message: childMessage });
       const resumedMessages = [{ role: "custom", ...boundary }, toolUse, toolResult, childMessage];
       for (const context of h.handlers.get("context")) assert.equal(await context({ messages: resumedMessages }, h.ctx), undefined);
@@ -1037,6 +1168,48 @@ test("queued goal-complete tool handoff preserves block and complete closeout ex
       assert.equal(h.logs.length, 1);
     });
   }
+});
+
+test("queued handoff rejects a retained witness after current lifecycle identity changes", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" });
+  const initial = await startExecution(h);
+  const boundary = h.sent.at(-1).message;
+  const toolUse = { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "goal-complete", name: "goal", arguments: { action: "complete" } }] };
+  const toolResult = { role: "toolResult", toolCallId: "goal-complete", toolName: "goal", content: [{ type: "text", text: "Goal completed" }], isError: false };
+  await h.emit("tool_result", { type: "tool_result", toolCallId: toolResult.toolCallId, toolName: toolResult.toolName, input: {}, content: toolResult.content, isError: false });
+
+  const currentIndex = h.branch.findLastIndex((entry) => entry?.type === "custom" && entry.customType === EXECUTION_STATE_ENTRY_TYPE);
+  assert.equal(h.branch[currentIndex].data.lifecycleId, initial.lifecycleId);
+  h.branch[currentIndex] = { ...h.branch[currentIndex], data: { ...h.branch[currentIndex].data, lifecycleId: "changed-lifecycle" } };
+  h.setPending(true);
+  h.setSignalAvailable(false);
+  await h.emit("agent_end", { messages: [{ role: "custom", ...boundary }, toolUse, toolResult] });
+
+  const reset = [...h.branch].reverse().find((entry) => entry?.customType === RESET_STATE_TYPE)?.data;
+  assert.equal(reset.status, "failed");
+  assert.equal(reset.reason, "missing_normal_turn_end");
+  assert.equal(h.state().status, "paused");
+  assert.equal(h.state().lifecycleId, initial.lifecycleId);
+  assert.match(h.state().pauseReason, /without normal closeout/);
+});
+
+test("queued handoff rejects a durable provider abort omitted from the agent_end batch", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" });
+  await startExecution(h);
+  const boundary = h.sent.at(-1).message;
+  const toolUse = { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "goal-complete", name: "goal", arguments: { action: "complete" } }] };
+  const toolResult = { role: "toolResult", toolCallId: "goal-complete", toolName: "goal", content: [{ type: "text", text: "Goal completed" }], isError: false };
+  await h.emit("tool_result", { type: "tool_result", toolCallId: toolResult.toolCallId, toolName: toolResult.toolName, input: {}, content: toolResult.content, isError: false });
+  h.branch.push({ type: "message", id: "provider-abort", message: { role: "assistant", stopReason: "aborted", content: [{ type: "text", text: "provider aborted" }] } });
+  h.setPending(true);
+  h.setSignalAvailable(false);
+  await h.emit("agent_end", { messages: [{ role: "custom", ...boundary }, toolUse, toolResult] });
+
+  const reset = [...h.branch].reverse().find((entry) => entry?.customType === RESET_STATE_TYPE)?.data;
+  assert.equal(reset.status, "failed");
+  assert.equal(reset.reason, "missing_normal_turn_end");
+  assert.equal(h.state().status, "paused");
+  assert.match(h.state().pauseReason, /without normal closeout/);
 });
 
 test("planning reset cannot preserve a queued tool end without an active lifecycle turn", async () => {
@@ -1596,9 +1769,18 @@ test("all stale automatic reset messages are denied by default", async () => {
   assert.equal(h.aborted(), 1);
 });
 
-test("stale or replaced native goal continuations fail closed", async () => {
+test("stale or replaced native goal continuations fail closed despite a later auxiliary custom message", async () => {
   const h = harness({ specificationState: "existing", planState: "existing" }); await startExecution(h); h.addGoal({ goalId: "current", status: "active", active: true });
   const stale = { role: "custom", customType: "goal_context", content: "old", details: { kind: "continuation", goalId: "old", continuationsUsed: 4 } };
-  const result = await h.handlers.get("context").at(-1)({ messages: [stale] }, h.ctx);
+  const auxiliary = { role: "custom", customType: "acceptance_auxiliary", content: "extension context", details: { source: "before-agent-start" } };
+  const result = await h.handlers.get("context").at(-1)({ messages: [stale, auxiliary] }, h.ctx);
   assert.deepEqual(result.messages, []); assert.equal(h.state().status, "paused"); assert.equal(h.aborted(), 1);
+});
+
+test("running context without a primary input or goal continuation remains unchanged", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" }); await startExecution(h);
+  const projected = await h.handlers.get("context").at(-1)({ messages: [{ role: "assistant", content: "prior" }, { role: "custom", customType: "acceptance_auxiliary", content: "extension context" }] }, h.ctx);
+  assert.equal(projected, undefined);
+  assert.equal(h.aborted(), 0);
+  assert.equal(h.state().status, "running");
 });
