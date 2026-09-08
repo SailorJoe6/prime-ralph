@@ -141,19 +141,26 @@ const fixtureManifestAfter = treeManifest(cwd), fixtureChanges = changedManifest
 const kernelArtifactRoot = join(cwd, "session-artifacts"), kernelArtifactDirectories = outputSurfaceSafe ? readdirSync(kernelArtifactRoot, { withFileTypes: true }) : [];
 const kernelArtifactDirectory = kernelArtifactDirectories.length === 1 && kernelArtifactDirectories[0].isDirectory() ? kernelArtifactDirectories[0].name : null;
 const kernelArtifactNames = kernelArtifactDirectory ? readdirSync(join(kernelArtifactRoot, kernelArtifactDirectory)).sort() : [];
-const kernelArtifactsExact = typeof kernelArtifactDirectory === "string" && JSON.stringify(kernelArtifactNames) === JSON.stringify(["kernel-state.dill", "kernel-state.json"]);
+const expectedKernelArtifactNames = ["kernel-state.dill", "kernel-state.json", "kernel-stderr.log", "semantic-edges.jsonl"];
+const kernelArtifactsExact = typeof kernelArtifactDirectory === "string" && JSON.stringify(kernelArtifactNames) === JSON.stringify(expectedKernelArtifactNames);
+const kernelStderrEmpty = kernelArtifactsExact && readFileSync(join(kernelArtifactRoot, kernelArtifactDirectory, "kernel-stderr.log")).length === 0;
+const semanticEdgeLines = kernelArtifactsExact ? readFileSync(join(kernelArtifactRoot, kernelArtifactDirectory, "semantic-edges.jsonl"), "utf8").split("\n").filter(Boolean) : [];
+const semanticEdgesStructured = semanticEdgeLines.length > 0 && semanticEdgeLines.every((line) => typeof JSON.parse(line)?.type === "string");
 const allowedKernelPaths = new Set(kernelArtifactDirectory ? ["session-artifacts", `session-artifacts/${kernelArtifactDirectory}`, ...kernelArtifactNames.map((name) => `session-artifacts/${kernelArtifactDirectory}/${name}`)] : []);
 const allowedFixtureChange = (path) => ["artifact.txt", "test.mjs", ".ralph/logs/EXECUTION_LOG.md", ".ralph/plans/EXECUTION_PLAN.md", `.sessions/${bootstrapFiles[0]}`].includes(path) || allowedKernelPaths.has(path);
 const expectedRegularFiles = ["artifact.txt", "test.mjs", ".ralph/logs/EXECUTION_LOG.md", ".ralph/plans/EXECUTION_PLAN.md", `.sessions/${bootstrapFiles[0]}`, ...kernelArtifactNames.map((name) => `session-artifacts/${kernelArtifactDirectory}/${name}`)];
 const expectedDirectories = ["session-artifacts", `session-artifacts/${kernelArtifactDirectory}`];
 const fixtureKindsExact = expectedRegularFiles.every((path) => fixtureManifestAfter[path]?.kind === "file") && expectedDirectories.every((path) => fixtureManifestAfter[path]?.kind === "directory");
-const fixtureMutationScopeExact = outputSurfaceSafe && kernelArtifactsExact && fixtureKindsExact && fixtureChanges.every(allowedFixtureChange) && [...expectedRegularFiles, ...expectedDirectories].every((path) => fixtureChanges.includes(path));
+const fixtureMutationScopeExact = outputSurfaceSafe && kernelArtifactsExact && kernelStderrEmpty && semanticEdgesStructured && fixtureKindsExact && fixtureChanges.every(allowedFixtureChange) && [...expectedRegularFiles, ...expectedDirectories].every((path) => fixtureChanges.includes(path));
 const checks = {
   processSucceeded: run.status === 0 && !run.signal,
   bootstrapReady,
   sameIsolatedSession: settlementHeaderIds.every((id) => id === bootstrapSessionId) && settlementSessionFiles.every((name) => name === bootstrapFiles[0]) && finalHeader?.id === bootstrapSessionId && finalSessionFiles.length === 1 && finalSessionFiles[0] === bootstrapFiles[0],
   startupPreservedFixture,
   sourceTreesUnchanged,
+  kernelArtifactsExact,
+  kernelStderrEmpty,
+  semanticEdgesStructured,
   fixtureMutationScopeExact,
   transcriptOrdering,
   artifactExact: artifact === "slice-5-public-goal-path\n",
@@ -168,7 +175,7 @@ const checks = {
   modelObserved: assistants.some((message) => message.model === model || message.responseModel === model),
 };
 const failures = Object.entries(checks).filter(([, pass]) => !pass).map(([name]) => name);
-const result = { schemaVersion: 1, evidenceKind: "real-model-public-goal-execution", generatedAt: new Date().toISOString(), provider, model, durationMs: Date.now() - started, cwd, checks, observed: { status: run.status, signal: run.signal, toolCalls: calls.map((call) => call.name), finalAssistantTextOmitted: true } };
+const result = { schemaVersion: 1, evidenceKind: "real-model-public-goal-execution", generatedAt: new Date().toISOString(), provider, model, durationMs: Date.now() - started, cwd, checks, observed: { status: run.status, signal: run.signal, toolCalls: calls.map((call) => call.name), kernelArtifactNames, finalAssistantTextOmitted: true } };
 const artifactDir = resolve(process.argv.includes("--artifact-dir") ? process.argv[process.argv.indexOf("--artifact-dir") + 1] : join(root, "docs/acceptance")); mkdirSync(artifactDir, { recursive: true });
 const serialized = JSON.stringify(result, null, 2) + "\n"; if (/\b(?:sk|pk)[-_][A-Za-z0-9_-]{20,}\b|\bgh[pousr]_[A-Za-z0-9]{20,}\b|\bxox[baprs]-[A-Za-z0-9-]{16,}\b|\bAKIA[0-9A-Z]{16}\b|\bAIza[0-9A-Za-z_-]{30,}\b|\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b|Bearer\s+[A-Za-z0-9._~+\/-]{16,}/i.test(serialized)) throw new Error("secret-shaped output rejected");
 writeFileSync(join(artifactDir, "execute-model-acceptance.json"), serialized);
