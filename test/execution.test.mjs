@@ -51,6 +51,11 @@ test("persists matching session lifecycle state and fails closed on invalid reco
     () => latestExecutionState([{ type: "custom", customType: EXECUTION_STATE_ENTRY_TYPE, data: { ...running, status: "bogus" } }], "session-a"),
     /recovery stopped at an invalid state record/,
   );
+  const invalidRecoveryMode = { ...base, recoveryRequired: { protocolVersion: 1, recoveryMode: "approximate", recoveryId: "recovery", requestId: "request", rootRequestId: "root", anchorId: "anchor", priorLeafId: "leaf" } };
+  assert.throws(
+    () => latestExecutionState([{ type: "custom", customType: EXECUTION_STATE_ENTRY_TYPE, data: invalidRecoveryMode }], "session-a"),
+    /recovery stopped at an invalid state record/,
+  );
 });
 
 test("recovery rejects stale and duplicate lifecycle records instead of resurrecting older state", () => {

@@ -109,6 +109,90 @@ function poisonedRecoveryFixture({ sessionId = "session-1", phase = "planning", 
   return { entries, branch: [...entries], anchor, priorLeafId: entries.at(-1).id, requestId };
 }
 
+function compactedPoisonedRecoveryFixture({ sessionId = "session-1" } = {}) {
+  const entries = []; let parentId = null, n = 0, transition = 0;
+  const add = (entry) => { const value = { id: `p${++n}`, parentId, timestamp: `2026-09-08T00:00:${String(n).padStart(2, "0")}.000Z`, ...entry }; entries.push(value); parentId = value.id; return value; };
+  const anchor = add({ type: "custom", customType: "recovery_anchor", data: {} });
+  const addBundle = ({ requestId, command, cycle, terminal }) => {
+    const identity = { workflowPhase: "execution", invocationMode: command === "execute" ? "execution-start" : "execution-continue", sessionId, lifecycleId: "stale-life", cycle };
+    const marker = add({ type: "custom", customType: RESET_MARKER_TYPE, data: { source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId, command, ...identity } });
+    add({ type: "custom", customType: RESET_STATE_TYPE, data: { source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId, status: "compacting", markerId: marker.id, command, ...identity } });
+    add({ type: "compaction", summary: "", firstKeptEntryId: marker.id, tokensBefore: 99, customInstructions: resetCompactionInstructions(requestId), details: { source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId, command, ...identity } });
+    add({ type: "custom", customType: RESET_STATE_TYPE, data: { source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId, status: "prepare_pending", mode: "compaction", command, ...identity } });
+    add({ type: "custom_message", customType: RESET_MESSAGE_TYPE, content: `<skill>${requestId}</skill>`, display: false, details: { source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId, command, ...identity } });
+    add({ type: "custom", customType: EXECUTION_STATE_ENTRY_TYPE, data: { source: "prime-ralph", protocolVersion: 1, sessionId, transition: ++transition, phase: "execution", status: "running", lifecycleId: "stale-life", cycle, driverGoalId: "retired-driver", pendingDecision: null, wait: null, provenanceId: null, forwardConfirmed: false } });
+    add({ type: "message", message: { role: "assistant", stopReason: terminal === "completed" ? "stop" : "error", content: [{ type: "text", text: terminal === "completed" ? "ready" : "provider failed" }] } });
+    const terminalEntry = add({ type: "custom", customType: RESET_STATE_TYPE, data: { source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId, status: terminal, command, ...(terminal === "failed" ? { reason: "provider_error", boundaryExists: true } : {}), ...identity } });
+    return { marker, terminalEntry };
+  };
+  const root = addBundle({ requestId: "execute-root", command: "execute", cycle: 1, terminal: "completed" });
+  const poison = addBundle({ requestId: "poison-round", command: "execute-round", cycle: 2, terminal: "failed" });
+  const summary = add({ type: "compaction", summary: "valuable compacted history", firstKeptEntryId: poison.terminalEntry.id, tokensBefore: 500, details: { readFiles: [], modifiedFiles: [] } });
+  const conversation = add({ type: "message", message: { role: "user", content: [{ type: "text", text: "valuable later conversation" }] } });
+  add({ type: "custom", customType: "thread_goal_state", data: { active: false, status: "idle", goalId: "retired-driver", tokensUsed: 0, timeUsedSeconds: 0, continuationsUsed: 0 } });
+  add({ type: "custom", customType: EXECUTION_STATE_ENTRY_TYPE, data: {
+    source: "prime-ralph", protocolVersion: 1, sessionId, transition: ++transition, phase: "planning", status: "inactive",
+    lifecycleId: "stale-life", cycle: 2, driverGoalId: "retired-driver", pendingDecision: null, pendingRound: null, wait: null,
+    provenanceId: null, forwardConfirmed: false, resetRequested: true,
+    admittedContinuation: { identity: "retired-driver:1", goalId: "retired-driver", continuationsUsed: 1, cycle: 2, mode: "execution-continue", automaticCompactionRequestId: "poison-round" },
+    pauseReason: "session quit",
+  } });
+  const unrelatedGoal = add({ type: "custom", customType: "thread_goal_state", data: { active: true, status: "active", goalId: "unrelated-goal", objective: "preserve me", tokensUsed: 1, timeUsedSeconds: 1, continuationsUsed: 0 } });
+  return { entries, branch: [...entries], anchor, root, poison, summary, conversation, unrelatedGoal, priorLeafId: entries.at(-1).id };
+}
+
+test("post-compaction recovery appends in place and preserves summaries, conversation, and unrelated goal", async () => {
+  const fixture = compactedPoisonedRecoveryFixture(), prefix = structuredClone(fixture.entries);
+  const h = harness({ specificationState: "existing", planState: "existing", branch: [...fixture.branch], treeEntries: [...fixture.entries] });
+  const before = { sent: h.sent.length, compactions: h.compactions.length, goals: h.treeEntries.filter((entry) => entry.customType === "thread_goal_state").length };
+  const entriesBeforeReload = h.treeEntries.length;
+  await h.emit("session_start", { reason: "reload" });
+  assert.equal(h.treeEntries.length, entriesBeforeReload); assert.match(h.notices.at(-1)[0], /Use \/ralph-recover/);
+  await h.commands.get("ralph-recover").handler("", h.ctx);
+  assert.deepEqual(h.treeEntries.slice(0, prefix.length), prefix);
+  assert.ok(h.branch.some((entry) => entry.id === fixture.summary.id));
+  assert.ok(h.branch.some((entry) => entry.id === fixture.conversation.id));
+  assert.ok(h.branch.some((entry) => entry.id === fixture.unrelatedGoal.id));
+  const provenance = h.branch.find((entry) => entry.customType === RECOVERY_STATE_TYPE);
+  assert.equal(provenance.parentId, fixture.priorLeafId);
+  assert.equal(provenance.data.recoveryMode, "in-place");
+  assert.equal(provenance.data.requestId, "poison-round");
+  const state = h.state();
+  assert.equal(state.phase, "planning"); assert.equal(state.status, "inactive"); assert.equal(state.lifecycleId, null); assert.equal(state.cycle, 0);
+  assert.equal(state.driverGoalId, null); assert.equal(state.resetRequested, false); assert.equal(state.pauseReason, null);
+  assert.equal(state.pendingDecision, null); assert.equal(state.pendingRound, null); assert.equal(state.wait, null);
+  assert.equal(state.cancellation, null); assert.equal(state.block, null); assert.equal(state.completion, null); assert.equal(state.resumed, false);
+  assert.deepEqual({ sent: h.sent.length, compactions: h.compactions.length, goals: h.treeEntries.filter((entry) => entry.customType === "thread_goal_state").length }, before);
+  assert.deepEqual([...h.branch].reverse().find((entry) => entry.customType === "thread_goal_state").data, fixture.unrelatedGoal.data);
+  const after = h.treeEntries.length;
+  await h.commands.get("ralph-recover").handler("", h.ctx);
+  assert.equal(h.treeEntries.length, after); assert.match(h.notices.at(-1)[0], /already complete/);
+  const reloaded = harness({ specificationState: "existing", planState: "existing", branch: [...h.branch], treeEntries: [...h.treeEntries] });
+  await reloaded.commands.get("ralph-recover").handler("", reloaded.ctx);
+  assert.equal(reloaded.treeEntries.length, after); assert.match(reloaded.notices.at(-1)[0], /already complete/);
+});
+
+test("post-compaction append failures quarantine and reload resumes in place exactly", async (t) => {
+  for (const offset of [1, 2]) await t.test(`append ${offset}`, async () => {
+    const fixture = compactedPoisonedRecoveryFixture(), prefix = structuredClone(fixture.entries);
+    const first = harness({ specificationState: "existing", planState: "existing", branch: [...fixture.branch], treeEntries: [...fixture.entries] });
+    first.failStateAppendIn(offset);
+    await first.commands.get("ralph-recover").handler("", first.ctx);
+    assert.deepEqual(first.treeEntries.slice(0, prefix.length), prefix);
+    assert.equal(first.sent.length, 0); assert.equal(first.compactions.length, 0);
+    const afterFailure = first.treeEntries.length;
+    await first.commands.get("ralph-recover").handler("", first.ctx);
+    assert.equal(first.treeEntries.length, afterFailure); assert.match(first.notices.at(-1)[0], /quarantined/);
+    const reloaded = harness({ specificationState: "existing", planState: "existing", branch: [...first.branch], treeEntries: [...first.treeEntries] });
+    await reloaded.commands.get("ralph-recover").handler("", reloaded.ctx);
+    assert.equal(reloaded.state().recoveryRequired?.recoveryMode, "in-place");
+    assert.equal(reloaded.state().lifecycleId, null); assert.equal(reloaded.state().driverGoalId, null);
+    assert.ok(reloaded.branch.some((entry) => entry.id === fixture.summary.id));
+    assert.ok(reloaded.branch.some((entry) => entry.id === fixture.conversation.id));
+    assert.equal(reloaded.sent.length, 0); assert.equal(reloaded.compactions.length, 0);
+  });
+});
+
 test("registers the complete Slice 5 command and lifecycle-control surface", () => {
   const h = harness();
   assert.deepEqual([...h.commands.keys()], ["reset", "spec-it-out", "plan", "ralph-recover", "execute"]);

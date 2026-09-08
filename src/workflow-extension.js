@@ -177,7 +177,7 @@ export function createWorkflowExtension({
       if (recoveryQuarantinedSessions.has(id)) return true;
       try {
         const kind = recoverySnapshot(ctx).plan.kind;
-        if (["navigate", "append-provenance", "append-inactive"].includes(kind)) return true;
+        if (["navigate", "append-provenance", "append-in-place-provenance", "append-inactive"].includes(kind)) return true;
       } catch {}
       const currentBranch = branch(ctx);
       const lastCompactionIndex = currentBranch.findLastIndex((entry) => entry?.type === "compaction");
@@ -206,9 +206,11 @@ export function createWorkflowExtension({
       const recovered = nextExecutionState(current, {
         phase: "planning", status: "inactive", lifecycleId: null, cycle: 0, driverGoalId: null, pendingDecision: null, pendingRound: null,
         admittedContinuation: null, compactionHalted: false, resumeBlocked: false, wait: null, pausedWait: null, pauseReason: null,
-        provenanceId: null, forwardConfirmed: false, resetRequested: false, block: null, blockedContextEstablished: false, blockedContextMode: null,
-        recovery: null, adoption: null, recoveryRequired: { protocolVersion: 1, recoveryId: record.recoveryId, requestId: record.requestId,
-          rootRequestId: record.rootRequestId, anchorId: record.anchorId, priorLeafId: record.priorLeafId },
+        provenanceId: null, forwardConfirmed: false, resetRequested: false, cancellation: null, resumed: false, completion: null,
+        block: null, blockedContextEstablished: false, blockedContextMode: null, recovery: null, adoption: null,
+        recoveryRequired: { protocolVersion: 1, recoveryMode: record.recoveryMode ?? "navigation",
+          recoveryId: record.recoveryId, requestId: record.requestId, rootRequestId: record.rootRequestId,
+          anchorId: record.anchorId, priorLeafId: record.priorLeafId },
       });
       return persistExecution(ctx, recovered);
     };
@@ -557,7 +559,9 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
           ctx.ui.notify("Ralph provider-free recovery is already complete. Inspect the worktree, planning documents, and issue state before a later explicit /execute.", "info"); return;
         }
         try {
-          if (["navigate", "append-provenance", "append-inactive"].includes(plan.kind)) ensureRecoveryAnchorHasNoLiveGoal(snapshot.entries, plan.candidate.anchorId);
+          if (["navigate", "append-provenance", "append-inactive"].includes(plan.kind) && (plan.record?.recoveryMode ?? plan.candidate?.recoveryMode ?? "navigation") === "navigation") {
+            ensureRecoveryAnchorHasNoLiveGoal(snapshot.entries, plan.candidate.anchorId);
+          }
           if (plan.kind === "navigate") {
             if (ctx.sessionManager.getLeafId() !== snapshot.leafId) throw new RalphRecoveryError("Ralph recovery leaf changed before navigation");
             if (typeof ctx.navigateTree !== "function") throw new RalphRecoveryError("Prime Agent tree navigation is unavailable");
@@ -577,7 +581,13 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
             plan = { kind: "append-provenance", candidate: plan.candidate, priorLeafId: snapshot.leafId };
           }
           let record = plan.record;
-          if (plan.kind === "append-provenance") {
+          if (["append-provenance", "append-in-place-provenance"].includes(plan.kind)) {
+            if (ctx.sessionManager.getSessionId() !== snapshot.id || ctx.sessionManager.getSessionFile?.() !== snapshot.sessionFile) {
+              throw new RalphRecoveryError("Ralph recovery session identity changed before provenance append");
+            }
+            if (ctx.sessionManager.getLeafId() !== (plan.kind === "append-in-place-provenance" ? plan.priorLeafId : plan.candidate.anchorId)) {
+              throw new RalphRecoveryError("Ralph recovery leaf changed before provenance append");
+            }
             const recoveryId = createRequestId();
             record = recoveryRecord(plan.candidate, { recoveryId, sessionId: snapshot.id, priorLeafId: plan.priorLeafId });
             pi.appendEntry(RECOVERY_STATE_TYPE, record);
@@ -593,7 +603,7 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
           setPhase(ctx, "planning");
           ctx.ui.notify("Ralph recovered operator control without a provider call. Execution remains inactive and recovery-required. Inspect the worktree, active planning documents, and issue state before a later explicit /execute.", "warning");
         } catch (error) {
-          const afterNavigation = plan?.kind === "append-provenance" || plan?.kind === "append-inactive" || ctx.sessionManager.getLeafId() !== snapshot.leafId || ctx.sessionManager.getSessionId() !== snapshot.id || ctx.sessionManager.getSessionFile?.() !== snapshot.sessionFile;
+          const afterNavigation = plan?.kind === "append-provenance" || plan?.kind === "append-in-place-provenance" || plan?.kind === "append-inactive" || ctx.sessionManager.getLeafId() !== snapshot.leafId || ctx.sessionManager.getSessionId() !== snapshot.id || ctx.sessionManager.getSessionFile?.() !== snapshot.sessionFile;
           if (afterNavigation) { recoveryQuarantinedSessions.add(snapshot.id); recoveryQuarantinedSessions.add(sessionId(ctx)); }
           const reason = error instanceof RalphRecoveryError ? error.message : "Ralph recovery stopped during durable state commit";
           ctx.ui.notify(`${reason}. Recovery remains fail-closed; no provider request, compaction, goal, or driver was started. Retry /ralph-recover or use the documented no-extensions fallback.`, "error");
@@ -851,7 +861,7 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
       if ((ctx.sessionManager.getHeader()?.rlmDepth ?? 0) > 0) return;
       const id = sessionId(ctx), currentBranch = branch(ctx);
       let exactRecoveryPending = false;
-      try { exactRecoveryPending = ["navigate", "append-provenance", "append-inactive", "completed"].includes(recoverySnapshot(ctx).plan.kind); } catch {}
+      try { exactRecoveryPending = ["navigate", "append-provenance", "append-in-place-provenance", "append-inactive", "completed"].includes(recoverySnapshot(ctx).plan.kind); } catch {}
       const latestWorkflowIndex = currentBranch.findLastIndex((entry) => entry?.type === "custom" && entry.customType === EXECUTION_STATE_ENTRY_TYPE && entry.data?.source === "prime-ralph" && entry.data?.sessionId === id);
       const latestRecoveryIndex = currentBranch.findLastIndex((entry) => entry?.type === "custom" && entry.customType === RECOVERY_STATE_TYPE && entry.data?.source === "prime-ralph");
       const recoveryRequired = latestWorkflowIndex >= 0 && currentBranch[latestWorkflowIndex]?.data?.recoveryRequired && typeof currentBranch[latestWorkflowIndex].data.recoveryRequired === "object";

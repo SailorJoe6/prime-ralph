@@ -166,10 +166,11 @@ Completion does not force archive. When the project skill explicitly requests ar
 
 ## Poisoned-boundary recovery
 
-A failed or interrupted provider-visible reset boundary remains fail-closed. `/ralph-recover` is the provider-free escape hatch. For execution, it validates the poisoned request and the unique initial `execute` transaction for the same lifecycle, then navigates to the initial marker's targetable parent with `summarize: false`. That removes all Ralph execution and driver state from the active branch while keeping the abandoned branch and every existing JSONL byte.
+A failed or interrupted reset boundary remains fail-closed. `/ralph-recover` is the provider-free escape hatch. While the poison remains provider-visible, execution recovery validates the poisoned request and the unique initial `execute` transaction for the same lifecycle, then navigates to the initial marker's targetable parent with `summarize: false`. That removes all Ralph execution and driver state from the active branch while keeping the abandoned branch and every existing JSONL byte.
 
-After exact leaf verification, Ralph appends sanitized recovery provenance and a `planning/inactive` state with a structured `recoveryRequired` record. It starts no model, goal, driver, compaction, or automatic execution. A later explicit `/execute` clears `recoveryRequired` only when its new reset boundary is admitted durably. Append uncertainty quarantines the live runtime until extension reload or process restart. See [`reset.md`](reset.md) for candidate, crash/reload, and offline fallback rules.
+If the latest compaction after the exact failed poison has an exact `firstKeptEntryId` strictly after an exact failed `execute-round` poison's hidden message, proving that the message is provider-invisible, recovery can instead keep the current active branch. This lossless path requires the latest stale workflow state to bind the same session, request, lifecycle, cycle, and retired driver, retain reset ownership with no pending semantic work, and prove the matching driver goal is no longer live. It preserves later compacted summaries, conversation, REPL state, worktree state, and an unrelated active goal. It rejects ambiguous history rather than selecting an old failure heuristically.
 
+After exact leaf verification, Ralph appends mode-bound sanitized recovery provenance and a clean `planning/inactive` state with a structured `recoveryRequired` record. It starts no model, goal, driver, compaction, prompt, lifecycle decision, or automatic execution. A later explicit `/execute` clears `recoveryRequired` only when its new reset boundary is admitted durably. Append uncertainty quarantines the live runtime until extension reload or process restart; completed recovery is idempotent across reload and later ordinary entries. See [`reset.md`](reset.md) for the full candidate, crash/reload, and offline fallback rules.
 ## Execution log
 
 Completed cycles append to:
@@ -184,7 +185,7 @@ The writer creates a missing real logs directory, rejects symlinks and incompati
 
 `npm test` covers lifecycle transitions, goal correlation, repeated provider calls, waiting/readiness, reset branches, blocked and restored-file transactions, adoption failure recovery, stale signals, path conflicts, and logging.
 
-`npm run accept:recovery` proves provider-free same-session tree recovery, append-only and abandoned-tail retention, live REPL/worktree continuity, idempotence, and native navigation cancellation.
+`npm run accept:recovery` proves provider-free same-session tree recovery and lossless in-place post-compaction repair, append-only prefix and active/abandoned branch retention, compacted-summary, conversation, unrelated-goal, REPL, and worktree continuity, reload idempotence, and native navigation cancellation.
 
 `npm run accept:execution` uses Prime Agent `0.9.1` with a deterministic provider. It proves three native-goal-driven cycles, tracked-RLM deferral, clean context, retained tool results, logging, and stable session, JSONL, and REPL identity.
 

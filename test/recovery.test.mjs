@@ -88,6 +88,126 @@ test("a later fresh execute poison remains recoverable after an earlier complete
   assert.equal(plan.kind, "navigate"); assert.equal(plan.candidate.requestId, "second-poison"); assert.equal(plan.candidate.anchorId, secondAnchor);
 });
 
+function compactedPoisonFixture({ matchingDriverLive = false, resetRequested = true, legacyRoot = false } = {}) {
+  const h = builder();
+  const root = h.bundle({ requestId: "execute-root", command: "execute", workflowPhase: "execution", lifecycleId: "life", cycle: 1, terminal: "completed" });
+  if (legacyRoot) for (const entry of h.entries) {
+    const evidence = entry.type === "custom_message" ? entry.details : entry.type === "compaction" ? entry.details : entry.data;
+    if (evidence?.requestId !== "execute-root") continue;
+    evidence.protocolVersion = 2;
+    if (entry.type !== "custom_message") for (const field of ["workflowPhase", "invocationMode", "sessionId", "lifecycleId", "cycle", "provenanceId"]) delete evidence[field];
+    if (entry.type === "compaction") entry.customInstructions = "prime-ralph-reset:v2:execute-root";
+  }
+  const poison = h.bundle({ requestId: "poison-round", command: "execute-round", workflowPhase: "execution", lifecycleId: "life", cycle: 2 });
+  const summary = h.add({ type: "compaction", summary: "valuable compacted history", firstKeptEntryId: poison.terminalEntry.id, tokensBefore: 500, details: { readFiles: [], modifiedFiles: [] } });
+  const conversation = h.add({ type: "message", message: { role: "user", content: [{ type: "text", text: "valuable later conversation" }] } });
+  const retiredGoal = h.add({ type: "custom", customType: "thread_goal_state", data: { active: false, status: "idle", goalId: "goal", tokensUsed: 0, timeUsedSeconds: 0, continuationsUsed: 0 } });
+  const latestExecution = [...h.entries].reverse().find((entry) => entry.customType === "prime_ralph_execution_state").data;
+  const staleState = h.add({ type: "custom", customType: "prime_ralph_execution_state", data: {
+    ...latestExecution, transition: latestExecution.transition + 1, phase: "planning", status: "inactive", lifecycleId: "life", cycle: 2,
+    driverGoalId: "goal", pendingDecision: null, pendingRound: null, wait: null, resetRequested,
+    admittedContinuation: { identity: "goal:1", goalId: "goal", continuationsUsed: 1, cycle: 2, mode: "execution-continue", automaticCompactionRequestId: "poison-round" },
+    pauseReason: "session quit",
+  } });
+  const currentGoal = h.add({ type: "custom", customType: "thread_goal_state", data: matchingDriverLive
+    ? { active: true, status: "active", goalId: "goal", tokensUsed: 1, timeUsedSeconds: 1, continuationsUsed: 0 }
+    : { active: true, status: "active", goalId: "unrelated-goal", tokensUsed: 1, timeUsedSeconds: 1, continuationsUsed: 0 } });
+  return { h, root, poison, summary, conversation, retiredGoal, staleState, currentGoal };
+}
+
+test("post-compaction poison plans lossless in-place recovery from exact stale lifecycle evidence", () => {
+  const { h, summary, conversation } = compactedPoisonFixture();
+  assert.throws(() => findPoisonedRecoveryCandidate(h.branch(), h.entries, "session-1"), /provider-visible poisoned reset boundary; found 0/);
+  const leafId = h.leaf();
+  const plan = planRalphRecovery({ branch: h.branch(), entries: h.entries, sessionId: "session-1", leafId });
+  assert.equal(plan.kind, "append-in-place-provenance");
+  assert.equal(plan.priorLeafId, leafId);
+  assert.equal(plan.candidate.requestId, "poison-round");
+  assert.equal(plan.candidate.lifecycleId, "life");
+  assert.equal(plan.candidate.cycle, 2);
+  assert.ok(h.branch().some((entry) => entry.id === summary.id));
+  assert.ok(h.branch().some((entry) => entry.id === conversation.id));
+});
+
+test("post-compaction recovery traces one legacy root across a reset protocol upgrade", () => {
+  const { h } = compactedPoisonFixture({ legacyRoot: true });
+  const plan = planRalphRecovery({ branch: h.branch(), entries: h.entries, sessionId: "session-1", leafId: h.leaf() });
+  assert.equal(plan.kind, "append-in-place-provenance");
+  assert.equal(plan.candidate.rootRequestId, "execute-root");
+  assert.equal(plan.candidate.requestId, "poison-round");
+});
+
+test("post-compaction recovery rejects a live matching driver and stale state without reset ownership", () => {
+  for (const options of [{ matchingDriverLive: true }, { resetRequested: false }]) {
+    const { h } = compactedPoisonFixture(options);
+    assert.throws(() => planRalphRecovery({ branch: h.branch(), entries: h.entries, sessionId: "session-1", leafId: h.leaf() }), RalphRecoveryError);
+  }
+});
+
+test("post-compaction recovery fails closed on ambiguity, malformed history, and changed leaf", async (t) => {
+  await t.test("duplicate hidden message", () => {
+    const { h, poison } = compactedPoisonFixture();
+    h.add({ type: "custom_message", customType: RESET_MESSAGE_TYPE, content: poison.message.content, display: false, details: { ...poison.message.details } });
+    assert.throws(() => planRalphRecovery({ branch: h.branch(), entries: h.entries, sessionId: "session-1", leafId: h.leaf() }), /matching hidden reset message; found 2/);
+  });
+  await t.test("competing terminal request", () => {
+    const { h } = compactedPoisonFixture();
+    h.add({ type: "custom", customType: RESET_STATE_TYPE, data: { source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId: "competitor", status: "failed", reason: "provider_error", boundaryExists: true, command: "execute-round", workflowPhase: "execution", invocationMode: "execution-continue", sessionId: "session-1", lifecycleId: "life", cycle: 2 } });
+    assert.throws(() => planRalphRecovery({ branch: h.branch(), entries: h.entries, sessionId: "session-1", leafId: h.leaf() }), RalphRecoveryError);
+  });
+  await t.test("completed selected request", () => {
+    const { h, poison } = compactedPoisonFixture(); poison.terminalEntry.data.status = "completed"; delete poison.terminalEntry.data.boundaryExists;
+    assert.throws(() => planRalphRecovery({ branch: h.branch(), entries: h.entries, sessionId: "session-1", leafId: h.leaf() }), RalphRecoveryError);
+  });
+  await t.test("provider-visible poison stays on exact navigation recovery", () => {
+    const { h, summary } = compactedPoisonFixture();
+    const child = h.entries.find((entry) => entry.parentId === summary.id); child.parentId = summary.parentId; h.entries.splice(h.entries.indexOf(summary), 1);
+    const branch = branchForLeaf(h.entries, h.leaf());
+    const plan = planRalphRecovery({ branch, entries: h.entries, sessionId: "session-1", leafId: h.leaf() });
+    assert.equal(plan.kind, "navigate"); assert.equal(plan.candidate.requestId, "poison-round");
+  });
+  await t.test("later compaction retaining the poison stays on exact navigation recovery", () => {
+    const { h, poison, summary } = compactedPoisonFixture();
+    summary.firstKeptEntryId = poison.marker.id;
+    const plan = planRalphRecovery({ branch: h.branch(), entries: h.entries, sessionId: "session-1", leafId: h.leaf() });
+    assert.equal(plan.kind, "navigate"); assert.equal(plan.candidate.requestId, "poison-round");
+  });
+  await t.test("malformed latest compaction boundary cannot authorize in-place recovery", () => {
+    const { h, summary } = compactedPoisonFixture();
+    summary.firstKeptEntryId = "missing-entry";
+    assert.throws(
+      () => planRalphRecovery({ branch: h.branch(), entries: h.entries, sessionId: "session-1", leafId: h.leaf() }),
+      /latest compaction has an invalid first-kept boundary/,
+    );
+  });
+  await t.test("malformed newer provider-visible poison cannot fall back to an older compacted candidate", () => {
+    const { h } = compactedPoisonFixture();
+    h.add({ type: "custom", customType: RESET_STATE_TYPE, data: { source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId: "later-malformed", status: "failed", reason: "provider_error", boundaryExists: true, command: "execute-round", workflowPhase: "execution", invocationMode: "execution-continue", sessionId: "session-1", lifecycleId: "life", cycle: 2 } });
+    assert.throws(
+      () => planRalphRecovery({ branch: h.branch(), entries: h.entries, sessionId: "session-1", leafId: h.leaf() }),
+      /matching reset marker; found 0/,
+    );
+  });
+  await t.test("malformed poison retained by a later compaction cannot fall back to an older compacted candidate", () => {
+    const { h } = compactedPoisonFixture();
+    const malformed = h.bundle({ requestId: "retained-malformed", command: "plan", workflowPhase: "planning" });
+    h.add({ type: "custom_message", customType: RESET_MESSAGE_TYPE, content: malformed.message.content, display: false, details: { ...malformed.message.details } });
+    h.add({ type: "compaction", summary: "later summary", firstKeptEntryId: malformed.marker.id, tokensBefore: 700, details: { readFiles: [], modifiedFiles: [] } });
+    assert.throws(
+      () => planRalphRecovery({ branch: h.branch(), entries: h.entries, sessionId: "session-1", leafId: h.leaf() }),
+      /matching hidden reset message; found 2/,
+    );
+  });
+  await t.test("changed leaf", () => {
+    const { h } = compactedPoisonFixture(); const branch = h.branch();
+    assert.throws(() => planRalphRecovery({ branch, entries: h.entries, sessionId: "session-1", leafId: branch.at(-2).id }), /unchanged exact current leaf/);
+  });
+  await t.test("mismatched stale lifecycle", () => {
+    const { h, staleState } = compactedPoisonFixture(); staleState.data.lifecycleId = "other-life";
+    assert.throws(() => planRalphRecovery({ branch: h.branch(), entries: h.entries, sessionId: "session-1", leafId: h.leaf() }), RalphRecoveryError);
+  });
+});
+
 test("malformed, duplicate, mismatched, and unsafe evidence fails closed", async (t) => {
   for (const scenario of ["duplicate-message", "missing-compaction", "mismatched-command", "missing-correlation", "mismatched-marker", "unexpected-correlation", "unsafe-user-anchor"]) await t.test(scenario, () => {
     const h = builder();

@@ -159,8 +159,10 @@ function validLifecycleState(value, sessionId) {
   if (value.recoveryRequired != null) {
     const recovery = value.recoveryRequired;
     const validIdentity = (item) => typeof item === "string" && item.length > 0 && item.length <= 200;
-    if (typeof recovery !== "object" || recovery.protocolVersion !== 1 || !validIdentity(recovery.recoveryId) || !validIdentity(recovery.requestId) ||
-        !validIdentity(recovery.rootRequestId) || !validIdentity(recovery.anchorId) || !validIdentity(recovery.priorLeafId) || value.phase !== "planning" || value.status !== "inactive") return false;
+    if (typeof recovery !== "object" || recovery.protocolVersion !== 1 ||
+        (recovery.recoveryMode != null && !["navigation", "in-place"].includes(recovery.recoveryMode)) ||
+        !validIdentity(recovery.recoveryId) || !validIdentity(recovery.requestId) || !validIdentity(recovery.rootRequestId) ||
+        !validIdentity(recovery.anchorId) || !validIdentity(recovery.priorLeafId) || value.phase !== "planning" || value.status !== "inactive") return false;
   }
   return true;
 }
