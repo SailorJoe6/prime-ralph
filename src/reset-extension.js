@@ -15,7 +15,7 @@ import {
 } from "./reset-context.js";
 
 const TERMINAL_STATES = new Set(["completed", "interrupted", "failed", "recovered"]);
-
+const RESET_RELEASE_TYPE = "prime_ralph_reset_release";
 function hasExactAdmittedBoundary(event, request) {
   const expected = request?.prepareMessage;
   if (!expected || !Array.isArray(event?.messages)) return false;
@@ -55,6 +55,8 @@ export function createResetExtension({
   hasActiveWorkflowTurn = () => false,
   queuedToolHandoffTracker,
   deferHandoffEventFinish = false,
+  onAgentStart,
+  preserveAdmittedAgentEnd = () => false,
 } = {}) {
   return function resetExtension(pi) {
     let pending;
@@ -153,7 +155,7 @@ export function createResetExtension({
       }
 
       const customInstructions = resetCompactionInstructions(requestId);
-      pending = { requestId, markerId: marker.id, customInstructions, injection, command, transitionDetails, identityDetails, onBeforeAdmission, onAdmitted, onRejected, ignoreCurrentAbort: ignoreCurrentAbort === true, stage: "compacting" };
+      pending = { requestId, markerId: marker.id, customInstructions, injection, command, transitionDetails, identityDetails, onBeforeAdmission, onAdmitted, onRejected, ignoreCurrentAbort: ignoreCurrentAbort === true, triggerTurn, stage: "compacting" };
       const rejectBoundary = (reason, error) => failPending(reason, error);
       try {
         appendState("compacting", requestId, { markerId: marker.id, command, ...identityDetails });
@@ -163,6 +165,26 @@ export function createResetExtension({
         throw error;
       }
 
+      const notifyStarted = () => {
+        const started = command === "plan" ? "Ralph planning started." : command === "execute" ? "Ralph execution started." : command === "execute-round" ? "Ralph next execution pass is ready." : command === "blocked-pass" ? "Ralph blocked interaction is ready." : "Ralph reset started.";
+        ctx.ui.notify(started, "info");
+      };
+      const sendPreparedSkills = (request) => {
+        if (!pending || pending !== request || request.stage !== "origin_ending" || !request.prepareMessage) return;
+        try {
+          request.stage = "prepare_pending";
+          request.cleanNextContext = true;
+          const message = request.boundaryQueued === true ? {
+            role: "custom", customType: RESET_RELEASE_TYPE, content: "",
+            display: false, details: { source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId: request.requestId }, timestamp: Date.now(),
+          } : request.prepareMessage;
+          pi.sendMessage(message, { triggerTurn: request.triggerTurn, deliverAs: "followUp" });
+          notifyStarted();
+        } catch (error) {
+          rejectBoundary("skill_admission_failed", error);
+          ctx.ui.notify("Ralph context reset failed before prepare was admitted; retry the command.", "error");
+        }
+      };
       const injectSkills = (mode) => {
         if (!pending || pending.requestId !== requestId || pending.stage !== "compacting") return;
         const skillMessage = {
@@ -176,10 +198,31 @@ export function createResetExtension({
         try {
           onBeforeAdmission?.(skillMessage, { requestId, markerId: marker.id, command, mode });
           if (!pending || pending.requestId !== requestId || pending.stage !== "compacting") return;
-          pending.stage = "prepare_pending";
-          pending.cleanNextContext = true;
+          pending.cleanNextContext = pending.ignoreCurrentAbort !== true;
           pending.prepareMessage = skillMessage;
-          appendState("prepare_pending", requestId, { mode, command, ...pending.identityDetails });
+          pending.stage = pending.ignoreCurrentAbort === true ? "origin_ending" : "prepare_pending";
+          appendState("prepare_pending", requestId, { mode: pending.ignoreCurrentAbort === true ? "deferred-origin-end" : mode, command, ...pending.identityDetails });
+          if (pending.stage === "origin_ending") {
+            const request = pending, settlementDeadline = Date.now() + 5_000;
+            request.releaseDeferred = () => {
+              if (!pending || pending !== request || request.stage !== "origin_ending") return;
+              if (!ctx.isIdle() || ctx.signal !== undefined) {
+                if (Date.now() >= settlementDeadline) {
+                  rejectBoundary("origin_end_settlement_timeout", new Error("origin run did not fully release before replacement admission"));
+                  return;
+                }
+                setImmediate(request.releaseDeferred);
+                return;
+              }
+              sendPreparedSkills(request);
+            };
+            // Queue the durable boundary under the origin run so both allowed
+            // host orderings remain supported. Its origin_ending context is
+            // denied; agent_end later releases a fresh additive control turn.
+            pi.sendMessage(skillMessage, { triggerTurn, deliverAs: "followUp" });
+            request.boundaryQueued = true;
+            return;
+          }
           pi.sendMessage(skillMessage, { triggerTurn, deliverAs: "followUp" });
           if (!triggerTurn) {
             const durable = ctx.sessionManager.getBranch().filter((entry) => entry?.type === "custom_message" &&
@@ -192,8 +235,7 @@ export function createResetExtension({
             appendState("completed", requestId, { mode: "no-turn", command, ...pending.identityDetails });
             clearPending();
           }
-          const started = command === "plan" ? "Ralph planning started." : command === "execute" ? "Ralph execution started." : command === "execute-round" ? "Ralph next execution pass is ready." : command === "blocked-pass" ? "Ralph blocked interaction is ready." : "Ralph reset started.";
-          ctx.ui.notify(started, "info");
+          notifyStarted();
         } catch (error) {
           rejectBoundary("skill_admission_failed", error);
           ctx.ui.notify("Ralph context reset failed before prepare was admitted; retry the command.", "error");
@@ -263,9 +305,14 @@ export function createResetExtension({
       } };
     });
     pi.on("context", (event, ctx) => {
+      const messages = event.messages;
       if (pending?.stage === "compacting") {
         ctx.abort();
         ctx.ui.notify("Ralph is still establishing a native context boundary; this provider request was not admitted.", "warning");
+        return { messages: [] };
+      }
+      if (pending?.stage === "origin_ending") {
+        ctx.abort();
         return { messages: [] };
       }
       if (pending?.stage === "prepare_pending" && pending.cleanNextContext) {
@@ -274,7 +321,7 @@ export function createResetExtension({
           entry.customType === RESET_STATE_TYPE && entry.data?.source === "prime-ralph" &&
           entry.data?.protocolVersion === RESET_PROTOCOL_VERSION && entry.data?.requestId === request.requestId &&
           entry.data?.status === "prepare_pending");
-        const visible = event.messages.filter((message) => message?.role === "custom" &&
+        const visible = messages.filter((message) => message?.role === "custom" &&
           message.customType === RESET_MESSAGE_TYPE && message.details?.source === "prime-ralph" &&
           message.details?.protocolVersion === RESET_PROTOCOL_VERSION && message.details?.requestId === request.requestId);
         if (visible.length === 0) {
@@ -301,7 +348,7 @@ export function createResetExtension({
         }
       }
       const entries = ctx.sessionManager.getBranch();
-      const unsafe = event.messages.find((message) => {
+      const unsafe = messages.find((message) => {
         if (message?.role !== "custom" || message.customType !== RESET_MESSAGE_TYPE || message.details?.source !== "prime-ralph" || message.details?.protocolVersion !== RESET_PROTOCOL_VERSION) return false;
         if (pending?.requestId === message.details.requestId && pending.stage === "context_admitted") return false;
         if (settledAtTurnEnd?.requestId === message.details.requestId) return false;
@@ -317,9 +364,12 @@ export function createResetExtension({
       }
       return;
     });
-    pi.on("agent_start", () => handoffTracker.beginRun());
+    pi.on("agent_start", (event, ctx) => {
+      handoffTracker.beginRun();
+      onAgentStart?.(event, ctx);
+    });
     pi.on("message_start", (event) => {
-      if (!pending || event.message?.customType !== RESET_MESSAGE_TYPE) return;
+      if (!pending || ![RESET_MESSAGE_TYPE, RESET_RELEASE_TYPE].includes(event.message?.customType)) return;
       if (event.message.details?.requestId === pending.requestId) activeRequestId = pending.requestId;
     });
     pi.on("tool_result", (event, ctx) => recordQueuedToolResult(event, ctx));
@@ -350,7 +400,6 @@ export function createResetExtension({
             try { appendState("failed", settled.requestId, { reason: "completion_state_append_failed", boundaryExists: true, command: settled.command, ...settled.identityDetails }); } catch {}
             ctx.ui.notify("Ralph could not durably complete the context boundary; retry the command before continuing.", "error");
           }
-          return;
         }
         if (!pending) return;
         const request = pending;
@@ -360,8 +409,9 @@ export function createResetExtension({
           // replacement. Once that boundary is visible, this is replacement-run
           // evidence and abort/error must fail closed even before its first tool.
           request.ignoreCurrentAbort = false;
-          if (!hasExactAdmittedBoundary(event, request)) {
+          if (request.stage === "origin_ending" || !hasExactAdmittedBoundary(event, request)) {
             if (event != null && typeof event === "object") ignoredOriginAgentEnds.add(event);
+            if (request.stage === "origin_ending" && typeof request.releaseDeferred === "function") setImmediate(request.releaseDeferred);
             return;
           }
         }
@@ -369,6 +419,7 @@ export function createResetExtension({
         // steering is ready. Preserve this exact admitted request for the next run;
         // a later normal turn_end remains the only successful settlement.
         if (queuedToolHandoff) return;
+        if (request.stage === "context_admitted" && preserveAdmittedAgentEnd(event, ctx, { requestId: request.requestId, command: request.command, identityDetails: request.identityDetails }) === true) return;
         if (activeRequestId !== request.requestId && request.stage !== "context_admitted") return;
         try {
           const reason = finalAssistant?.stopReason === "aborted" ? "provider_aborted" : finalAssistant?.stopReason === "error" ? "provider_error" : "missing_normal_turn_end";

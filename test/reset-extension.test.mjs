@@ -12,7 +12,7 @@ import {
   resetCompactionInstructions,
 } from "../src/reset-context.js";
 
-function harness({ branch = [], persistSent = true, sendError, appendError, specificationState = "absent", idle = true, pendingMessages = false, signalAvailable = true, activeWorkflowTurn = false, activeWorkflowIdentity } = {}) {
+function harness({ branch = [], persistSent = true, sendError, appendError, specificationState = "absent", idle = true, pendingMessages = false, signalAvailable = true, activeWorkflowTurn = false, activeWorkflowIdentity, preserveAdmittedAgentEnd = false } = {}) {
   let runtimeIdle = idle, runtimePendingMessages = pendingMessages, runtimeSignalAvailable = signalAvailable, runtimeActiveWorkflowTurn = activeWorkflowTurn, runtimeActiveWorkflowIdentity = activeWorkflowIdentity;
   const runAbortController = new AbortController();
   const handlers = new Map(), commands = new Map(), sent = [], entries = [], notices = [], compactions = [];
@@ -39,6 +39,7 @@ function harness({ branch = [], persistSent = true, sendError, appendError, spec
     inspectSpecification: () => ({ state: specificationState, relativePath: ".ralph/plans/SPECIFICATION.md" }),
     createRequestId: (() => { let id = 0; return () => `r${++id}`; })(),
     hasActiveWorkflowTurn: (_ctx, identity) => runtimeActiveWorkflowTurn && (runtimeActiveWorkflowIdentity === undefined || JSON.stringify(identity) === JSON.stringify(runtimeActiveWorkflowIdentity)),
+    preserveAdmittedAgentEnd: () => preserveAdmittedAgentEnd,
   })(pi);
   const ctx = {
     cwd: "/project",
@@ -259,13 +260,24 @@ test("automatic boundary ignores only the originating provider end after replace
     resolveInjection: () => ({ content: "next pass" }),
   });
   completeCompaction(h);
-  const visible = [{ role: "custom", ...h.sent[0].message }];
-  h.handlers.get("agent_start")({}, h.ctx);
-  assert.equal(h.handlers.get("context")({ messages: visible }, h.ctx), undefined);
-  h.handlers.get("message_start")({ message: { role: "custom", ...h.sent[0].message } }, h.ctx);
-  const originEnd = { messages: [{ role: "assistant", stopReason: "aborted" }] };
+  assert.equal(h.sent.length, 1);
+  const queuedBoundary = { role: "custom", ...h.sent[0].message };
+  h.handlers.get("message_start")({ message: queuedBoundary }, h.ctx);
+  assert.deepEqual(h.handlers.get("context")({ messages: [queuedBoundary] }, h.ctx), { messages: [] });
+  assert.equal(h.getAborts(), 1);
+  h.setIdle(false);
+  const originEnd = { messages: [queuedBoundary, { role: "assistant", stopReason: "aborted" }] };
   await h.handlers.get("agent_end")(originEnd, h.ctx);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.sent.length, 1);
+  h.setIdle(true); h.setSignalAvailable(false);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.sent.length, 2);
   assert.equal(h.entries.at(-1).data.status, "prepare_pending");
+  const visible = h.sent.map((entry) => ({ role: "custom", ...entry.message }));
+  h.setSignalAvailable(true); h.handlers.get("agent_start")({}, h.ctx);
+  h.handlers.get("message_start")({ message: visible.at(-1) }, h.ctx);
+  assert.equal(h.handlers.get("context")({ messages: visible }, h.ctx), undefined);
 
   const toolUse = { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "replacement-call", name: "goal", arguments: {} }] };
   const toolResult = { role: "toolResult", toolCallId: "replacement-call", toolName: "goal", content: [{ type: "text", text: "done" }], isError: false };
@@ -293,10 +305,15 @@ test("automatic boundary rejects a replacement-run failure that overtakes its or
     resolveInjection: () => ({ content: "next pass" }),
   });
   completeCompaction(h);
-  const visible = [{ role: "custom", ...h.sent[0].message }];
-  h.handlers.get("agent_start")({}, h.ctx);
+  assert.equal(h.sent.length, 1);
+  await h.handlers.get("agent_end")({ messages: [{ role: "assistant", stopReason: "aborted" }] }, h.ctx);
+  h.setSignalAvailable(false);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.sent.length, 2);
+  const visible = h.sent.map((entry) => ({ role: "custom", ...entry.message }));
+  h.setSignalAvailable(true); h.handlers.get("agent_start")({}, h.ctx);
+  h.handlers.get("message_start")({ message: visible.at(-1) }, h.ctx);
   assert.equal(h.handlers.get("context")({ messages: visible }, h.ctx), undefined);
-  h.handlers.get("message_start")({ message: { role: "custom", ...h.sent[0].message } }, h.ctx);
 
   const replacementEnd = { messages: [...visible, { role: "assistant", stopReason: "aborted" }] };
   await h.handlers.get("agent_end")(replacementEnd, h.ctx);
@@ -304,6 +321,30 @@ test("automatic boundary rejects a replacement-run failure that overtakes its or
   assert.equal(h.entries.at(-1).data.status, "failed");
   assert.equal(h.entries.at(-1).data.reason, "provider_aborted");
   assert.equal(h.runtime.admittedQueuedToolHandoff(replacementEnd, h.ctx), false);
+});
+
+test("an admitted automatic boundary preserves an explicit workflow-owned native goal pause", async () => {
+  const h = harness({ activeWorkflowTurn: true, preserveAdmittedAgentEnd: true });
+  h.handlers.get("agent_start")({}, h.ctx);
+  await h.runtime.requestBoundaryAtProviderBoundary({
+    ctx: h.ctx, command: "execute-round", ignoreCurrentAbort: true,
+    resolveInjection: () => ({ content: "next pass" }),
+  });
+  completeCompaction(h);
+  await h.handlers.get("agent_end")({ messages: [{ role: "assistant", stopReason: "aborted" }] }, h.ctx);
+  h.setSignalAvailable(false); await new Promise((resolve) => setImmediate(resolve));
+  const visible = h.sent.map((entry) => ({ role: "custom", ...entry.message }));
+  h.setSignalAvailable(true); h.handlers.get("agent_start")({}, h.ctx);
+  h.handlers.get("message_start")({ message: visible.at(-1) }, h.ctx);
+  assert.equal(h.handlers.get("context")({ messages: visible }, h.ctx), undefined);
+
+  const pausedEnd = { messages: [...visible, { role: "assistant", stopReason: "aborted" }] };
+  await h.handlers.get("agent_end")(pausedEnd, h.ctx);
+  assert.equal(h.entries.some((entry) => entry.customType === RESET_STATE_TYPE && entry.data.status === "failed"), false);
+
+  h.handlers.get("turn_end")({ message: { role: "assistant", stopReason: "stop" } }, h.ctx);
+  await h.handlers.get("agent_end")({ messages: [...visible, { role: "assistant", stopReason: "stop" }] }, h.ctx);
+  assert.equal(h.entries.at(-1).data.status, "completed");
 });
 
 test("automatic boundary does not ignore a replacement-run failure after a successful tool witness", async () => {
@@ -314,10 +355,15 @@ test("automatic boundary does not ignore a replacement-run failure after a succe
     resolveInjection: () => ({ content: "next pass" }),
   });
   completeCompaction(h);
-  const visible = [{ role: "custom", ...h.sent[0].message }];
-  h.handlers.get("agent_start")({}, h.ctx);
+  assert.equal(h.sent.length, 1);
+  await h.handlers.get("agent_end")({ messages: [{ role: "assistant", stopReason: "aborted" }] }, h.ctx);
+  h.setSignalAvailable(false);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.sent.length, 2);
+  const visible = h.sent.map((entry) => ({ role: "custom", ...entry.message }));
+  h.setSignalAvailable(true); h.handlers.get("agent_start")({}, h.ctx);
+  h.handlers.get("message_start")({ message: visible.at(-1) }, h.ctx);
   assert.equal(h.handlers.get("context")({ messages: visible }, h.ctx), undefined);
-  h.handlers.get("message_start")({ message: { role: "custom", ...h.sent[0].message } }, h.ctx);
   const toolUse = { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "replacement-call", name: "goal", arguments: {} }] };
   const toolResult = { role: "toolResult", toolCallId: "replacement-call", toolName: "goal", content: [{ type: "text", text: "done" }], isError: false };
   h.handlers.get("tool_result")({ type: "tool_result", toolCallId: toolResult.toolCallId, toolName: toolResult.toolName, input: {}, content: toolResult.content, isError: false }, h.ctx);
@@ -336,15 +382,15 @@ test("automatic boundary consumes an origin end without a new assistant before a
     resolveInjection: () => ({ content: "next pass" }),
   });
   await h.handlers.get("agent_end")({ messages: [{ role: "assistant", content: "older turn", stopReason: "stop" }] }, h.ctx);
-  completeCompaction(h);
-  const visible = [{ role: "custom", ...h.sent[0].message }];
-  h.handlers.get("agent_start")({}, h.ctx);
-  assert.equal(h.handlers.get("context")({ messages: visible }, h.ctx), undefined);
-  h.handlers.get("message_start")({ message: { role: "custom", ...h.sent[0].message } }, h.ctx);
-  await h.handlers.get("agent_end")({ messages: [...visible, { role: "assistant", stopReason: "aborted" }] }, h.ctx);
+  h.setSignalAvailable(false); completeCompaction(h);
+  const queuedBoundary = { role: "custom", ...h.sent[0].message };
+  h.setSignalAvailable(true); h.handlers.get("agent_start")({}, h.ctx);
+  h.handlers.get("message_start")({ message: queuedBoundary }, h.ctx);
+  assert.equal(h.handlers.get("context")({ messages: [queuedBoundary] }, h.ctx), undefined);
+  await h.handlers.get("agent_end")({ messages: [queuedBoundary, { role: "assistant", stopReason: "aborted" }] }, h.ctx);
   assert.equal(h.entries.at(-1).data.status, "failed");
   assert.equal(h.entries.at(-1).data.reason, "provider_aborted");
-  assert.deepEqual(h.handlers.get("context")({ messages: visible }, h.ctx), { messages: [] });
+  assert.deepEqual(h.handlers.get("context")({ messages: [queuedBoundary] }, h.ctx), { messages: [] });
   assert.equal(h.getAborts(), 1);
 });
 

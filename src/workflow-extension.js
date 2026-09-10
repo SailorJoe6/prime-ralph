@@ -84,7 +84,7 @@ export function createWorkflowExtension({
   appendLog = appendExecutionLogEntry, createRequestId = randomUUID, now = () => new Date(), closeoutTimeoutMs = 30_000,
 } = {}) {
   return function workflowExtension(pi) {
-    const startupSessions = new Set(), sessionPhases = new Map(), executionStates = new Map(), activeLifecycleTurns = new Map(), activeBlockedTurns = new Set(), lifecycleCloseoutWaiters = new Map(), completedLifecycleCloseouts = new Map(), recoveryTreeIntents = new Map(), recoveryQuarantinedSessions = new Set();
+    const startupSessions = new Set(), sessionPhases = new Map(), executionStates = new Map(), activeLifecycleTurns = new Map(), activeBlockedTurns = new Set(), retryReclaimCandidates = new Map(), lifecycleCloseoutWaiters = new Map(), completedLifecycleCloseouts = new Map(), recoveryTreeIntents = new Map(), recoveryQuarantinedSessions = new Set();
     const sessionId = (ctx) => ctx.sessionManager.getSessionId();
     const closeoutIdentity = (message) => JSON.stringify([message?.timestamp ?? null, message?.stopReason ?? null, createHash("sha256").update(assistantText(message)).digest("hex")]);
     const finalAssistantImmediatelyBefore = (messages, beforeIndex) => {
@@ -353,6 +353,82 @@ export function createWorkflowExtension({
       loadPrepare, loadSpecItOut, inspectSpecification, createRequestId,
       hasActiveWorkflowTurn: (ctx, identity) => hasExactActiveLifecycleTurn(ctx, identity),
       deferHandoffEventFinish: true,
+      preserveAdmittedAgentEnd: (event, ctx) => {
+        const finalAssistant = [...(event?.messages ?? [])].reverse().find((message) => message?.role === "assistant");
+        const live = execution(ctx, { reconcile: false });
+        const nativeGoal = latestGoalState(branch(ctx));
+        return finalAssistant?.stopReason === "aborted" && live.phase === "execution" && live.status === "running" &&
+          typeof live.driverGoalId === "string" && nativeGoal?.goalId === live.driverGoalId && nativeGoal.status === "paused";
+      },
+      onAgentStart: (_event, ctx) => {
+        if (retryReclaimCandidates.size === 0) return;
+        const id = sessionId(ctx), candidate = retryReclaimCandidates.get(id);
+        if (!candidate) return;
+        const beforeStart = rawExecution(ctx);
+        const exactPause = beforeStart.phase === "execution" && beforeStart.status === "paused" &&
+          beforeStart.pauseReason === "execution agent ended without normal closeout" &&
+          beforeStart.lifecycleId === candidate.lifecycleId && beforeStart.cycle === candidate.cycle &&
+          beforeStart.driverGoalId === candidate.stateDriverGoalId;
+        if (!exactPause) {
+          const existingOwner = activeLifecycleTurns.get(id);
+          const alreadyOwned = beforeStart.phase === "execution" && beforeStart.status === "running" &&
+            beforeStart.lifecycleId === candidate.lifecycleId && beforeStart.cycle === candidate.cycle && beforeStart.driverGoalId === candidate.driverGoalId &&
+            existingOwner?.lifecycleId === candidate.lifecycleId && existingOwner?.cycle === candidate.cycle;
+          if (alreadyOwned) { retryReclaimCandidates.delete(id); return; }
+          activeLifecycleTurns.delete(id); ctx.abort();
+          const sameRunningPass = beforeStart.phase === "execution" && beforeStart.status === "running" &&
+            beforeStart.lifecycleId === candidate.lifecycleId && beforeStart.cycle === candidate.cycle && beforeStart.driverGoalId === candidate.stateDriverGoalId;
+          if (sameRunningPass) {
+            try {
+              persistExecution(ctx, nextExecutionState(beforeStart, { status: "paused", pendingDecision: null, wait: null, pauseReason: "automatic retry lifecycle ownership could not be reclaimed" }));
+              retryReclaimCandidates.delete(id);
+            } catch {}
+          } else retryReclaimCandidates.delete(id);
+          ctx.ui.notify("Ralph rejected a stale automatic retry that no longer matched its durable execution pass.", "error");
+          return;
+        }
+        const nativeGoal = latestGoalState(branch(ctx));
+        if (["paused", "budget_limited"].includes(nativeGoal?.status) && nativeGoal.goalId === candidate.driverGoalId) {
+          activeLifecycleTurns.delete(id); ctx.abort();
+          ctx.ui.notify("Ralph kept the exact paused execution pass closed until its native goal resumes.", "warning");
+          return;
+        }
+        if (nativeGoal?.status !== "active" || nativeGoal.goalId !== candidate.driverGoalId) {
+          retryReclaimCandidates.delete(id); activeLifecycleTurns.delete(id); ctx.abort();
+          ctx.ui.notify("Ralph rejected an automatic retry whose native goal driver changed or ended.", "error");
+          return;
+        }
+        try {
+          // Prime Agent's retry path calls agent.continue() directly. It emits
+          // agent_start but not before_agent_start, so reclaim this exact durable
+          // same-goal pass after reconciliation and preserve normal closeout.
+          const live = requireTerminalLogReady(execution(ctx));
+          if (live.phase !== "execution" || live.status !== "running" || live.lifecycleId !== candidate.lifecycleId ||
+              live.cycle !== candidate.cycle || live.driverGoalId !== candidate.driverGoalId) {
+            throw new Error("automatic retry did not reconcile the exact durable execution pass");
+          }
+          const existingOwner = activeLifecycleTurns.get(id);
+          if (existingOwner && (existingOwner.lifecycleId !== live.lifecycleId || existingOwner.cycle !== live.cycle)) {
+            throw new Error("automatic retry conflicts with another lifecycle owner");
+          }
+          if (!existingOwner) activateLifecycleTurn(ctx, "execute", live);
+          retryReclaimCandidates.delete(id);
+        } catch (error) {
+          activeLifecycleTurns.delete(id); ctx.abort();
+          const current = rawExecution(ctx);
+          const sameCurrentRunning = current.phase === "execution" && current.status === "running" && current.lifecycleId === candidate.lifecycleId &&
+            current.cycle === candidate.cycle && current.driverGoalId === candidate.driverGoalId;
+          let durablePause = !sameCurrentRunning;
+          if (sameCurrentRunning) {
+            try {
+              persistExecution(ctx, nextExecutionState(current, { status: "paused", pendingDecision: null, wait: null, pauseReason: "automatic retry lifecycle ownership could not be reclaimed" }));
+              durablePause = true;
+            } catch {}
+          }
+          if (durablePause) retryReclaimCandidates.delete(id);
+          ctx.ui.notify(`Ralph rejected an automatic retry before exact lifecycle ownership was restored: ${error.message}`, "error");
+        }
+      },
       handleReset: async ({ ctx }) => {
         const state = requireTerminalLogReady(execution(ctx));
         if (state.phase === "execution" && state.status === "running") {
@@ -718,7 +794,7 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
         }
         const resetForBoundary = live.resetRequested === true, resumedForBoundary = live.resumed === true;
         const closeoutAction = live.pendingDecision?.action;
-        if ((closeoutAction === "continue" && typeof live.pendingDecision.finalAssistantMessage !== "string") || closeoutAction === "recover-driver") {
+        if ((closeoutAction === "continue" && typeof live.pendingDecision.finalAssistantMessage !== "string") || closeoutAction === "ready" || closeoutAction === "recover-driver") {
           const finalAssistantMessage = finalAssistantImmediatelyBefore(event.messages, goalIndex);
           if (!finalAssistantMessage) {
             ctx.abort(); persistExecution(ctx, nextExecutionState(live, { status: "paused", pendingDecision: null, wait: null, pauseReason: "native continuation arrived before lifecycle closeout" }));
@@ -728,7 +804,9 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
           live = execution(ctx, { reconcile: false });
           const closeoutIncomplete = closeoutAction === "recover-driver"
             ? live.pendingDecision?.action === "recover-driver"
-            : live.pendingDecision?.action === "continue" && typeof live.pendingDecision.finalAssistantMessage !== "string";
+            : closeoutAction === "ready"
+              ? live.pendingDecision?.action === "ready"
+              : live.pendingDecision?.action === "continue" && typeof live.pendingDecision.finalAssistantMessage !== "string";
           if ((!closeoutCommitted || closeoutIncomplete) && live.status === "running") {
             ctx.abort(); persistExecution(ctx, nextExecutionState(live, { status: "paused", pendingDecision: null, wait: null, pauseReason: "native continuation arrived before lifecycle closeout" }));
             ctx.ui.notify("Ralph rejected a native continuation whose lifecycle closeout did not commit.", "error"); return { messages: [] };
@@ -768,6 +846,10 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
                 const current = execution(ctx, { reconcile: false });
                 if (current.pendingRound?.stage !== "admission-requested" || !exactPendingRoundBoundary(current, message)) throw new Error("automatic compaction boundary is not the exact pending admission");
                 live = admitPendingRound(ctx, current);
+                // Deferred replacement delivery can be triggered by a release
+                // envelope rather than by the boundary's original message_start.
+                // Ownership begins only after exact boundary admission commits.
+                activateLifecycleTurn(ctx, "execute", message.details);
               },
               onRejected: ({ reason }) => haltPendingRound(ctx, `automatic compaction ${reason}`, reason),
             });
@@ -853,7 +935,12 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
         let live = execution(ctx, { reconcile: false });
         if (hadActiveLifecycleTurn) {
           try {
-            if (live.phase === "execution" && live.status === "running" && !live.pendingRound) persistExecution(ctx, nextExecutionState(live, { status: "paused", pendingDecision: null, wait: null, pauseReason: "execution agent ended without normal closeout" }));
+            if (live.phase === "execution" && live.status === "running" && !live.pendingRound) {
+              const nativeGoal = latestGoalState(branch(ctx));
+              const retryDriverGoalId = live.driverGoalId ?? (["active", "paused", "budget_limited"].includes(nativeGoal?.status) ? nativeGoal?.goalId : null);
+              retryReclaimCandidates.set(id, { lifecycleId: live.lifecycleId, cycle: live.cycle, stateDriverGoalId: live.driverGoalId, driverGoalId: retryDriverGoalId });
+              persistExecution(ctx, nextExecutionState(live, { status: "paused", pendingDecision: null, wait: null, pauseReason: "execution agent ended without normal closeout" }));
+            }
           } finally { activeLifecycleTurns.delete(id); settleLifecycleCloseout(id); }
         } else settleLifecycleCloseout(id);
         live = execution(ctx, { reconcile: false });
@@ -873,12 +960,13 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
 
     pi.on("session_tree", (_event, ctx) => {
       const id = sessionId(ctx);
-      executionStates.delete(id); sessionPhases.delete(id); activeLifecycleTurns.delete(id); activeBlockedTurns.delete(id);
+      executionStates.delete(id); sessionPhases.delete(id); activeLifecycleTurns.delete(id); activeBlockedTurns.delete(id); retryReclaimCandidates.delete(id);
       settleLifecycleCloseout(id);
     });
 
     pi.on("session_shutdown", (event, ctx) => {
       recoveryTreeIntents.delete(sessionId(ctx));
+      retryReclaimCandidates.delete(sessionId(ctx));
       settleLifecycleCloseout(sessionId(ctx));
       if (event.reason === "reload") return;
       const live = execution(ctx, { reconcile: false }); if (!["running", "waiting", "paused"].includes(live.status)) return;

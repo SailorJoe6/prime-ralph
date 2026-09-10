@@ -42,6 +42,7 @@
     "accept:planning": "node scripts/run-planning-acceptance.mjs",
     "accept:model:plan": "node scripts/run-plan-model-acceptance.mjs",
     "accept:execution": "node scripts/run-execution-acceptance.mjs",
+    "accept:execution-goal-closeout": "node scripts/run-execution-goal-closeout-acceptance.mjs",
     "accept:execution-ready-handoff": "node scripts/run-execution-ready-handoff-acceptance.mjs",
     "accept:execution-pause-resume": "node scripts/run-execution-pause-resume-acceptance.mjs",
     "accept:execution-admission-failure": "node scripts/run-execution-admission-failure-acceptance.mjs",

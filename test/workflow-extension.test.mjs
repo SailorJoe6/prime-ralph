@@ -502,16 +502,26 @@ async function completeAutomaticRoundCompaction(h) {
   assert.equal(pending?.stage, "compacting");
   const marker = [...h.branch].reverse().find((entry) => entry?.type === "custom" && entry.customType === "prime_ralph_reset_marker" && entry.data?.requestId === pending.requestId);
   assert.ok(marker?.id);
-  const options = h.compactions.at(-1);
+  const options = h.compactions.at(-1), sentBefore = h.sent.length;
   options.onComplete({ summary: "", firstKeptEntryId: marker.id });
   assert.equal(h.state().pendingRound.stage, "admission-requested");
-  const boundary = h.sent.at(-1).message;
+  assert.equal(h.sent.length, sentBefore + 1);
+  const boundary = h.sent[sentBefore].message;
   assert.equal(boundary.customType, RESET_MESSAGE_TYPE);
   assert.equal(boundary.details.command, "execute-round");
-  await h.emit("agent_start", {});
   await h.emit("message_start", { message: { role: "custom", ...boundary } });
-  assert.equal(h.state().pendingRound?.stage, "admission-requested");
-  await h.emit("context", { messages: [{ role: "custom", ...boundary }] });
+  const denied = await h.handlers.get("context")[0]({ messages: [{ role: "custom", ...boundary }] }, h.ctx);
+  assert.deepEqual(denied, { messages: [] });
+  await h.handlers.get("context").at(-1)({ messages: denied.messages }, h.ctx);
+  await h.emit("agent_end", { messages: [{ role: "custom", ...boundary }, { role: "assistant", stopReason: "aborted", errorMessage: "Request was aborted" }] });
+  h.setSignalAvailable(false);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.sent.length, sentBefore + 2);
+  const release = h.sent[sentBefore + 1].message;
+  h.setSignalAvailable(true); await h.emit("agent_start", {});
+  await h.emit("message_start", { message: { role: "custom", ...release } });
+  assert.equal(h.state().pendingRound?.stage, "admission-requested", JSON.stringify(h.state()));
+  await h.emit("context", { messages: [{ role: "custom", ...boundary }, { role: "custom", ...release }] });
   assert.equal(h.state().pendingRound ?? null, null);
   return boundary;
 }
@@ -595,7 +605,7 @@ test("continue compacts before it admits the next clean cycle", async () => {
 });
 
 
-test("workflow ignores the originating end after automatic replacement admission", async () => {
+test("workflow defers automatic replacement admission until the originating end", async () => {
   const h = harness({ specificationState: "existing", planState: "existing" });
   const initial = await startExecution(h);
   h.addGoal({ goalId: "goal-late-origin", status: "active", active: true });
@@ -609,23 +619,30 @@ test("workflow ignores the originating end after automatic replacement admission
   await h.handlers.get("context").at(-1)({ messages: [goalMessage] }, h.ctx);
   const pending = h.state().pendingRound;
   const marker = [...h.branch].reverse().find((entry) => entry?.customType === RESET_MARKER_TYPE && entry.data?.requestId === pending.requestId);
+  const sentBefore = h.sent.length;
   h.compactions.at(-1).onComplete({ summary: "", firstKeptEntryId: marker.id });
-  const boundary = h.sent.at(-1).message;
-  await h.emit("agent_start", {});
+  assert.equal(h.sent.length, sentBefore + 1);
+  const boundary = h.sent[sentBefore].message;
   await h.emit("message_start", { message: { role: "custom", ...boundary } });
-  await h.emit("context", { messages: [{ role: "custom", ...boundary }] });
+  const denied = await h.handlers.get("context")[0]({ messages: [{ role: "custom", ...boundary }] }, h.ctx);
+  assert.deepEqual(denied, { messages: [] });
+  await h.handlers.get("context").at(-1)({ messages: denied.messages }, h.ctx);
+  await h.emit("agent_end", { messages: [{ role: "custom", ...boundary }, { role: "assistant", stopReason: "aborted", content: [] }] });
+  h.setSignalAvailable(false); await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.sent.length, sentBefore + 2);
+  const release = h.sent[sentBefore + 1].message;
+  h.setSignalAvailable(true); await h.emit("agent_start", {});
+  await h.emit("message_start", { message: { role: "custom", ...release } });
+  const admittedMessages = [{ role: "custom", ...boundary }, { role: "custom", ...release }];
+  await h.emit("context", { messages: admittedMessages });
   assert.equal(h.state().cycle, 2); assert.equal(h.state().status, "running");
-
-  await h.emit("agent_end", { messages: [{ role: "assistant", stopReason: "aborted", content: [] }] });
-  assert.equal(h.state().cycle, 2); assert.equal(h.state().status, "running");
-  assert.equal(h.state().pauseReason ?? null, null);
 
   const toolUse = { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "replacement-tool", name: "goal", arguments: {} }] };
   const toolResult = { role: "toolResult", toolCallId: "replacement-tool", toolName: "goal", content: [], isError: false };
   await h.emit("tool_result", { type: "tool_result", toolCallId: toolResult.toolCallId, toolName: toolResult.toolName, input: {}, content: toolResult.content, isError: false });
   await h.emit("turn_end", { message: toolUse });
   h.setPending(true); h.setSignalAvailable(false);
-  await h.emit("agent_end", { messages: [{ role: "custom", ...boundary }, toolUse, toolResult] });
+  await h.emit("agent_end", { messages: [...admittedMessages, toolUse, toolResult] });
   assert.equal(h.state().cycle, 2); assert.equal(h.state().status, "running");
   assert.equal(h.branch.some((entry) => entry?.customType === RESET_STATE_TYPE && entry.data?.status === "failed" && entry.data?.requestId === pending.requestId), false);
 });
@@ -645,14 +662,25 @@ test("workflow rejects an overtaking replacement abort before any tool witness o
   await h.handlers.get("context").at(-1)({ messages: [goalMessage] }, h.ctx);
   const pending = h.state().pendingRound;
   const marker = [...h.branch].reverse().find((entry) => entry?.customType === RESET_MARKER_TYPE && entry.data?.requestId === pending.requestId);
+  const sentBefore = h.sent.length;
   h.compactions.at(-1).onComplete({ summary: "", firstKeptEntryId: marker.id });
-  const boundary = h.sent.at(-1).message;
-  await h.emit("agent_start", {});
+  assert.equal(h.sent.length, sentBefore + 1);
+  const boundary = h.sent[sentBefore].message;
   await h.emit("message_start", { message: { role: "custom", ...boundary } });
-  await h.emit("context", { messages: [{ role: "custom", ...boundary }] });
+  const denied = await h.handlers.get("context")[0]({ messages: [{ role: "custom", ...boundary }] }, h.ctx);
+  assert.deepEqual(denied, { messages: [] });
+  await h.handlers.get("context").at(-1)({ messages: denied.messages }, h.ctx);
+  await h.emit("agent_end", { messages: [{ role: "custom", ...boundary }, { role: "assistant", stopReason: "aborted", content: [] }] });
+  h.setSignalAvailable(false); await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.sent.length, sentBefore + 2);
+  const release = h.sent[sentBefore + 1].message;
+  h.setSignalAvailable(true); await h.emit("agent_start", {});
+  await h.emit("message_start", { message: { role: "custom", ...release } });
+  const admittedMessages = [{ role: "custom", ...boundary }, { role: "custom", ...release }];
+  await h.emit("context", { messages: admittedMessages });
   assert.equal(h.state().cycle, 2); assert.equal(h.state().status, "running");
 
-  await h.emit("agent_end", { messages: [{ role: "custom", ...boundary }, { role: "assistant", stopReason: "aborted", content: [] }] });
+  await h.emit("agent_end", { messages: [...admittedMessages, { role: "assistant", stopReason: "aborted", content: [] }] });
 
   const reset = [...h.branch].reverse().find((entry) => entry?.customType === RESET_STATE_TYPE && entry.data?.requestId === pending.requestId)?.data;
   assert.equal(reset.status, "failed"); assert.equal(reset.reason, "provider_aborted");
@@ -740,7 +768,31 @@ test("an admitted native continuation waits for the queued turn_end closeout", a
   assert.equal(h.state().cycle, 2);
 
   await h.emit("turn_end", finalEvent("cycle two forgot its decision"));
-  assert.equal(h.aborted(), 2); assert.equal(h.state().status, "paused"); assert.match(h.state().pauseReason, /without a lifecycle decision/);
+  assert.equal(h.aborted(), 4); assert.equal(h.state().status, "paused"); assert.match(h.state().pauseReason, /without a lifecycle decision/);
+});
+
+
+test("a replacement continuation waits for the queued Ready turn_end closeout", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" }); const initial = await startExecution(h);
+  h.addGoal({ goalId: "goal-before-ready", status: "complete", active: false });
+  const waited = await control(h, { action: "wait", lifecycleId: initial.lifecycleId, cycle: 1, reason: "review", readiness: "review completes" });
+  await h.emit("turn_end", finalEvent("waiting for review"));
+  await h.emit("before_agent_start", { prompt: "review complete" });
+  h.addGoal({ goalId: "goal-after-ready", status: "active", active: true });
+  await control(h, { action: "ready", lifecycleId: initial.lifecycleId, cycle: 1, waitId: waited.details.waitId });
+
+  const completed = finalEvent("readiness closeout"); completed.message.timestamp = 11;
+  const goalMessage = { role: "custom", customType: "goal_context", content: "resume", details: { kind: "continuation", goalId: "goal-after-ready", continuationsUsed: 1 } };
+  const context = h.handlers.get("context").at(-1);
+  const projection = context({ messages: [completed.message, goalMessage] }, h.ctx);
+  await Promise.resolve();
+  assert.equal(h.aborted(), 0); assert.equal(h.state().pendingDecision.action, "ready"); assert.equal(h.state().pendingDecision.finalAssistantMessage, undefined);
+  await h.emit("turn_end", structuredClone(completed));
+  const projected = await projection;
+
+  assert.equal(projected, undefined); assert.equal(h.aborted(), 0); assert.equal(h.logs.length, 0); assert.equal(h.compactions.length, 1);
+  assert.equal(h.state().status, "running"); assert.equal(h.state().cycle, 1); assert.equal(h.state().pendingDecision, null);
+  assert.equal(h.state().driverGoalId, "goal-after-ready"); assert.equal(h.state().admittedContinuation.identity, "goal-after-ready:1");
 });
 
 
@@ -774,6 +826,112 @@ test("an RLM-split running pass re-registers closeout before the continuation re
   assert.equal(h.state().cycle, 2);
 });
 
+
+test("a same-pass before_agent_start owner consumes the native-pause retry candidate", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" });
+  await startExecution(h);
+  h.addGoal({ goalId: "goal-native-pause-owner", status: "active", active: true });
+  await h.emit("before_agent_start", { prompt: "bind exact driver" });
+  h.addGoal({ goalId: "goal-native-pause-owner", status: "paused", active: true });
+  await h.emit("agent_end", { messages: [{ role: "assistant", stopReason: "aborted", errorMessage: "Request was aborted" }] });
+  assert.equal(h.state().status, "paused"); assert.match(h.state().pauseReason, /without normal closeout/);
+
+  h.addGoal({ goalId: "goal-native-pause-owner", status: "active", active: true });
+  await h.emit("before_agent_start", { prompt: "resume exact driver" });
+  assert.equal(h.state().status, "running");
+  const abortsBeforeStart = h.aborted();
+  await h.emit("agent_start", {});
+  assert.equal(h.aborted(), abortsBeforeStart); assert.equal(h.state().status, "running");
+
+  await h.emit("turn_end", finalEvent("resumed pass remains owned"));
+  assert.equal(h.state().status, "paused"); assert.match(h.state().pauseReason, /without a lifecycle decision/);
+});
+
+test("a provider retry agent_start re-registers lifecycle closeout after error agent_end", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" }); const initial = await startExecution(h);
+  h.addGoal({ goalId: "goal-provider-retry", status: "active", active: true });
+
+  await h.emit("agent_end", { messages: [{ role: "assistant", stopReason: "error", errorMessage: "WebSocket closed 1006" }] });
+  assert.equal(h.state().status, "paused"); assert.match(h.state().pauseReason, /without normal closeout/);
+
+  await h.emit("agent_start", {});
+  assert.equal(h.state().status, "running", JSON.stringify(h.notices));
+  const context = h.handlers.get("context").at(-1);
+  const retried = await context({ messages: [{ role: "user", content: "original request" }] }, h.ctx);
+  assert.equal(retried, undefined);
+
+  await control(h, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 });
+  const completed = finalEvent("completed after provider retry"); completed.message.timestamp = 12;
+  await h.emit("turn_end", structuredClone(completed));
+  assert.equal(h.state().pendingDecision.finalAssistantMessage, "completed after provider retry");
+
+  const goalMessage = { role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: "goal-provider-retry", continuationsUsed: 1 } };
+  const projected = await context({ messages: [completed.message, goalMessage] }, h.ctx);
+  assert.deepEqual(projected.messages, []); assert.equal(h.aborted(), 1); assert.equal(h.logs.length, 1);
+  assert.equal(h.state().status, "running"); assert.equal(h.state().cycle, 1); assert.equal(h.state().pendingRound.stage, "compacting");
+  await completeAutomaticRoundCompaction(h);
+  assert.equal(h.state().cycle, 2); assert.equal(h.state().admittedContinuation.identity, "goal-provider-retry:1");
+});
+
+
+test("a direct retry with a changed native goal is aborted without lifecycle ownership", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" });
+  await startExecution(h);
+  h.addGoal({ goalId: "goal-provider-original", status: "active", active: true });
+  await h.emit("agent_end", { messages: [{ role: "assistant", stopReason: "error", errorMessage: "retryable" }] });
+  assert.equal(h.state().status, "paused");
+  h.addGoal({ goalId: "goal-provider-changed", status: "active", active: true });
+
+  await h.emit("agent_start", {});
+  assert.equal(h.aborted(), 1); assert.equal(h.state().status, "paused");
+  await h.emit("turn_end", finalEvent("must not gain retry ownership"));
+  assert.equal(h.state().status, "paused");
+  assert.match(h.notices.at(-1)[0], /goal driver changed or ended/);
+});
+
+test("a direct retry with a cleared or errored native goal is aborted fail closed", async (t) => {
+  for (const status of ["idle", "error"]) await t.test(status, async () => {
+    const h = harness({ specificationState: "existing", planState: "existing" });
+    await startExecution(h);
+    h.addGoal({ goalId: `goal-provider-${status}`, status: "active", active: true });
+    await h.emit("agent_end", { messages: [{ role: "assistant", stopReason: "error", errorMessage: "retryable" }] });
+    h.addGoal({ goalId: status === "idle" ? null : `goal-provider-${status}`, status, active: false });
+
+    await h.emit("agent_start", {});
+    assert.equal(h.aborted(), 1); assert.equal(h.state().status, "paused");
+    await h.emit("turn_end", finalEvent("must remain unowned"));
+    assert.equal(h.state().status, "paused");
+  });
+});
+
+test("a direct retry reconciliation append failure aborts and retains the durable pause", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" });
+  await startExecution(h);
+  h.addGoal({ goalId: "goal-provider-append", status: "active", active: true });
+  await h.emit("agent_end", { messages: [{ role: "assistant", stopReason: "error", errorMessage: "retryable" }] });
+  h.failStateAppendIn(1);
+
+  await h.emit("agent_start", {});
+  assert.equal(h.aborted(), 1); assert.equal(h.state().status, "paused");
+  assert.match(h.state().pauseReason, /without normal closeout/);
+  await h.emit("turn_end", finalEvent("must not gain ownership after append failure"));
+  assert.equal(h.state().status, "paused");
+  assert.match(h.notices.at(-1)[0], /before exact lifecycle ownership was restored/);
+});
+
+test("an agent-end pause append failure makes the next direct retry persist a closed state", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" });
+  await startExecution(h);
+  h.addGoal({ goalId: "goal-provider-end-append", status: "active", active: true });
+  h.failStateAppendIn(2);
+  await assert.rejects(h.emit("agent_end", { messages: [{ role: "assistant", stopReason: "error", errorMessage: "retryable" }] }), /injected state append failure/);
+  assert.equal(h.state().status, "running");
+  h.restoreStateAppends();
+
+  await h.emit("agent_start", {});
+  assert.equal(h.aborted(), 1); assert.equal(h.state().status, "paused");
+  assert.equal(h.state().pauseReason, "automatic retry lifecycle ownership could not be reclaimed");
+});
 
 test("a closeout that passed before waiter registration fails closed without hanging", async () => {
   const branch = [], logs = [];
@@ -809,6 +967,24 @@ test("agent end releases a pending closeout waiter and leaves execution paused",
   const outcome = await Promise.race([projection, new Promise((resolve) => setImmediate(() => resolve("still waiting")))]);
   assert.notEqual(outcome, "still waiting"); assert.deepEqual(outcome.messages, []);
   assert.equal(h.state().status, "paused"); assert.match(h.state().pauseReason, /ended without normal closeout/);
+});
+
+
+test("agent end releases a pending Ready closeout waiter", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" }); const initial = await startExecution(h);
+  h.addGoal({ goalId: "goal-ready-old", status: "complete", active: false });
+  const waited = await control(h, { action: "wait", lifecycleId: initial.lifecycleId, cycle: 1, reason: "review", readiness: "done" });
+  await h.emit("turn_end", finalEvent("waiting")); await h.emit("before_agent_start", { prompt: "ready" });
+  h.addGoal({ goalId: "goal-ready-new", status: "active", active: true });
+  await control(h, { action: "ready", lifecycleId: initial.lifecycleId, cycle: 1, waitId: waited.details.waitId });
+  const completed = finalEvent("agent ends during Ready closeout"); completed.message.timestamp = 13;
+  const goalMessage = { role: "custom", customType: "goal_context", content: "resume", details: { kind: "continuation", goalId: "goal-ready-new", continuationsUsed: 1 } };
+  const projection = h.handlers.get("context").at(-1)({ messages: [completed.message, goalMessage] }, h.ctx);
+  await Promise.resolve(); await h.emit("agent_end", { messages: [] });
+  const outcome = await Promise.race([projection, new Promise((resolve) => setImmediate(() => resolve("still waiting")))]);
+  assert.notEqual(outcome, "still waiting"); assert.deepEqual(outcome.messages, []);
+  assert.equal(h.state().status, "paused"); assert.match(h.state().pauseReason, /ended without normal closeout/);
+  assert.equal(h.state().cycle, 1); assert.equal(h.logs.length, 0); assert.equal(h.compactions.length, 1);
 });
 
 
@@ -1723,13 +1899,20 @@ test("automatic boundary survives an unrelated queued context before exact admis
   await h.handlers.get("context").at(-1)({ messages: [goalMessage] }, h.ctx);
   const pending = h.state().pendingRound;
   const marker = [...h.branch].reverse().find((entry) => entry?.customType === "prime_ralph_reset_marker" && entry.data?.requestId === pending.requestId);
+  const sentBefore = h.sent.length;
   h.compactions.at(-1).onComplete({ summary: "", firstKeptEntryId: marker.id });
-  const boundary = h.sent.at(-1).message;
+  assert.equal(h.sent.length, sentBefore + 1);
+  const boundary = h.sent[sentBefore].message;
   const unrelated = await h.handlers.get("context").at(-1)({ messages: [{ role: "user", content: "queued before boundary" }] }, h.ctx);
   assert.deepEqual(unrelated.messages, []);
   assert.equal(h.state().pendingRound.stage, "admission-requested");
-  await h.emit("message_start", { message: { role: "custom", ...boundary } });
-  await h.emit("context", { messages: [{ role: "custom", ...boundary }] });
+  await h.emit("agent_end", { messages: [{ role: "assistant", stopReason: "aborted", content: [] }] });
+  h.setSignalAvailable(false); await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.sent.length, sentBefore + 2);
+  const release = h.sent[sentBefore + 1].message;
+  h.setSignalAvailable(true); await h.emit("agent_start", {});
+  await h.emit("message_start", { message: { role: "custom", ...release } });
+  await h.emit("context", { messages: [{ role: "custom", ...boundary }, { role: "custom", ...release }] });
   assert.equal(h.state().cycle, 2);
   assert.equal(h.state().pendingRound, null);
 });
