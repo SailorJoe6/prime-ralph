@@ -12,7 +12,7 @@ import {
   resetCompactionInstructions,
 } from "../src/reset-context.js";
 
-function harness({ branch = [], persistSent = true, sendError, appendError, specificationState = "absent", idle = true, pendingMessages = false, signalAvailable = true, activeWorkflowTurn = false, activeWorkflowIdentity, preserveAdmittedAgentEnd = false } = {}) {
+function harness({ branch = [], persistSent = true, sendError, appendError, specificationState = "absent", idle = true, pendingMessages = false, signalAvailable = true, activeWorkflowTurn = false, activeWorkflowIdentity, preserveAdmittedAgentEnd = false, deliveryTimeoutMs } = {}) {
   let runtimeIdle = idle, runtimePendingMessages = pendingMessages, runtimeSignalAvailable = signalAvailable, runtimeActiveWorkflowTurn = activeWorkflowTurn, runtimeActiveWorkflowIdentity = activeWorkflowIdentity;
   const runAbortController = new AbortController();
   const handlers = new Map(), commands = new Map(), sent = [], entries = [], notices = [], compactions = [];
@@ -40,6 +40,7 @@ function harness({ branch = [], persistSent = true, sendError, appendError, spec
     createRequestId: (() => { let id = 0; return () => `r${++id}`; })(),
     hasActiveWorkflowTurn: (_ctx, identity) => runtimeActiveWorkflowTurn && (runtimeActiveWorkflowIdentity === undefined || JSON.stringify(identity) === JSON.stringify(runtimeActiveWorkflowIdentity)),
     preserveAdmittedAgentEnd: () => preserveAdmittedAgentEnd,
+    deliveryTimeoutMs,
   })(pi);
   const ctx = {
     cwd: "/project",
@@ -201,6 +202,119 @@ test("fails without prepare on compaction failure or unexpected result", async (
   unexpected.compactions[0].onComplete({ summary: "wrong", firstKeptEntryId: "wrong", tokensBefore: 1 });
   assert.equal(unexpected.sent.length, 0);
   assert.equal(unexpected.entries.at(-1).data.reason, "unexpected_compaction_result");
+});
+
+test("missing fire-and-forget prepare delivery terminalizes once on the next idle input", async () => {
+  const h = harness({ persistSent: false });
+  const rejected = [];
+  await h.runtime.requestBoundaryAtProviderBoundary({
+    ctx: h.ctx,
+    command: "execute-round",
+    resolveInjection: () => ({ content: "next execution pass" }),
+    onRejected: (value) => rejected.push(value),
+  });
+  completeCompaction(h);
+  assert.equal(h.entries.at(-1).data.status, "prepare_pending");
+  assert.equal(h.branch.some((entry) => entry.type === "custom_message" && entry.customType === RESET_MESSAGE_TYPE), false);
+
+  const handled = h.handlers.get("input")({ text: "are you there?", source: "interactive" }, h.ctx);
+  assert.deepEqual(handled, { action: "handled" });
+  assert.equal(h.entries.at(-1).data.status, "failed");
+  assert.equal(h.entries.at(-1).data.reason, "skill_boundary_delivery_missing");
+  assert.equal(rejected.length, 1);
+  assert.equal(rejected[0].requestId, "r1");
+  assert.equal(h.getAborts(), 0);
+  assert.match(h.notices.at(-1)[0], /goal clear/);
+
+  assert.equal(h.handlers.get("input")({ text: "second input", source: "interactive" }, h.ctx), undefined);
+  assert.equal(rejected.length, 1);
+});
+
+test("delivery watchdog terminalizes an unobservable asynchronous prepare rejection without input", async () => {
+  const h = harness({ persistSent: false, pendingMessages: false, deliveryTimeoutMs: 1 });
+  const rejected = [];
+  await h.runtime.requestBoundaryAtProviderBoundary({
+    ctx: h.ctx,
+    command: "execute-round",
+    resolveInjection: () => ({ content: "next execution pass" }),
+    onRejected: (value) => rejected.push(value),
+  });
+  completeCompaction(h);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(h.entries.at(-1).data.status, "failed");
+  assert.equal(h.entries.at(-1).data.reason, "skill_boundary_delivery_missing");
+  assert.equal(rejected.length, 1);
+  assert.equal(h.getAborts(), 0);
+  assert.equal(h.sent.length, 1);
+  assert.match(h.notices.at(-1)[0], /no provider request was admitted|goal clear/);
+});
+
+test("delivery watchdog preserves accepted queued work and input reconciles only after the queue drains", async () => {
+  const h = harness({ persistSent: false, pendingMessages: true, deliveryTimeoutMs: 1 });
+  const rejected = [];
+  await h.runtime.requestBoundaryAtProviderBoundary({
+    ctx: h.ctx,
+    command: "execute-round",
+    resolveInjection: () => ({ content: "queued execution pass" }),
+    onRejected: (value) => rejected.push(value),
+  });
+  completeCompaction(h);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(h.entries.at(-1).data.status, "prepare_pending");
+  assert.equal(rejected.length, 0);
+
+  h.setPendingMessages(false);
+  assert.deepEqual(h.handlers.get("input")({ text: "reconcile", source: "interactive" }, h.ctx), { action: "handled" });
+  assert.equal(h.entries.at(-1).data.status, "failed");
+  assert.equal(h.entries.at(-1).data.reason, "skill_boundary_delivery_missing");
+  assert.equal(rejected.length, 1);
+});
+
+test("accepted deferred origin delivery survives its watchdog deadline and admits after origin end", async () => {
+  const h = harness({ deliveryTimeoutMs: 1, signalAvailable: true });
+  const rejected = [];
+  await h.runtime.requestBoundaryAtProviderBoundary({
+    ctx: h.ctx,
+    command: "execute-round",
+    ignoreCurrentAbort: true,
+    resolveInjection: () => ({ content: "deferred execution pass" }),
+    onRejected: (value) => rejected.push(value),
+  });
+  completeCompaction(h);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(h.entries.at(-1).data.status, "prepare_pending");
+  assert.equal(rejected.length, 0);
+
+  h.setSignalAvailable(false);
+  await h.handlers.get("agent_end")({ messages: [{ role: "assistant", stopReason: "aborted", content: [] }] }, h.ctx);
+  await new Promise((resolve) => setImmediate(resolve));
+  const release = h.sent.at(-1).message;
+  assert.equal(release.customType, "prime_ralph_reset_release");
+  h.handlers.get("message_start")({ message: { role: "custom", ...release } }, h.ctx);
+  const visible = [{ role: "custom", ...h.sent[0].message }, { role: "custom", ...release }];
+  assert.equal(h.handlers.get("context")({ messages: visible }, h.ctx), undefined);
+  h.handlers.get("turn_end")({ message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "settled" }] } });
+  await h.handlers.get("agent_end")({ messages: [{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "settled" }] }] }, h.ctx);
+  assert.equal(h.entries.at(-1).data.status, "completed");
+  assert.equal(rejected.length, 0);
+});
+
+test("delivery watchdog contains a terminal state append failure", async () => {
+  const h = harness({ persistSent: false, deliveryTimeoutMs: 1 });
+  const rejected = [];
+  await h.runtime.requestBoundaryAtProviderBoundary({
+    ctx: h.ctx,
+    command: "execute-round",
+    resolveInjection: () => ({ content: "next execution pass" }),
+    onRejected: (value) => rejected.push(value),
+  });
+  completeCompaction(h);
+  h.failAppendIn(1);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(rejected.length, 1);
+  assert.equal(rejected[0].reason, "skill_boundary_delivery_missing");
+  assert.match(h.notices.at(-1)[0], /could not durably record/);
+  assert.equal(h.handlers.get("input")({ text: "later", source: "interactive" }, h.ctx), undefined);
 });
 
 test("converts synchronous prepare admission failure into terminal failed state", async () => {

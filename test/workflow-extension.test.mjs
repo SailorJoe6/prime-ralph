@@ -12,8 +12,9 @@ const specSkill = { path: "/project/.ralph/skills/spec-it-out/SKILL.md", text: "
 const planSkill = { path: "/project/.ralph/skills/plan/SKILL.md", text: "---\nname: plan\ndescription: test\nprime-ralph-invocation-version: 1\n---\nplan body" };
 const executeSkill = { path: "/project/.ralph/skills/execute/SKILL.md", text: "---\nname: execute\ndescription: test\nprime-ralph-invocation-version: 1\n---\nexecute body" };
 const blockedSkill = { path: "/project/.ralph/skills/blocked/SKILL.md", text: "---\nname: blocked\ndescription: test\nprime-ralph-invocation-version: 1\n---\nblocked body" };
-function harness({ specificationState = "absent", planState = "absent", branch = [], inspectSpecError, inspectPlanError, sendError, loadPrepareError, loadPlanError, loadExecuteError, blockedState = "absent", blockedProofState = "complete", restoredProofState = "unproven", appendFailureAt: initialAppendFailureAt, appendFailureFrom: initialAppendFailureFrom, logFailureAt, sessionId = "session-1", rlmDepth = 0, sharedLogs, closeoutTimeoutMs, signalAvailable = true, treeEntries: initialTreeEntries, navigateMode = "normal" } = {}) {
+function harness({ specificationState = "absent", planState = "absent", branch = [], inspectSpecError, inspectPlanError, sendError, loadPrepareError, loadPlanError, loadExecuteError, blockedState = "absent", blockedProofState = "complete", restoredProofState = "unproven", appendFailureAt: initialAppendFailureAt, appendFailureFrom: initialAppendFailureFrom, logFailureAt, sessionId = "session-1", rlmDepth = 0, sharedLogs, closeoutTimeoutMs, deliveryTimeoutMs, persistSent = true, signalAvailable = true, treeEntries: initialTreeEntries, navigateMode = "normal" } = {}) {
   const runAbortController = new AbortController();
+  let runtimePersistSent = persistSent;
   const commands = new Map(), tools = new Map(), handlers = new Map(), sent = [], userMessages = [], notices = [], compactions = [], entries = [], logs = sharedLogs ?? [], transactions = [];
   const treeEntries = initialTreeEntries ?? [...branch];
   let leafId = branch.at(-1)?.id ?? null;
@@ -29,7 +30,8 @@ function harness({ specificationState = "absent", planState = "absent", branch =
     sendUserMessage(message, options) { userMessages.push({ message, options }); },
     sendMessage(message, options) {
       if (sendError) throw sendError;
-      sent.push({ message, options }); appendTreeEntry({ type: "custom_message", id: `e${++nextEntry}`, parentId: leafId, timestamp: new Date().toISOString(), ...message });
+      sent.push({ message, options });
+      if (runtimePersistSent) appendTreeEntry({ type: "custom_message", id: `e${++nextEntry}`, parentId: leafId, timestamp: new Date().toISOString(), ...message });
     },
   };
   createWorkflowExtension({
@@ -58,6 +60,7 @@ function harness({ specificationState = "absent", planState = "absent", branch =
     now: () => new Date("2026-09-04T00:00:00.000Z"),
     createRequestId: (() => { let id = 0; return () => `id${++id}`; })(),
     ...(closeoutTimeoutMs === undefined ? {} : { closeoutTimeoutMs }),
+    ...(deliveryTimeoutMs === undefined ? {} : { deliveryTimeoutMs }),
   })(pi);
   const ctx = {
     cwd: "/project", waitForIdle: async () => { idleWaits += 1; }, isIdle: () => idle,
@@ -92,7 +95,7 @@ function harness({ specificationState = "absent", planState = "absent", branch =
   };
   return { commands, tools, handlers, sent, userMessages, notices, branch, entries, compactions, logs, transactions, ctx, emit, settle, state: () => latestExecutionState(branch, sessionId), treeEntries, navigationLeaf: () => leafId, idleWaits: () => idleWaits, addGoal: (data) => appendTreeEntry({ type: "custom", id: `e${++nextEntry}`, parentId: leafId, timestamp: new Date().toISOString(), customType: "thread_goal_state", data }), setPending: (value) => { pending = value; pendingSequence = undefined; pendingReads = 0; }, setPendingSequence: (values) => { pendingSequence = [...values]; pendingReads = 0; }, pendingReads: () => pendingReads,
     setSignalAvailable: (value) => { runtimeSignalAvailable = value; signalSequence = undefined; signalReads = 0; }, setSignalSequence: (values) => { signalSequence = [...values]; signalReads = 0; }, signalReads: () => signalReads,
-    abortRun: () => runAbortController.abort(), setIdle: (value) => { idle = value; }, aborted: () => aborted, setSpecification: (value) => { spec = value; }, setPlan: (value) => { plan = value; }, setRestored: (value) => { restored = value; }, setBlocked: (value) => { blocked = value; }, failStateAppendIn: (offset) => { appendFailureAt = appendCalls + offset; }, failAllStateAppends: () => { appendFailureFrom = appendCalls + 1; }, restoreStateAppends: () => { appendFailureAt = undefined; appendFailureFrom = undefined; }, logAttempts: () => logCalls };
+    abortRun: () => runAbortController.abort(), setIdle: (value) => { idle = value; }, setPersistSent: (value) => { runtimePersistSent = value; }, aborted: () => aborted, setSpecification: (value) => { spec = value; }, setPlan: (value) => { plan = value; }, setRestored: (value) => { restored = value; }, setBlocked: (value) => { blocked = value; }, failStateAppendIn: (offset) => { appendFailureAt = appendCalls + offset; }, failAllStateAppends: () => { appendFailureFrom = appendCalls + 1; }, restoreStateAppends: () => { appendFailureAt = undefined; appendFailureFrom = undefined; }, logAttempts: () => logCalls };
 }
 
 function poisonedRecoveryFixture({ sessionId = "session-1", phase = "planning", command = "plan" } = {}) {
@@ -1851,6 +1854,54 @@ test("short, failed, and unexpected automatic compaction outcomes admit no next 
   }
 });
 
+test("dropped automatic boundary terminalizes provider-free and restores operator control without identity replay", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing", sessionId: "delivery-drop", deliveryTimeoutMs: 1 });
+  const initial = await startExecution(h);
+  const initialBoundary = h.sent.at(-1).message;
+  await h.emit("message_start", { message: { role: "custom", ...initialBoundary } });
+  await h.emit("context", { messages: [{ role: "custom", ...initialBoundary }] });
+  h.addGoal({ goalId: "goal-delivery-drop", status: "active", active: true });
+  await control(h, { action: "continue", lifecycleId: initial.lifecycleId, cycle: 1 });
+  await h.emit("turn_end", finalEvent("finished before dropped boundary"));
+  await h.emit("agent_end", { messages: [{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "finished before dropped boundary" }] }] });
+  await h.handlers.get("context").at(-1)({ messages: [{ role: "custom", customType: "goal_context", content: "continue", details: { kind: "continuation", goalId: "goal-delivery-drop", continuationsUsed: 1 } }] }, h.ctx);
+  const pending = h.state().pendingRound;
+  const marker = [...h.branch].reverse().find((entry) => entry?.customType === RESET_MARKER_TYPE && entry.data?.requestId === pending.requestId);
+  h.setPersistSent(false);
+  h.branch.push({ type: "compaction", id: `compaction-${pending.requestId}`, summary: "", firstKeptEntryId: marker.id, customInstructions: h.compactions.at(-1).customInstructions, details: { command: "execute-round" } });
+  h.compactions.at(-1).onComplete({ summary: "", firstKeptEntryId: marker.id });
+  h.setSignalAvailable(false);
+  await h.emit("agent_end", { messages: [{ role: "assistant", stopReason: "aborted", content: [] }] });
+  await new Promise((resolve) => setTimeout(resolve, 15));
+
+  const failed = h.state();
+  assert.equal(failed.status, "paused", JSON.stringify({ failed, resets: h.branch.filter((entry) => entry.customType === RESET_STATE_TYPE).map((entry) => entry.data), notices: h.notices }));
+  assert.equal(failed.pendingRound.stage, "failed");
+  assert.equal(failed.pendingRound.requestId, pending.requestId);
+  assert.equal(failed.lifecycleId, initial.lifecycleId);
+  assert.equal(failed.driverGoalId, "goal-delivery-drop");
+  assert.equal(failed.cycle, 1);
+  assert.equal(h.branch.some((entry) => entry.type === "custom_message" && entry.customType === RESET_MESSAGE_TYPE && entry.details?.requestId === pending.requestId), false);
+  assert.equal([...h.branch].reverse().find((entry) => entry.customType === RESET_STATE_TYPE && entry.data?.requestId === pending.requestId)?.data.reason, "skill_boundary_delivery_missing");
+
+  const abortsBeforeInput = h.aborted();
+  const recoveryInput = [];
+  for (const handler of h.handlers.get("input") ?? []) recoveryInput.push(await handler({ text: "are you there?", source: "interactive" }, h.ctx));
+  assert.equal(recoveryInput.some((result) => result?.action === "handled"), true);
+  assert.equal(h.aborted(), abortsBeforeInput);
+  assert.match(h.notices.at(-1)[0], /goal clear/);
+
+  h.addGoal({ goalId: "goal-delivery-drop", status: "idle", active: false });
+  const restoredInput = [];
+  for (const handler of h.handlers.get("input") ?? []) restoredInput.push(await handler({ text: "operator control restored", source: "interactive" }, h.ctx));
+  assert.equal(restoredInput.some((result) => result?.action === "handled"), false);
+  assert.equal(h.state().phase, "planning");
+  assert.equal(h.state().status, "inactive");
+  assert.equal(h.state().pendingRound, null);
+  assert.equal(h.state().lifecycleId, initial.lifecycleId);
+  assert.equal(h.state().cycle, 1);
+});
+
 test("automatic compaction reload fails a pending durable boundary and never replays uncertain work", async () => {
   const branch = [], logs = [];
   const first = harness({ branch, sharedLogs: logs, specificationState: "existing", planState: "existing", sessionId: "automatic-reload" }); const initial = await startExecution(first);
@@ -1874,6 +1925,24 @@ test("automatic compaction reload fails a pending durable boundary and never rep
   const uncertain = harness({ branch: uncertainBranch, specificationState: "existing", planState: "existing", sessionId: "automatic-reload" });
   await uncertain.emit("session_start", { reason: "reload" });
   assert.equal(uncertain.state().status, "paused"); assert.equal(uncertain.state().pendingRound.stage, "failed"); assert.equal(uncertain.sent.length, 0);
+
+  const operator = harness({ branch: [...uncertainBranch], specificationState: "existing", planState: "existing", sessionId: "automatic-reload" });
+  const firstInput = [];
+  for (const handler of operator.handlers.get("input") ?? []) firstInput.push(await handler({ text: "are you there?", source: "interactive" }, operator.ctx));
+  assert.equal(firstInput.some((result) => result?.action === "handled"), true);
+  assert.equal(operator.aborted(), 0);
+  assert.match(operator.notices.at(-1)[0], /goal clear/);
+  assert.equal(operator.state().pendingRound.stage, "failed");
+  assert.equal(operator.state().cycle, 1);
+
+  operator.addGoal({ goalId: "goal-reload-automatic", status: "idle", active: false });
+  const afterGoalClear = [];
+  for (const handler of operator.handlers.get("input") ?? []) afterGoalClear.push(await handler({ text: "operator control restored", source: "interactive" }, operator.ctx));
+  assert.equal(afterGoalClear.some((result) => result?.action === "handled"), false);
+  assert.equal(operator.state().phase, "planning");
+  assert.equal(operator.state().status, "inactive");
+  assert.equal(operator.state().pendingRound, null);
+  assert.equal(operator.state().cycle, 1);
 });
 
 test("reload while automatic compaction is still pending pauses without retry or projection", async () => {

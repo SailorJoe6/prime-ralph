@@ -16,19 +16,29 @@ import {
 
 const TERMINAL_STATES = new Set(["completed", "interrupted", "failed", "recovered"]);
 const RESET_RELEASE_TYPE = "prime_ralph_reset_release";
-function hasExactAdmittedBoundary(event, request) {
+function matchesExactPreparedBoundary(message, request) {
   const expected = request?.prepareMessage;
-  if (!expected || !Array.isArray(event?.messages)) return false;
-  return event.messages.some((message) => {
-    if (message?.role !== expected.role || message.customType !== expected.customType || message.content !== expected.content) return false;
-    const actualDetails = message.details;
-    const expectedDetails = expected.details;
-    if (!actualDetails || !expectedDetails || typeof actualDetails !== "object" || typeof expectedDetails !== "object") return false;
-    const actualKeys = Object.keys(actualDetails).sort();
-    const expectedKeys = Object.keys(expectedDetails).sort();
-    return actualKeys.length === expectedKeys.length && actualKeys.every((key, index) =>
-      key === expectedKeys[index] && Object.is(actualDetails[key], expectedDetails[key]));
-  });
+  const customMessage = message?.role === "custom" || message?.type === "custom_message";
+  if (!expected || !customMessage || message.customType !== expected.customType || message.content !== expected.content) return false;
+  const actualDetails = message.details;
+  const expectedDetails = expected.details;
+  if (!actualDetails || !expectedDetails || typeof actualDetails !== "object" || typeof expectedDetails !== "object") return false;
+  const actualKeys = Object.keys(actualDetails).sort();
+  const expectedKeys = Object.keys(expectedDetails).sort();
+  return actualKeys.length === expectedKeys.length && actualKeys.every((key, index) =>
+    key === expectedKeys[index] && Object.is(actualDetails[key], expectedDetails[key]));
+}
+
+function matchesExactRelease(message, request) {
+  const customMessage = message?.role === "custom" || message?.type === "custom_message";
+  const details = message?.details;
+  return customMessage && message.customType === RESET_RELEASE_TYPE && message.content === "" &&
+    details?.source === "prime-ralph" && details?.protocolVersion === RESET_PROTOCOL_VERSION && details?.requestId === request?.requestId &&
+    Object.keys(details).sort().join(",") === "protocolVersion,requestId,source";
+}
+
+function hasExactAdmittedBoundary(event, request) {
+  return Array.isArray(event?.messages) && event.messages.some((message) => matchesExactPreparedBoundary(message, request));
 }
 
 function defaultResetInjection({ ctx, loadPrepare, loadSpecItOut, inspectSpecification }) {
@@ -57,6 +67,7 @@ export function createResetExtension({
   deferHandoffEventFinish = false,
   onAgentStart,
   preserveAdmittedAgentEnd = () => false,
+  deliveryTimeoutMs = 5_000,
 } = {}) {
   return function resetExtension(pi) {
     let pending;
@@ -105,6 +116,39 @@ export function createResetExtension({
         clearPending();
         try { request.onRejected?.({ requestId: request.requestId, markerId: request.markerId, command: request.command, reason, error }); } catch {}
       }
+    };
+    const notifyMissingPreparedDelivery = (ctx, command) => ctx.ui.notify(command === "execute-round"
+      ? "Ralph could not deliver the next execution boundary. Use /goal clear, inspect the recorded failure, then use /execute for a fresh lifecycle."
+      : "Ralph could not deliver its prepared boundary. Retry the Ralph command; no provider request was admitted.", "error");
+    const hasMissingPreparedDeliveryEvidence = (ctx, request) => {
+      const entries = ctx.sessionManager.getBranch();
+      const resetState = latestResetStateForRequest(entries, request.requestId);
+      const dispatchObserved = request.boundaryQueued === true && request.stage === "prepare_pending"
+        ? entries.some((entry) => matchesExactRelease(entry, request))
+        : entries.some((entry) => matchesExactPreparedBoundary(entry, request));
+      return resetState?.status === "prepare_pending" && hasResetCompaction(entries, request.requestId) && !dispatchObserved;
+    };
+    const terminalizeMissingPreparedDelivery = (ctx, request) => {
+      try {
+        failPending("skill_boundary_delivery_missing");
+        notifyMissingPreparedDelivery(ctx, request.command);
+      } catch {
+        ctx.ui.notify("Ralph could not durably record the missing boundary delivery. Reload the extension before retrying; no provider request was admitted.", "error");
+      }
+      return true;
+    };
+    const reconcileMissingPreparedDelivery = (ctx) => {
+      const request = pending;
+      if (!request || !["origin_ending", "prepare_pending"].includes(request.stage)) return false;
+      if (!ctx.isIdle() || ctx.hasPendingMessages() || !hasMissingPreparedDeliveryEvidence(ctx, request)) return false;
+      return terminalizeMissingPreparedDelivery(ctx, request);
+    };
+    const verifyPreparedDeliverySoon = (ctx, request) => {
+      const timer = setTimeout(() => {
+        if (pending !== request || !["origin_ending", "prepare_pending"].includes(request.stage)) return;
+        reconcileMissingPreparedDelivery(ctx);
+      }, deliveryTimeoutMs);
+      timer.unref?.();
     };
 
     const recover = (ctx) => {
@@ -179,6 +223,7 @@ export function createResetExtension({
             display: false, details: { source: "prime-ralph", protocolVersion: RESET_PROTOCOL_VERSION, requestId: request.requestId }, timestamp: Date.now(),
           } : request.prepareMessage;
           pi.sendMessage(message, { triggerTurn: request.triggerTurn, deliverAs: "followUp" });
+          verifyPreparedDeliverySoon(ctx, request);
           notifyStarted();
         } catch (error) {
           rejectBoundary("skill_admission_failed", error);
@@ -219,11 +264,13 @@ export function createResetExtension({
             // Queue the durable boundary under the origin run so both allowed
             // host orderings remain supported. Its origin_ending context is
             // denied; agent_end later releases a fresh additive control turn.
-            pi.sendMessage(skillMessage, { triggerTurn, deliverAs: "followUp" });
             request.boundaryQueued = true;
+            pi.sendMessage(skillMessage, { triggerTurn, deliverAs: "followUp" });
+            verifyPreparedDeliverySoon(ctx, request);
             return;
           }
           pi.sendMessage(skillMessage, { triggerTurn, deliverAs: "followUp" });
+          verifyPreparedDeliverySoon(ctx, pending);
           if (!triggerTurn) {
             const durable = ctx.sessionManager.getBranch().filter((entry) => entry?.type === "custom_message" &&
               entry.customType === RESET_MESSAGE_TYPE && entry.details?.source === "prime-ralph" &&
@@ -295,6 +342,7 @@ export function createResetExtension({
       },
     });
     pi.on("session_start", (_event, ctx) => recover(ctx));
+    pi.on("input", (_event, ctx) => reconcileMissingPreparedDelivery(ctx) ? { action: "handled" } : undefined);
     pi.on("session_before_compact", (event) => {
       if (!pending || event.customInstructions !== pending.customInstructions) return;
       const marker = event.branchEntries.find((entry) => entry.id === pending.markerId);
@@ -370,7 +418,8 @@ export function createResetExtension({
     });
     pi.on("message_start", (event) => {
       if (!pending || ![RESET_MESSAGE_TYPE, RESET_RELEASE_TYPE].includes(event.message?.customType)) return;
-      if (event.message.details?.requestId === pending.requestId) activeRequestId = pending.requestId;
+      if (event.message.details?.requestId !== pending.requestId) return;
+      activeRequestId = pending.requestId;
     });
     pi.on("tool_result", (event, ctx) => recordQueuedToolResult(event, ctx));
     pi.on("turn_end", (event) => {

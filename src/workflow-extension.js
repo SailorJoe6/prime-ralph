@@ -82,6 +82,7 @@ export function createWorkflowExtension({
   adoptRestoredDocuments = adoptRestoredPlanningDocuments, verifyAdoptedDocuments = verifyAdoptedPlanningDocuments,
   archiveDocuments = archivePlanningDocuments,
   appendLog = appendExecutionLogEntry, createRequestId = randomUUID, now = () => new Date(), closeoutTimeoutMs = 30_000,
+  deliveryTimeoutMs = 5_000,
 } = {}) {
   return function workflowExtension(pi) {
     const startupSessions = new Set(), sessionPhases = new Map(), executionStates = new Map(), activeLifecycleTurns = new Map(), activeBlockedTurns = new Set(), retryReclaimCandidates = new Map(), lifecycleCloseoutWaiters = new Map(), completedLifecycleCloseouts = new Map(), recoveryTreeIntents = new Map(), recoveryQuarantinedSessions = new Set();
@@ -350,7 +351,7 @@ export function createWorkflowExtension({
 
     let resetRuntime;
     resetRuntime = createResetExtension({
-      loadPrepare, loadSpecItOut, inspectSpecification, createRequestId,
+      loadPrepare, loadSpecItOut, inspectSpecification, createRequestId, deliveryTimeoutMs,
       hasActiveWorkflowTurn: (ctx, identity) => hasExactActiveLifecycleTurn(ctx, identity),
       deferHandoffEventFinish: true,
       preserveAdmittedAgentEnd: (event, ctx) => {
@@ -740,6 +741,13 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
       },
     });
 
+    pi.on("input", (_event, ctx) => {
+      const live = execution(ctx);
+      if (live.pendingRound?.stage !== "failed") return;
+      ctx.ui.notify("Ralph halted after a failed execution boundary. Use /goal clear, inspect the recorded failure, then use /execute for a fresh lifecycle.", "error");
+      return { action: "handled" };
+    });
+
     pi.on("before_agent_start", (_event, ctx) => {
       if (rejectRecoveryProviderAdmission(ctx)) return;
       const live = requireTerminalLogReady(execution(ctx)), id = sessionId(ctx);
@@ -765,6 +773,14 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
         // The reset context handler is the sole admission owner. An unrelated
         // queued context can arrive first; deny that provider request but keep
         // the transaction pending while its reset evidence is nonterminal.
+        // Failed rounds remain durable diagnostics until /goal clear reconciles
+        // execution inactive; interactive input is handled before this hook.
+        if (live.pendingRound.stage === "failed") {
+          activeLifecycleTurns.delete(id);
+          ctx.abort();
+          ctx.ui.notify("Ralph rejected an automatic continuation after a failed execution boundary. Use /goal clear, inspect the recorded failure, then use /execute for a fresh lifecycle.", "error");
+          return { messages: [] };
+        }
         const requestId = live.pendingRound.requestId;
         const automaticBoundaries = event.messages.filter((message) => message?.customType === RESET_MESSAGE_TYPE &&
           message.details?.command === "execute-round" && message.details?.automaticCompactionRequestId === requestId);
@@ -999,6 +1015,9 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
         if (live.pendingRound && live.pendingRound.stage !== "failed") {
           const boundaries = durablePendingRoundBoundaries(ctx, live);
           live = haltPendingRound(ctx, "automatic compaction was interrupted before durable admission", boundaries.length > 1 ? "ambiguous-boundary" : boundaries.length === 1 ? "reload-uncertain" : "interrupted");
+        }
+        if (live.pendingRound?.stage === "failed") {
+          ctx.ui.notify("Ralph recovered a failed execution boundary without admitting a provider request. Use /goal clear, inspect the recorded failure, then use /execute for a fresh lifecycle.", "warning");
         }
         live = finishPendingExecutionLog(ctx, live);
         requireTerminalLogReady(live);
