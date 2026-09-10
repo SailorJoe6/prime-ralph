@@ -4,7 +4,7 @@ These checks prove that the packaged extension is admitted through real Prime Ag
 
 ## Committed checks
 
-- **Setup discovery:** a fresh source initialization and a packed-package installation are each loaded by a spawned Prime Agent `0.9.3` RPC process with non-extension resources disabled. `get_commands` must expose exactly the five project-owned Ralph commands, acknowledge abort, and resolve the extension symlink into the expected source or packed package. The check neither controls the daemon nor asserts provider or canonical-skill behavior.
+- **Setup discovery:** a fresh source initialization and a packed-package installation are each loaded by a spawned Prime Agent `0.9.3` RPC process with skills, prompt templates, themes, context files, and session persistence disabled. `get_commands` must expose exactly the five project-owned Ralph commands, acknowledge abort, and resolve the extension symlink into the expected source or packed package. The check neither controls the daemon nor asserts provider or canonical-skill behavior.
 - **RPC:** an LF-delimited client starts a session, sends `abort`, observes acceptance, and exits cleanly.
 - **ACP initialization:** a JSON-RPC client completes `initialize` and `session/new`, receives protocol and session data, and closes at EOF.
 - **ACP prompt:** a JSON-RPC client completes `initialize`, `session/new`, and `session/prompt`; the configured provider turn returns `end_turn`.

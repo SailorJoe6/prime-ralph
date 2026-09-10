@@ -143,7 +143,7 @@ Then extract the produced tarball in a clean temporary directory, import `src/in
 ## Evidence boundaries
 
 - Unit tests and static prompt checks do not prove host lifecycle ordering or model behavior.
-- The public setup-discovery acceptance proves the initialized source and packed-package extension are discovered by a spawned supported RPC host with non-extension resources disabled, expose the exact project command catalog, and acknowledge abort. It does not control the host daemon, assert provider or canonical-skill behavior, or prove command lifecycle behavior.
+- The public setup-discovery acceptance proves the initialized source and packed-package extension are discovered by a spawned supported RPC host with skills, prompt templates, themes, context files, and session persistence disabled, expose the exact project command catalog, and acknowledge abort. It does not control the host daemon, assert provider or canonical-skill behavior, or prove command lifecycle behavior.
 - The specification lifecycle acceptance proves startup ordering, reload suppression, context retention, native reset boundaries, transcript transparency, and an unambiguous native extension-command catalog on Prime Agent `0.9.3`.
 - The planning lifecycle acceptance proves phase selection, ordered skill delivery, clean and current-context `/plan` paths, both planning reset branches, document protection, and no execution start.
 - The opt-in model matrices prove only the recorded provider/model outcomes under its restricted fixture tools; it covers new creation, the initial existing-spec menu, confirmed future creation, agreed active update, cancellation, and reset-existing behavior, and is not deterministic CI evidence.
