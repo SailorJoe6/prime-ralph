@@ -68,7 +68,9 @@ Execution-to-execution and execution-to-blocked automatic pass boundaries use th
 
 `npm test` covers marker correlation, custom results, honest refusal, exact admission, no successful context rewrite, duplicate handling, ordinary-compaction isolation, failure, reload, and interruption.
 
-`npm run accept:reset`, `accept:reset-busy`, and `accept:reset-lifecycle` exercise real Prime Agent `0.9.3` session behavior with deterministic provider capture. `accept:execution-boundary-recovery` holds public session input admission across the automatic boundary, proves the asynchronous `send_message` rejection, and verifies bounded provider-free recovery without cycle advance. Execution and blocked-recovery acceptance cover normal automatic pass-boundary use of the same transaction.
+`npm run accept:public-reset` uses a foreground spawned Prime Agent `0.9.3` RPC process with inherited worker capabilities removed, documented provider registration, a loopback scripted endpoint, full actual provider input, public compaction events, and public session JSONL. It proves one correlated successful `reset-compaction` boundary and matching public `compaction_end` precede provider admission, preserves the single system prompt and session identity, removes stale context only from provider view, and keeps the original append-only history. It does not claim busy, reopen, cancellation, provider-failure, or universal host-conversion behavior.
+
+`npm run accept:reset`, `accept:reset-busy`, and `accept:reset-lifecycle` remain version-pinned compatibility evidence using real Prime Agent `0.9.3` session behavior with deterministic provider capture and private host controls. `accept:execution-boundary-recovery` holds public session input admission across the automatic boundary, proves the asynchronous `send_message` rejection, and verifies bounded provider-free recovery without cycle advance. Execution and blocked-recovery acceptance cover normal automatic pass-boundary use of the same transaction.
 
 ## Public-API boundary
 

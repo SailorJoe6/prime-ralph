@@ -76,6 +76,7 @@ Run:
 ```sh
 npm test
 npm run accept:public-setup-discovery
+npm run accept:public-reset
 PRIME_AGENT_ROOT=/path/to/prime-agent npm run accept:init
 PRIME_AGENT_ROOT=/path/to/prime-agent npm run accept:package-install
 PRIME_AGENT_ROOT=/path/to/prime-agent npm run compat
@@ -136,7 +137,7 @@ npm run package:check
 npm pack --dry-run
 ```
 
-The reset, specification, and planning lifecycle acceptance scripts are disposable and use deterministic providers. `accept:reset` also starts and closes a real Prime Agent IPython kernel. The opt-in model matrix is nondeterministic behavioral evidence and writes only a curated, secret-scanned artifact.
+The public reset acceptance is disposable and uses only a foreground spawned RPC process with inherited worker capabilities removed, documented provider registration, a loopback scripted endpoint, LF-only RPC framing, public compaction events, and public JSONL evidence. The reset, specification, and planning compatibility scripts use deterministic providers and version-pinned host internals; `accept:reset` also starts and closes a real Prime Agent IPython kernel. The opt-in model matrix is nondeterministic behavioral evidence and writes only a curated, secret-scanned artifact.
 
 Then extract the produced tarball in a clean temporary directory, import `src/index.js`, and verify `/reset` registration with a Prime Agent-shaped extension API fixture.
 
@@ -144,6 +145,7 @@ Then extract the produced tarball in a clean temporary directory, import `src/in
 
 - Unit tests and static prompt checks do not prove host lifecycle ordering or model behavior.
 - The public setup-discovery acceptance proves the initialized source and packed-package extension are discovered by a spawned supported RPC host with skills, prompt templates, themes, context files, and session persistence disabled, expose the exact project command catalog, and acknowledge abort. It does not control the host daemon, assert provider or canonical-skill behavior, or prove command lifecycle behavior.
+- The public reset acceptance proves only one successful `reset-compaction` path through spawned Prime Agent `0.9.3` RPC. The correlated native compaction, matching successful public `compaction_end`, and hidden boundary precede the actual loopback provider request; the complete request matches the selected durable boundary, contains exactly one unchanged system prompt and prepare once, excludes stale sentinels, and keeps the same append-only session. Busy, reopen, cancellation, provider-failure, universal converter, and real-model claims remain outside this check.
 - The specification lifecycle acceptance proves startup ordering, reload suppression, context retention, native reset boundaries, transcript transparency, and an unambiguous native extension-command catalog on Prime Agent `0.9.3`.
 - The planning lifecycle acceptance proves phase selection, ordered skill delivery, clean and current-context `/plan` paths, both planning reset branches, document protection, and no execution start.
 - The opt-in model matrices prove only the recorded provider/model outcomes under its restricted fixture tools; it covers new creation, the initial existing-spec menu, confirmed future creation, agreed active update, cancellation, and reset-existing behavior, and is not deterministic CI evidence.

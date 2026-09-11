@@ -38,6 +38,7 @@
     "accept:init": "node scripts/run-init-acceptance.mjs",
     "accept:package-install": "node scripts/run-package-install-acceptance.mjs",
     "accept:public-setup-discovery": "node scripts/run-public-setup-discovery-acceptance.mjs",
+    "accept:public-reset": "node scripts/run-public-reset-acceptance.mjs",
     "accept:specification": "node scripts/run-specification-acceptance.mjs",
     "accept:model:spec-it-out": "node scripts/run-spec-it-out-model-acceptance.mjs",
     "accept:planning": "node scripts/run-planning-acceptance.mjs",
