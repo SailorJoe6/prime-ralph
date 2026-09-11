@@ -593,6 +593,49 @@ test("session quit remains paused until explicit /execute resumes the same lifec
   assert.equal(h.state().cycle, initial.cycle); assert.equal(h.state().driverGoalId, "goal-quit");
 });
 
+test("paused /execute serializes an active native-goal origin before admitting the same lifecycle", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" });
+  const initial = await startExecution(h);
+  h.addGoal({ goalId: "goal-active-origin", status: "active", active: true });
+  await control(h, { action: "continue", lifecycleId: initial.lifecycleId, cycle: initial.cycle });
+  await h.emit("session_shutdown", { reason: "quit" });
+  assert.equal(h.state().status, "paused");
+
+  h.setIdle(false);
+  const waits = h.idleWaits(), compactions = h.compactions.length, sentBefore = h.sent.length;
+  await h.commands.get("execute").handler("", h.ctx);
+  assert.equal(h.idleWaits(), waits);
+  assert.equal(h.compactions.length, compactions + 1);
+  assert.equal(h.state().status, "paused");
+
+  const options = h.compactions.at(-1), requestId = options.customInstructions.split(":").at(-1);
+  const marker = [...h.branch].reverse().find((entry) => entry?.customType === RESET_MARKER_TYPE && entry.data?.requestId === requestId);
+  options.onComplete({ summary: "", firstKeptEntryId: marker.id });
+  assert.equal(h.sent.length, sentBefore + 1);
+  const boundary = h.sent.at(-1).message;
+  let reset = [...h.branch].reverse().find((entry) => entry?.customType === RESET_STATE_TYPE)?.data;
+  assert.equal(reset.status, "prepare_pending"); assert.equal(reset.mode, "deferred-origin-end");
+  assert.equal(h.state().status, "paused");
+
+  await h.emit("message_start", { message: { role: "custom", ...boundary } });
+  const denied = await h.handlers.get("context")[0]({ messages: [{ role: "custom", ...boundary }] }, h.ctx);
+  assert.deepEqual(denied, { messages: [] });
+  await h.handlers.get("context").at(-1)({ messages: denied.messages }, h.ctx);
+  h.setIdle(true);
+  await h.emit("agent_end", { messages: [{ role: "custom", ...boundary }, { role: "assistant", stopReason: "aborted", content: [] }] });
+  h.setSignalAvailable(false); await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.sent.length, sentBefore + 2);
+  const release = h.sent.at(-1).message;
+
+  h.setSignalAvailable(true); await h.emit("agent_start", {});
+  await h.emit("message_start", { message: { role: "custom", ...release } });
+  await h.emit("context", { messages: [{ role: "custom", ...boundary }, { role: "custom", ...release }] });
+  assert.equal(h.state().status, "running");
+  assert.equal(h.state().lifecycleId, initial.lifecycleId);
+  assert.equal(h.state().cycle, initial.cycle);
+  assert.equal(h.state().driverGoalId, "goal-active-origin");
+});
+
 test("/execute never replaces a refused reset-flavor compaction with projection", async () => {
   const h = harness({ specificationState: "existing", planState: "existing" });
   await h.commands.get("execute").handler("", h.ctx);

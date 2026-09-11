@@ -723,7 +723,7 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
     pi.registerCommand("execute", {
       description: "Start or resume the safe Ralph execution lifecycle",
       handler: async (args, ctx) => {
-        if (args.trim()) throw new Error("Usage: /execute"); await ctx.waitForIdle();
+        if (args.trim()) throw new Error("Usage: /execute");
         const blocked = blockedState(ctx);
         if (blocked.state !== "absent") { ctx.ui.notify("Ralph execution is unavailable while blocked planning documents exist; resolve the blocked workflow first.", "warning"); return; }
         const { specification, plan } = validatePair(ctx);
@@ -746,7 +746,7 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
         const proposed = starting ? beginExecution(live, { lifecycleId: createRequestId(), driverGoalId: null }) : nextExecutionState(live, { status: "running", driverGoalId: replaceTerminalDriver ? null : live.driverGoalId, pendingDecision: null, pauseReason: null });
         const mode = starting ? "execution-start" : "execution-resume";
         await resetRuntime.requestBoundary({
-          ctx, command: "execute",
+          ctx, command: "execute", ignoreCurrentAbort: !ctx.isIdle(),
           resolveInjection: ({ ctx: boundaryCtx }) => ({ content: executeContent(boundaryCtx, proposed, mode), details: { workflowPhase: "execution", invocationMode: mode, lifecycleId: proposed.lifecycleId, cycle: proposed.cycle, sessionId: sessionId(boundaryCtx) } }),
           onBeforeMarker: () => retryReclaimCandidates.delete(sessionId(ctx)),
           onAdmitted: () => { persistExecution(ctx, proposed); setPhase(ctx, "execution"); },

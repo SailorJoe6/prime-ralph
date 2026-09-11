@@ -81,7 +81,7 @@ If the just-readied goal nevertheless becomes terminal before that continuation 
 .ralph/plans/EXECUTION_PLAN.md
 ```
 
-It refuses blocked work, a duplicate run, and an unrelated active or paused native goal. The first injected `execute` skill creates Prime Agent's native goal through the public `goal` skill. That goal is the only automatic continuation mechanism and supplies Prime Agent's tracked-RLM waiting behavior. The extension does not run a competing continuation loop.
+It refuses blocked work, a duplicate run, and an unrelated active or paused native goal. It does not wait for global Agent idle before arming the reset boundary: when `/execute` arrives during an active persistent-goal turn, the existing reset transaction records the request immediately and uses its `origin_ending` handoff before provider admission. This prevents the active goal from starving the explicit recovery command while preserving the same lifecycle, cycle, and driver checks. The first injected `execute` skill creates Prime Agent's native goal through the public `goal` skill. That goal is the only automatic continuation mechanism and supplies Prime Agent's tracked-RLM waiting behavior. The extension does not run a competing continuation loop.
 
 The extension records the goal ID assigned to the run. When Prime Agent later supplies a `goal_context` continuation, Ralph checks that:
 
