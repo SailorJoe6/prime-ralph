@@ -984,18 +984,24 @@ test("a direct retry reconciliation append failure aborts and retains the durabl
   assert.match(h.notices.at(-1)[0], /before exact lifecycle ownership was restored/);
 });
 
-test("an agent-end pause append failure makes the next direct retry persist a closed state", async () => {
-  const h = harness({ specificationState: "existing", planState: "existing" });
-  await startExecution(h);
-  h.addGoal({ goalId: "goal-provider-end-append", status: "active", active: true });
-  h.failStateAppendIn(2);
-  await assert.rejects(h.emit("agent_end", { messages: [{ role: "assistant", stopReason: "error", errorMessage: "retryable" }] }), /injected state append failure/);
-  assert.equal(h.state().status, "running");
-  h.restoreStateAppends();
+test("an agent-end pause append failure makes either host retry ordering persist a closed state", async (t) => {
+  for (const beforeAgentStart of [false, true]) await t.test(beforeAgentStart ? "before_agent_start then agent_start" : "direct agent_start", async () => {
+    const h = harness({ specificationState: "existing", planState: "existing" });
+    await startExecution(h);
+    h.addGoal({ goalId: `goal-provider-end-append-${beforeAgentStart}`, status: "active", active: true });
+    h.failStateAppendIn(2);
+    await assert.rejects(h.emit("agent_end", { messages: [{ role: "assistant", stopReason: "error", errorMessage: "retryable" }] }), /injected state append failure/);
+    assert.equal(h.state().status, "running");
+    h.restoreStateAppends();
 
-  await h.emit("agent_start", {});
-  assert.equal(h.aborted(), 1); assert.equal(h.state().status, "paused");
-  assert.equal(h.state().pauseReason, "automatic retry lifecycle ownership could not be reclaimed");
+    if (beforeAgentStart) await h.emit("before_agent_start", { prompt: "retry after failed durable pause" });
+    await h.emit("agent_start", {});
+    assert.equal(h.aborted(), 1); assert.equal(h.state().status, "paused");
+    assert.equal(h.state().pauseReason, "automatic retry lifecycle ownership could not be reclaimed");
+    const transition = h.state().transition;
+    await h.emit("turn_end", finalEvent("rejected retry cannot own closeout"));
+    assert.equal(h.state().transition, transition);
+  });
 });
 
 test("a closeout that passed before waiter registration fails closed without hanging", async () => {

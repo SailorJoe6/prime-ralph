@@ -763,7 +763,21 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
 
     pi.on("before_agent_start", (_event, ctx) => {
       if (rejectRecoveryProviderAdmission(ctx)) return;
-      const live = requireTerminalLogReady(execution(ctx, { allowSamePassRetry: true })), id = sessionId(ctx);
+      const id = sessionId(ctx), candidate = retryReclaimCandidates.get(id), beforeStart = rawExecution(ctx);
+      const existingOwner = activeLifecycleTurns.get(id);
+      const sameRunningCandidate = candidate && beforeStart.phase === "execution" && beforeStart.status === "running" &&
+        beforeStart.lifecycleId === candidate.lifecycleId && beforeStart.cycle === candidate.cycle &&
+        beforeStart.driverGoalId === candidate.stateDriverGoalId;
+      if (sameRunningCandidate && !existingOwner) {
+        ctx.abort();
+        try {
+          persistExecution(ctx, nextExecutionState(beforeStart, { status: "paused", pendingDecision: null, wait: null, pauseReason: "automatic retry lifecycle ownership could not be reclaimed" }));
+          retryReclaimCandidates.delete(id);
+        } catch {}
+        ctx.ui.notify("Ralph rejected an automatic retry whose durable pause did not commit before the next Agent run.", "error");
+        return;
+      }
+      const live = requireTerminalLogReady(execution(ctx, { allowSamePassRetry: true }));
       if (live.phase === "execution" && live.status === "running") activateLifecycleTurn(ctx, "execute", live);
       else if (live.status === "waiting") activateLifecycleTurn(ctx, "waiting-check", live);
       if (live.phase === "blocked") {
