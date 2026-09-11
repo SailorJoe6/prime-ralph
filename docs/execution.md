@@ -70,7 +70,7 @@ planning/inactive -- later user /execute ----------------> new execution run
 
 If the just-readied goal nevertheless becomes terminal before that continuation and goal-identity reconciliation pauses Ralph, `recover-driver` provides one narrow recovery behavior. It may adopt the current active replacement goal only when the retained session branch proves the exact sequence: matching `ready`, terminal prior driver, ready-decision closeout, one replacement goal, and the resulting identity-mismatch pause. The action only rebinds the driver and resumes the same execution run and open cycle; it does not log or increment the cycle. A duplicate call is rejected without a second adoption. An incomplete sequence, a later unrelated goal, or a failed durable state append leaves Ralph paused and explicitly recoverable through `/execute`.
 
-`paused` is a user pause or safety stop. Native `/goal pause`, `/goal resume`, and `/goal clear` pause, resume, and cancel the matching run. Goal replacement, stale continuation, missing lifecycle decisions, provider errors, and abnormal closeout also fail closed rather than silently continuing.
+`paused` is a user pause or safety stop. Native `/goal pause`, `/goal resume`, and `/goal clear` pause, resume, and cancel the matching run. Generic goal reconciliation reopens only a pause whose exact recorded cause is native `paused` or `budget_limited` status. An active goal record by itself is not an explicit resume: session quit, goal replacement, stale continuation, missing lifecycle decisions, provider errors, and abnormal closeout remain paused until an explicit validated recovery path such as `/execute` acts.
 
 ## `/execute` and the native goal
 

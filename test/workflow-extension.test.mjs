@@ -566,6 +566,33 @@ test("/execute has exact missing-document fallbacks and admits one lifecycle", a
   assert.match(h.notices.at(-1)[0], /already running/); assert.equal(h.state().lifecycleId, state.lifecycleId); assert.equal(h.compactions.length, 1);
 });
 
+test("session quit remains paused until explicit /execute resumes the same lifecycle", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" });
+  const initial = await startExecution(h);
+  h.addGoal({ goalId: "goal-quit", status: "active", active: true });
+  await control(h, { action: "continue", lifecycleId: initial.lifecycleId, cycle: initial.cycle });
+  await h.emit("session_shutdown", { reason: "quit" });
+
+  const paused = h.state();
+  assert.equal(paused.status, "paused"); assert.equal(paused.pauseReason, "session quit");
+  assert.equal(paused.lifecycleId, initial.lifecycleId); assert.equal(paused.cycle, initial.cycle);
+  assert.equal(paused.driverGoalId, "goal-quit"); assert.equal(paused.pendingDecision, null);
+  const transition = paused.transition, aborts = h.aborted(), notices = h.notices.length;
+
+  await h.emit("before_agent_start", { prompt: "status update please" });
+  await h.emit("turn_end", finalEvent("ordinary discussion remains outside the paused pass"));
+  assert.equal(h.state().transition, transition); assert.equal(h.state().status, "paused");
+  assert.equal(h.aborted(), aborts); assert.equal(h.notices.length, notices);
+
+  await h.commands.get("execute").handler("", h.ctx);
+  assert.equal(h.compactions.length, 2); assert.equal(h.state().status, "paused");
+  assert.doesNotMatch(h.notices.at(-1)[0], /already running/);
+  const boundary = await completeLatestResetCompaction(h);
+  assert.equal(boundary.details.invocationMode, "execution-resume");
+  assert.equal(h.state().status, "running"); assert.equal(h.state().lifecycleId, initial.lifecycleId);
+  assert.equal(h.state().cycle, initial.cycle); assert.equal(h.state().driverGoalId, "goal-quit");
+});
+
 test("/execute never replaces a refused reset-flavor compaction with projection", async () => {
   const h = harness({ specificationState: "existing", planState: "existing" });
   await h.commands.get("execute").handler("", h.ctx);
@@ -848,6 +875,41 @@ test("a same-pass before_agent_start owner consumes the native-pause retry candi
 
   await h.emit("turn_end", finalEvent("resumed pass remains owned"));
   assert.equal(h.state().status, "paused"); assert.match(h.state().pauseReason, /without a lifecycle decision/);
+});
+
+test("explicit /execute is not preempted by an in-memory abnormal-closeout retry witness", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" }); const initial = await startExecution(h);
+  h.addGoal({ goalId: "goal-explicit-retry", status: "active", active: true });
+  await h.emit("before_agent_start", { prompt: "bind exact driver" });
+  await control(h, { action: "continue", lifecycleId: initial.lifecycleId, cycle: initial.cycle });
+  await h.emit("agent_end", { messages: [{ role: "assistant", stopReason: "error", errorMessage: "provider failed" }] });
+  assert.equal(h.state().status, "paused"); assert.match(h.state().pauseReason, /without normal closeout/);
+
+  await h.commands.get("execute").handler("", h.ctx);
+  assert.equal(h.compactions.length, 2); assert.equal(h.state().status, "paused");
+  assert.doesNotMatch(h.notices.at(-1)[0], /already running/);
+  const boundary = await completeLatestResetCompaction(h);
+  assert.equal(boundary.details.invocationMode, "execution-resume");
+  assert.equal(h.state().status, "running"); assert.equal(h.state().lifecycleId, initial.lifecycleId);
+  assert.equal(h.state().cycle, initial.cycle); assert.equal(h.state().driverGoalId, "goal-explicit-retry");
+});
+
+test("retry ownership cannot survive reload or a changed active goal", async () => {
+  const h = harness({ specificationState: "existing", planState: "existing" }); await startExecution(h);
+  h.addGoal({ goalId: "goal-retry-original", status: "active", active: true });
+  await h.emit("agent_end", { messages: [{ role: "assistant", stopReason: "error", errorMessage: "retryable" }] });
+  const paused = h.state(); assert.equal(paused.status, "paused"); assert.equal(paused.driverGoalId, null);
+
+  h.addGoal({ goalId: "goal-retry-changed", status: "active", active: true });
+  const beforeChanged = h.state().transition;
+  await h.emit("before_agent_start", { prompt: "changed driver must not inherit retry ownership" });
+  assert.equal(h.state().status, "paused"); assert.equal(h.state().transition, beforeChanged);
+
+  const reloaded = harness({ specificationState: "existing", planState: "existing", branch: [...h.branch] });
+  const beforeReloaded = reloaded.state().transition;
+  await reloaded.emit("before_agent_start", { prompt: "reloaded runtime has no retry witness" });
+  await reloaded.emit("turn_end", finalEvent("ordinary reloaded discussion"));
+  assert.equal(reloaded.state().status, "paused"); assert.equal(reloaded.state().transition, beforeReloaded);
 });
 
 test("a provider retry agent_start re-registers lifecycle closeout after error agent_end", async () => {

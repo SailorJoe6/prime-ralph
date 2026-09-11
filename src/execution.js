@@ -252,7 +252,7 @@ export function beginExecution(current, { lifecycleId, driverGoalId = null }) {
   return nextExecutionState(current, { phase: "execution", status: "running", lifecycleId, cycle: 1, driverGoalId, pendingDecision: null, pendingRound: null, compactionHalted: false, resumeBlocked: false, wait: null, provenanceId: null, forwardConfirmed: false, admittedContinuation: null, recoveryRequired: null });
 }
 
-export function reconcileGoalState(current, goal) {
+export function reconcileGoalState(current, goal, { allowSamePassRetry = false } = {}) {
   if (!goal || current.status === "inactive") return current;
   if (goal.status === "idle" && current.driverGoalId) return nextExecutionState(current, { phase: "planning", status: "inactive", pendingDecision: null, pendingRound: null, compactionHalted: false, resumeBlocked: false, wait: null, cancellation: "native goal cleared" });
   if (goal.status === "error") return nextExecutionState(current, { status: "paused", pendingDecision: null, wait: null, pausedWait: current.status === "waiting" ? current.wait : null, pauseReason: "native goal error" });
@@ -264,10 +264,13 @@ export function reconcileGoalState(current, goal) {
     if (current.status === "running") return nextExecutionState(current, { status: "paused", driverGoalId: goal.goalId ?? current.driverGoalId, pauseReason: `native goal ${goal.status}` });
     return current;
   }
+  const nativePause = current.pauseReason === "native goal paused" || current.pauseReason === "native goal budget_limited";
+  const exactSamePassRetry = allowSamePassRetry === true && current.pauseReason === "execution agent ended without normal closeout";
   if (goal.status === "active" && current.status === "paused" && current.resumeBlocked !== true && current.compactionHalted !== true &&
-      (!current.driverGoalId || current.driverGoalId === goal.goalId)) {
-    // Native goal pause/resume stays inside the already admitted Ralph iteration.
-    // It changes driver status only; it is not a clean-boundary or skill-reinjection event.
+      (!current.driverGoalId || current.driverGoalId === goal.goalId) && (nativePause || exactSamePassRetry)) {
+    // A native goal pause/resume stays inside the already admitted Ralph iteration.
+    // The direct host-retry exception is authorized separately by exact in-memory
+    // lifecycle ownership; every other durable pause requires explicit recovery.
     return nextExecutionState(current, { status: "running", driverGoalId: goal.goalId, pauseReason: null, resumed: false });
   }
   return current;

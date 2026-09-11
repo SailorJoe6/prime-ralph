@@ -103,8 +103,31 @@ test("native goal reconciliation pauses, resumes same identity, and rejects repl
   const paused = reconcileGoalState(decided, { goalId: "goal", status: "paused" }); assert.equal(paused.status, "paused"); assert.equal(paused.pendingDecision.action, "continue");
   const resumed = reconcileGoalState(paused, { goalId: "goal", status: "active" }); assert.equal(resumed.status, "running"); assert.equal(resumed.resumed, false);
   assert.equal(resumed.pendingDecision.action, "continue");
+  const budgetLimited = reconcileGoalState(running, { goalId: "goal", status: "budget_limited" });
+  assert.equal(budgetLimited.pauseReason, "native goal budget_limited");
+  assert.equal(reconcileGoalState(budgetLimited, { goalId: "goal", status: "active" }).status, "running");
   const replaced = reconcileGoalState(running, { goalId: "other", status: "active" }); assert.equal(replaced.status, "paused"); assert.match(replaced.pauseReason, /identity changed/);
   assert.equal(reconcileGoalState(replaced, { goalId: "other", status: "active" }), replaced);
+});
+
+test("an active native goal cannot silently reopen fail-closed or operator pauses", () => {
+  const running = beginExecution(inactiveExecutionState("s"), { lifecycleId: "life", driverGoalId: "goal" });
+  for (const pauseReason of [
+    "session quit",
+    "execution pass ended without a lifecycle decision",
+    "native goal error",
+    "stale or mismatched native goal continuation",
+    "native continuation arrived before lifecycle closeout",
+    "execution closeout failed: injected",
+    "execution agent ended without normal closeout",
+    "unknown legacy pause",
+  ]) {
+    const paused = nextExecutionState(running, { status: "paused", pauseReason });
+    assert.equal(reconcileGoalState(paused, { goalId: "goal", status: "active" }), paused, pauseReason);
+  }
+  const retryPaused = nextExecutionState(running, { status: "paused", pauseReason: "execution agent ended without normal closeout" });
+  const retried = reconcileGoalState(retryPaused, { goalId: "goal", status: "active" }, { allowSamePassRetry: true });
+  assert.equal(retried.status, "running"); assert.equal(retried.driverGoalId, "goal");
 });
 
 test("reads latest native goal marker", () => {

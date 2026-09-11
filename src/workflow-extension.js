@@ -154,6 +154,10 @@ export function createWorkflowExtension({
     const persistExecution = (ctx, state) => {
       pi.appendEntry(EXECUTION_STATE_ENTRY_TYPE, state); executionStates.set(sessionId(ctx), state); return state;
     };
+    const matchesRetryReclaimCandidate = (state, candidate, nativeGoal) => Boolean(candidate && state.phase === "execution" && state.status === "paused" &&
+      state.pauseReason === "execution agent ended without normal closeout" && state.lifecycleId === candidate.lifecycleId &&
+      state.cycle === candidate.cycle && state.driverGoalId === candidate.stateDriverGoalId &&
+      nativeGoal?.status === "active" && nativeGoal.goalId === candidate.driverGoalId);
     const hasPendingTerminalLog = (state) => ["block", "complete"].includes(state.pendingDecision?.action);
     const finishPendingExecutionLog = (ctx, state) => {
       const pending = state.pendingDecision;
@@ -165,12 +169,16 @@ export function createWorkflowExtension({
       if (hasPendingTerminalLog(state)) throw new Error("the prior terminal execution pass has not captured a valid final assistant message for its durable log closeout; preserve the session and retry recovery before another workflow transition");
       return state;
     };
-    const execution = (ctx, { reconcile = true } = {}) => {
+    const execution = (ctx, { reconcile = true, allowSamePassRetry = false } = {}) => {
       let current = rawExecution(ctx);
       if (!reconcile) return current;
       current = finishPendingExecutionLog(ctx, current);
       if (hasPendingTerminalLog(current)) return current;
-      const goalReconciled = reconcileGoalState(current, latestGoalState(branch(ctx)));
+      const candidate = allowSamePassRetry === true ? retryReclaimCandidates.get(sessionId(ctx)) : null;
+      const nativeGoal = latestGoalState(branch(ctx));
+      const goalReconciled = reconcileGoalState(current, nativeGoal, {
+        allowSamePassRetry: matchesRetryReclaimCandidate(current, candidate, nativeGoal),
+      });
       const reconciled = goalReconciled === current ? current : persistExecution(ctx, goalReconciled);
       return reconcilePlanningLocation(ctx, reconciled);
     };
@@ -403,7 +411,7 @@ export function createWorkflowExtension({
           // Prime Agent's retry path calls agent.continue() directly. It emits
           // agent_start but not before_agent_start, so reclaim this exact durable
           // same-goal pass after reconciliation and preserve normal closeout.
-          const live = requireTerminalLogReady(execution(ctx));
+          const live = requireTerminalLogReady(execution(ctx, { allowSamePassRetry: true }));
           if (live.phase !== "execution" || live.status !== "running" || live.lifecycleId !== candidate.lifecycleId ||
               live.cycle !== candidate.cycle || live.driverGoalId !== candidate.driverGoalId) {
             throw new Error("automatic retry did not reconcile the exact durable execution pass");
@@ -737,7 +745,12 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
         }
         const proposed = starting ? beginExecution(live, { lifecycleId: createRequestId(), driverGoalId: null }) : nextExecutionState(live, { status: "running", driverGoalId: replaceTerminalDriver ? null : live.driverGoalId, pendingDecision: null, pauseReason: null });
         const mode = starting ? "execution-start" : "execution-resume";
-        await resetRuntime.requestBoundary({ ctx, command: "execute", resolveInjection: ({ ctx: boundaryCtx }) => ({ content: executeContent(boundaryCtx, proposed, mode), details: { workflowPhase: "execution", invocationMode: mode, lifecycleId: proposed.lifecycleId, cycle: proposed.cycle, sessionId: sessionId(boundaryCtx) } }), onAdmitted: () => { persistExecution(ctx, proposed); setPhase(ctx, "execution"); } });
+        await resetRuntime.requestBoundary({
+          ctx, command: "execute",
+          resolveInjection: ({ ctx: boundaryCtx }) => ({ content: executeContent(boundaryCtx, proposed, mode), details: { workflowPhase: "execution", invocationMode: mode, lifecycleId: proposed.lifecycleId, cycle: proposed.cycle, sessionId: sessionId(boundaryCtx) } }),
+          onBeforeMarker: () => retryReclaimCandidates.delete(sessionId(ctx)),
+          onAdmitted: () => { persistExecution(ctx, proposed); setPhase(ctx, "execution"); },
+        });
       },
     });
 
@@ -750,7 +763,7 @@ ${guidance}`, display: false, details: { source: "prime-ralph", protocolVersion:
 
     pi.on("before_agent_start", (_event, ctx) => {
       if (rejectRecoveryProviderAdmission(ctx)) return;
-      const live = requireTerminalLogReady(execution(ctx)), id = sessionId(ctx);
+      const live = requireTerminalLogReady(execution(ctx, { allowSamePassRetry: true })), id = sessionId(ctx);
       if (live.phase === "execution" && live.status === "running") activateLifecycleTurn(ctx, "execute", live);
       else if (live.status === "waiting") activateLifecycleTurn(ctx, "waiting-check", live);
       if (live.phase === "blocked") {
